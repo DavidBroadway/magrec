@@ -33,7 +33,6 @@ class Magnetisation_CNN_training():
             self.img_input = torch.FloatTensor(PROP.MagneticFieldExtended[np.newaxis, np.newaxis, :, :])
             self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
 
-        #img_output = torch.FloatTensor((Magnetization)[np.newaxis,np.newaxis,:,:])
         train_data_cnn = TensorDataset(self.img_input, self.mask_t)
         self.train_loader = DataLoader( dataset=(train_data_cnn))
     
@@ -328,14 +327,9 @@ class Magnetisation_CNN_training():
 
         return Results
 
-    
-    
-    
     ##########################################################################################
     #     For multiple channels
     ##########################################################################################
-    
-    
     def train_cnn_multiple_channels(self,   
                   mlp=False, 
                   LossFunction = 'L1',
@@ -631,7 +625,6 @@ class Magnetisation_CNN_training():
         means,stds,pred,ci_upper,ci_lower, ic_acc,ic_acc2,loss = evaluate(self.generator, self.img_input.to(self.device), self.mask_t.to(self.device))
         return  means,stds,pred,ci_upper,ci_lower, ic_acc,ic_acc2,loss
 
-
     def train_J(self,   
                   mlp=False, 
                   LossFunction = 'L1',
@@ -645,25 +638,43 @@ class Magnetisation_CNN_training():
 
         # training for the current density reconstruction
 
+        ImageSize = self.PROP.options['ImageShape']
         L1_Loss = nn.L1Loss()
         L2_Loss = nn.MSELoss()
 
+        if LossFunction == "L1":
+            Loss = L1_Loss
+        elif LossFunction == "L2":
+            Loss = L2_Loss
+
+        unit_conversion = 1e-18 / 9.27e-24
+
+        running_loss = 0.0
         loss_values = []
         G_loss_List = []
         snr_List = []
         Errors = dict()
 
-        unit_conversion = 1e-18 / 9.27e-24
         NVtheta = np.deg2rad(0)
         NVphi = np.deg2rad(0)
         u_prop =  [np.sin(NVtheta) * np.cos(NVphi), np.sin(NVtheta) * np.sin(NVphi), np.cos(NVtheta)]
 
         for epoch in range(100):
-            for batch_idx, (data,clean) in enumerate(self.train_loader):
+            for batch_idx, (data,mask_t) in enumerate(self.train_loader):
+                data,mask_t= (data).to(self.device), mask_t.to(self.device)
+                data=data*1
+                self.generator.train()
+                
+                M,img,MagnetisationTheta,MagnetisationPhi,NVtheta,NVphi = self.generator(data,mask_t,PositiveMagnetisationOnly=PositiveMagnetisationOnly,IntegerOnly=False, MagnetisationLayerRange=MagnetisationLayerRange)
+                
+                curr1 = img[0,0,:,:]
+                curr2 = img[0,1,:,:]
 
+                '''
                 data,clean= data.to(self.device), clean.to(self.device)
                 self.generator.train()
                 curr1, curr2= self.generator(data,clean)
+                '''
 
                 fft_jx_image = (torch.fft.fft2(curr1)).to(self.device)
                 fft_jy_image = (torch.fft.fft2(curr2)).to(self.device)
@@ -702,10 +713,7 @@ class Magnetisation_CNN_training():
                 jy_to_bz[tmp_jy_to_bz] = 0
 
                 a= np.fft.ifft2(jx_to_bx).real
-                print(jx_to_bx.shape)
-                print(fft_jx_image.shape)
-                print(jy_to_bx.shape)
-                print(fft_jy_image.shape)
+
                 bx = torch.fft.ifft2(jx_to_bx*fft_jx_image).real + torch.fft.ifft2(jy_to_bx*fft_jy_image).real 
                 by = torch.fft.ifft2(jx_to_by*fft_jx_image).real + torch.fft.ifft2(jy_to_by*fft_jy_image).real
                 bz = torch.fft.ifft2(jx_to_bz*fft_jx_image).real + torch.fft.ifft2(jy_to_bz*fft_jy_image).real
@@ -725,13 +733,14 @@ class Magnetisation_CNN_training():
                 self.NVphi = NVphi
                 self.TrainingErrors = Errors
 
-                self.ReconMag = curr1[0,0,:,:].detach().cpu().numpy()
-                self.ReconBnv = bnv[0,0,:,:].detach().cpu().numpy()
-
                 self.MMag = None
                 G_loss_List.append(G_loss.item()*data.size(0)/unit_conversion)
 
                 Errors['Loss Function'] = G_loss_List
                 Errors['SNR'] = snr_List
 
-        return bnv,u_prop[0]*bx,u_prop[1]*by,u_prop[2]*bz
+        self.ReconCurrenetJx = curr1.detach().cpu().numpy()
+        self.ReconCurrenetJy = curr2.detach().cpu().numpy()
+        self.ReconBnv = bnv.detach().cpu().numpy()
+
+        return bnv, Errors

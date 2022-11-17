@@ -16,26 +16,39 @@ class Propagator(object):
     mapping
     """
 
-    def __init__(self, options, MagneticField=None, Size=None,Magnetisation=None, CurrentDensity_jx=None, CurrentDensity_jy = None):
+    def __init__(self, options, MagneticField=None, Size=None,Magnetisation=None, CurrentDensity_jx=None, CurrentDensity_jy = None, useReflectiveBoundries = False, reshape=True):
         self.options = options
+        self.OriginalMagneticField = MagneticField
         self.MagneticField = MagneticField
         self.Magnetisation = Magnetisation
         self.CurrentDensity_jx = CurrentDensity_jx
         self.CurrentDensity_jy = CurrentDensity_jy
 
+
+        self.useReflectiveBoundries = useReflectiveBoundries
         #self.pixel_size_for_fft = self.options["raw_pixel_size"] * self.options["total_bin"] * 1e-6
         # self.pixel_size_for_fft=50e-9
         # Define the k-vectors for fourier space.
         if Size is not None:
-            self.reshape(MagneticField, Size=Size)
-            self.kx, self.ky, self.k = self.define_k_vectors(self.MagneticFieldExtended)
+            if useReflectiveBoundries:
+                self.MagneticField = self.addReflectiveBoundries(self.MagneticField)
+            if reshape:
+                self.reshape(self.MagneticField, Size=Size)
+            else:
+                self.MagneticFieldExtended = self.MagneticField
+            self.define_k_vectors(self.MagneticFieldExtended)
         elif Magnetisation is not None:
-            self.kx, self.ky, self.k = self.define_k_vectors(Magnetisation)
+            self.define_k_vectors(self.Magnetisation)
         elif CurrentDensity_jx is not None:
-            self.kx, self.ky, self.k = self.define_k_vectors(CurrentDensity_jx)
+            self.define_k_vectors(self.CurrentDensity_jx)
         elif MagneticField is not None:
-            self.reshape(img=MagneticField, Size=self.options['ImageShape'])
-            self.kx, self.ky, self.k = self.define_k_vectors(self.MagneticFieldExtended)
+            if useReflectiveBoundries:
+                self.MagneticField = self.addReflectiveBoundries(self.MagneticField)
+            if reshape:
+                self.reshape(self.MagneticField)
+            else:
+                self.MagneticFieldExtended = self.MagneticField
+            self.define_k_vectors(self.MagneticFieldExtended)
         #else:
             #self.kx, self.ky, self.k = self.define_k_vectors()
 
@@ -80,7 +93,7 @@ class Propagator(object):
         else:
              MagnetisationDataList = MagnetisationDataList[:Size,:Size]
         unit_conversion = 1e-18 / 9.27e-24
-        self.MagneticFieldExtended = MagnetisationDataList*unit_conversion
+        self.MagneticFieldExtended = MagnetisationDataList #*unit_conversion
         # Define the region of interest for plotting
         padded_shape = self.MagneticFieldExtended.shape
         centre = [padded_shape[0] // 2, padded_shape[1] // 2]
@@ -140,6 +153,9 @@ class Propagator(object):
         # Define the k mag vector
         k = np.sqrt(kx ** 2 + ky ** 2)
         # Take the negative of ky to maintain the correct image rotation
+        self.kx = kx
+        self.ky = ky
+        self.k = k
         return kx, ky, k
 
     # =================================
@@ -269,10 +285,9 @@ class Propagator(object):
         u_prop = [np.sin(NVtheta) * np.cos(NVPhi), np.sin(NVtheta) * np.sin(NVPhi) ,np.cos(NVtheta)]
 
         bnv =  u_prop[0]*bx + u_prop[1]*by + u_prop[2]*bz
-        return bnv,u_prop ,bz, jx_to_bz,jy_to_bz,fft_jx_image,fft_jy_image,self.CurrentDensity_jx,self.CurrentDensity_jy
+        return bnv,u_prop ,bz, jx_to_bz, jy_to_bz, fft_jx_image, fft_jy_image, self.CurrentDensity_jx, self.CurrentDensity_jy
 
-
-        # =================================
+    # =================================
 
     def current(self):
         """ Takes a b_map or the vector b maps (bx, by, bz) and returns the current density
@@ -286,7 +301,7 @@ class Propagator(object):
         
         unit_conversion = 1e-18 / 9.27e-24
         
-        b_image = self.MagneticFieldExtended / unit_conversion
+        b_image = self.MagneticFieldExtended 
 
         # === pad the image for better FFT === #
         padded_b_image, padding_roi = self.pad_image(b_image)
@@ -327,11 +342,19 @@ class Propagator(object):
             jx = jx[padding_roi[0], padding_roi[1]].T
             jy = jy[padding_roi[0], padding_roi[1]].T
 
+        # Remove the boundry conditions if added.
+        if self.useReflectiveBoundries:
+            jx = self.removeReflectiveBoundries(jx)
+            jy = self.removeReflectiveBoundries(jy)
+
         # convert to Amp/ micron
         j_norm = np.sqrt(jx ** 2 + jy ** 2)
+
+        
+
+
+
         return jx, jy, j_norm
-
-
 
     # =================================
     # Define the transformations
@@ -444,6 +467,8 @@ class Propagator(object):
         return
 
     # =================================
+    # Padding and boundry conditions
+    # =================================
 
     def pad_image(self, image):
         """
@@ -499,7 +524,6 @@ class Propagator(object):
         padding_roi = np.meshgrid(x, y)
         return padded_image, padding_roi
 
-    
     def extendData(self, Image):
         # function to extend BNV data with gaussian drop off, over 1/4 of the
         # extension length.
@@ -559,7 +583,36 @@ class Propagator(object):
             
         return extendedData, ROI
 
-    
+    def addReflectiveBoundries(self, Image, useJx=None, useJy=None):
+        # This function applys the relfective boundry conditions if
+
+        self.SizeBeforeBC = np.shape(Image)
+
+        Dlr = np.fliplr(Image)
+        Dud = np.flipud(Image)
+        Dxx = np.flipud(Dlr)
+
+        if useJx:
+            Dud = -1*Dud
+            Dxx = -1*Dxx
+
+        if useJy:
+            Dlr = -1*Dlr
+            Dxx = -1*Dxx
+
+        leftImage =  np.vstack((Dxx, Dlr))
+        rightImage = np.vstack((Dud, Image))
+
+        NewImage = np.hstack([leftImage, rightImage])
+        return NewImage
+
+    def removeReflectiveBoundries(self, Image):
+        
+        NewImage = Image[self.SizeBeforeBC[0]:-1,self.SizeBeforeBC[1]:-1]
+
+
+        return NewImage
+
 # =================================
 # === Magnetisation propagation ===
 # =================================
