@@ -12,7 +12,7 @@ To quote from `pypret` documentation:
     'just doing a fast Fourier transform (FFT)', surprisingly, much can be done
     wrong.
 
-Unsuprisingly, much was done wrong.
+Unsurprisingly, much was done wrong.
 
 FFT Conventions
 ---------------
@@ -67,7 +67,7 @@ from currec.core.constants import twopi
 _norm = 'backward'
 
 
-class FourierTransform(object):
+class FourierTransform2d(object):
 
     def __init__(self,
                  grid_shape: tuple,
