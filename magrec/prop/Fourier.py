@@ -62,7 +62,7 @@ see :doc:`numpy/fft` and :doc:`torch/fft`.
 """
 
 import torch
-from currec.core.constants import twopi
+from magrec.prop.constants import twopi
 
 _norm = 'backward'
 
