@@ -100,8 +100,11 @@ class MagnetizationFourierKernel2d(object):
 
 class SphericalCartesianKernel(object):
     """
-    A transforms a values specified in spherical coordinates to the corresponding components in cartesian coordinates.
-    For example, given a magnetic field
+    Defines a transform matrix that maps from a single component of the magnetic field, usually
+    denoted by B_NV, to the three components of the magnetic field in the Cartesian coordinate system,
+    if B_NV is a component defined along a unit vector n, given by the spherical angles `theta` and `phi`.
+
+    It works for components of any harmonic function in the source-free region, not only the magnetic field.
     """
 
     def __init__(self):

@@ -12,7 +12,7 @@ from magrec.prop.Kernel import MagnetizationFourierKernel2d, CurrentFourierKerne
 
 
 # CurrentFourierPropagtor3d
-class Propagator(object):
+class CurrentFourierPropagator3d(object):
     def __init__(
         self,
         shape,
@@ -26,7 +26,7 @@ class Propagator(object):
         rule="trapezoid",
     ):
         """
-        Propagator to evaluate the magnetic field from the current density distribution using Fourier transform representation
+        CurrentFourierPropagator3d to evaluate the magnetic field from the current density distribution using Fourier transform representation
         of the Biot-Savart law. Evaluates the field at elevation D from the highest point of the current distribution.
 
         Call it like propagator(J) to get the magnetic field B, where propagator is an instance initialized with the desired parameters.
