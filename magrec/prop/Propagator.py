@@ -6,6 +6,7 @@ connects the magnetic field B with the current density distribution J or
 magnetization distribution m.
 """
 import torch
+import numpy as np
 
 from magrec.prop.Fourier import FourierTransform2d
 from magrec.prop.Kernel import MagnetizationFourierKernel2d, CurrentFourierKernel2d
@@ -227,7 +228,7 @@ class CurrentFourierPropagator3d(object):
         B = self.ft.backward(b, dim=(-2, -1))
 
 
-class DipolePropagator(Propagator):
+class DipolePropagator(object):
     """
     Propagator for dipole current distributions
     """
@@ -304,17 +305,46 @@ class MagnetizationPropagator2d(object):
         """
         return self.B_from_M(M)
 
-    def get_b_from_m(self, m):
+    def get_b_from_m(self, m, magnetisation_theta, magnetisation_phi):
         # Calculate the matrix product M @ j for each k_x, k_y, z
         # b — batch index
         # i — index of the magnetic field component, i.e. b_x, b_y, b_z,
         # j — index of the magnetization distribution component, i.e. m_x, m_y, m_z
         # k, l — indices of k_x and k_y, respectively
-        b = torch.einsum("ijkl,bjkl->bikl", self.m_to_b_matrix, m)
+        # b = torch.einsum("ijkl,bjkl->bikl", self.m_to_b_matrix, m)
+
+        m = torch.tensor(m, dtype=torch.complex64)
+
+        magnetisation_phi = np.deg2rad(magnetisation_phi)
+        magnetisation_theta = np.deg2rad(magnetisation_theta)
+        magnetisation_direction = torch.tensor([ \
+            np.cos(magnetisation_phi)*np.sin(magnetisation_theta), \
+            np.sin(magnetisation_phi)*np.sin(magnetisation_theta), \
+            np.cos(magnetisation_theta)], dtype=torch.complex64)
+
+        if len(m.shape) == 2:
+            m = torch.einsum("kl,j->jkl", m, magnetisation_direction)
+            m = torch.tensor(m, dtype=torch.complex64)
+
+        # m_to_b_matrix = self.m_to_b_matrix * magnetisation_direction
+
+        # m_to_b_matrix[:,0] = self.m_to_b_matrix[:,0] * magnetisation_direction[0]
+        # m_to_b_matrix[:,1] = self.m_to_b_matrix[:,1] * magnetisation_direction[1]
+        # m_to_b_matrix[:,1] = self.m_to_b_matrix[:,2] * magnetisation_direction[2]
+
+        # b = torch.einsum("ijkl,kl->ijkl", m_to_b_matrix, m)
+
+        b = torch.einsum("ijkl,jkl->ikl", self.m_to_b_matrix, m)
+
         return b
 
-    def B_from_M(self, M):
+
+
+    def B_from_M(self, M, magnetisation_theta, magnetisation_phi):
+        if isinstance(M, np.ndarray):
+            M = torch.from_numpy(M)
+
         m = self.ft.forward(M, dim=(-2, -1))
-        b = self.get_b_from_m(m)
+        b = self.get_b_from_m(m, magnetisation_theta, magnetisation_phi)
         B = self.ft.backward(b, dim=(-2, -1))
         return B

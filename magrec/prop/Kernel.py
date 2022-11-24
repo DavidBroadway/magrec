@@ -77,6 +77,10 @@ class MagnetizationFourierKernel2d(object):
         _M = torch.zeros((3, 3,) + k_matrix.shape, dtype=torch.complex64,)
 
         # divide by 2 to get the proper quantity when _M + _M.T
+        _M[0, 1, :, :] = kx_vector[:, None] * ky_vector[None, :] / k_matrix / 2
+        _M[0, 2, :, :] = - 1j * kx_vector[:, None] / k_matrix / 2
+        _M[1, 2, :, :] = - 1j * ky_vector[None, :] / k_matrix / 2
+
         _M[0, 0, :, :] = kx_vector[:, None] ** 2 / k_matrix / 2
         _M[1, 1, :, :] = ky_vector[None, :] ** 2 / k_matrix / 2
         _M[2, 2, :, :] = k_matrix / 2
