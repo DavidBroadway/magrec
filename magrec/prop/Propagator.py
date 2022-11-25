@@ -228,9 +228,9 @@ class CurrentFourierPropagator3d(object):
         B = self.ft.backward(b, dim=(-2, -1))
 
 
-class DipolePropagator(object):
+class DipoleCurrentFourierPropagator3d(CurrentFourierPropagator3d):
     """
-    Propagator for dipole current distributions
+    CurrentFourierPropagator3d for dipole current distributions
     """
 
     @staticmethod

@@ -42,7 +42,18 @@ between k and f is the following:
     k = 2πf
 
 Notice that using f makes (1) and (2) almost symmetrical, at least gets rid
-of the 1/2π factor. That is g(f) = ∫ G(x) exp(-i2πfx) dx and G(x) = ∫ g(f) exp(i2πfx) df. 
+of the 1/2π factor. That is g(f) = ∫ G(x) exp(-i2πfx) dx and G(x) = ∫ g(f) exp(i2πfx) df.
+
+Consequences of the choice of the sign convention
+-------------------------------------------------
+
+In particular, this sign convention leads to the following result for the derivative:
+
+.. math::
+    F[dG(x)/dx] = i k_x g(k)
+
+where there is no “−” in front, contrary to the Tetienne et al. (2018).
+
 
 DFT in Numpy and PyTorch
 ------------------------
@@ -184,7 +195,9 @@ class FourierTransform2d(object):
         -3rd, -2nd dimensions.
 
         Args:
-            x:  torch.Tensor with shape (…, n_x, n_y, n_z), in units A
+            x:     torch.Tensor with shape (…, n_x, n_y, n_z), in units A
+            dim:   tuple of dimensions along which to compute the Fourier transform, e.g. for x, y
+                   dim = (-3, -2)
 
         Returns:
             torch.Tensor with shape (…, n_kx, n_ky, n_z), in units A * [dx * dy]
