@@ -1,7 +1,7 @@
 import torch
 
 from magrec.prop.Fourier import FourierTransform2d
-from magrec.prop.constants import MU0
+from magrec.prop.constants import MU0, twopi
 
 
 class CurrentFourierKernel2d(object):
@@ -102,14 +102,98 @@ class MagnetizationFourierKernel2d(object):
         return M
 
 
-class SphericalCartesianKernel(object):
+class HarmonicFunctionComponentsKernel(object):
     """
-    Defines a transform matrix that maps from a single component of the magnetic field, usually
+    Defines a transform that maps a single component of the magnetic field, usually
     denoted by B_NV, to the three components of the magnetic field in the Cartesian coordinate system,
     if B_NV is a component defined along a unit vector n, given by the spherical angles `theta` and `phi`.
 
-    It works for components of any harmonic function in the source-free region, not only the magnetic field.
+    It works for components of any harmonic function in the source-free region, not only the magnetic field,
+    see Lima, Weiss (2009) and Casola, van der Sar, Yacoby (2018) [Box 1, eq. 1] for details.
+
+    Let :math:`n` be a unit vector along the NV axis defined by the polar coordinates (theta, phi) on the unit sphere.
+
+    .. math::
+        n = [sin(θ) cos(φ), sin(θ) sin(φ), cos(θ)]
+
+    where we use the convention as the one used in physics (ISO 80000-2:2019): polar angle θ (theta) (angle with
+    respect to polar axis, z axis), and azimuthal angle φ (phi) (angle of rotation from the initial meridian plane,
+    counterclockwise from x if looking from the top of z).
+
+    Let :math:`u` be a vector in 2d Fourier space that represent the Hamilton operator ∇,
+
+    .. math::
+        u = [k_x, k_y, i k]
+
+    Then for a single component b_NV(k_x, k_y, z) of the magnetic field, the three components of the magnetic field are given by
+
+    .. math::
+        b(k_x, k_y, z) = b_NV(k_x, k_y, z) u / (u \cdot n)
+
+    That is true for all k except k = 0, where the denominator is zero. In general, constant components of the fields are
+    not connected through the requirement of the divergence- and curl- free condition, since it is always possible to add
+    a constant offset without violating these conditions. Therefore, it is important to set the constant offset of the magnetic
+    field components to zero, by subtracting the mean of the field components (separete for each component).
     """
 
     def __init__(self):
         pass
+
+    @staticmethod
+    def define_kernel_matrix(kx_vector, ky_vector, theta, phi):
+        """
+        Defines a transform matrix that maps from a single component of the magnetic field, usually
+        denoted by b_NV in 2d Fourier space, to the three components of the magnetic field in the Cartesian coordinate system,
+        if B_NV is a component defined along a unit vector n, given by the spherical angles `theta` and `phi`.
+
+        It works for components of any harmonic function in the source-free region, not only the magnetic field.
+
+        Args:
+            kx_vector (array-like):  1d vector of k_x values in 2d Fourier space where transform is computed
+            ky_vector (array-like):  1d vector of k_y values
+            theta (float):           a single value of the polar angle (angle with respect to polar axis, z axis) [deg]
+            phi (float):             a single value of the azimuthal angle (angle of rotation from the initial meridian plane [deg]
+
+        Returns: M matrix, shape (3, n_kx, n_ky). Doing an element-wise product with a map of a single component b_NV
+        along the NV n-axis of shape (n_kx, n_ky) gives b of shape (3, n_kx, n_ky), where b is the 3d magnetic field with first
+        dimension corresponds to the x, y, z components of the magnetic field.
+
+        Usage example:
+        --------------
+
+        .. code-block:: python
+            M = HarmonicFunctionComponentsKernel.define_kernel_matrix(kx_vector, ky_vector, theta, phi)
+            b = torch.einsum('cjk,jk->cjk', M, b_NV)
+
+        """
+        k_matrix = FourierTransform2d.define_k_matrix(kx_vector, ky_vector)
+
+        # Do type conversion
+        theta = torch.tensor(theta, dtype=torch.complex64)
+        phi = torch.tensor(phi, dtype=torch.complex64)
+
+        # Define the unit vector along the NV axis
+        n = torch.tensor(
+            [torch.sin(theta) * torch.cos(phi),
+             torch.sin(theta) * torch.sin(phi),
+             torch.cos(theta)],
+            dtype=torch.complex64)
+        # Define the vector in 2d Fourier space that represent the Hamilton operator ∇
+        u = torch.empty((3,) + k_matrix.shape, dtype=torch.complex64,)
+
+        u[0, :, :] = kx_vector[:, None]
+        u[1, :, :] = ky_vector[None, :]
+        u[2, :, :] = 1j * k_matrix
+
+        _denominator = torch.einsum('cjk,c->jk', u, n)
+        # denominator is zero for k = 0, where u = (k_x, k_y, ik) = 0. We set it to 1 to avoid division by zero, and later
+        # set the corresponding elements of the kernel matrix to zero to null those components.
+        _denominator[0, 0] = 1
+
+        M = u / _denominator
+
+        # Set the components of the kernel matrix to zero for k = 0, where the denominator is zero
+        M[:, 0, 0] = 0
+
+        return M
+
