@@ -29,21 +29,28 @@ The task is completed by a untrained physics informed neural networks that learn
 ##	0. Structure
 
 ```
-Magnetisation_reconstruction/
-└── 2D/ # contains the reconstruction of magnetisation and current density in 2 dimensions
-    └──data/
-    └──Magnetisation/
-    	├── Evaluate.py 	#Evaluate and plot the results obtain at the end of the training
-        └── Generator.py 	#contains the different neural networks for the inverse solutions   
-        └── Propagator.py 	#contains the fourier transform for the forward solutions
-        ├── Train.py		#trains a network from Generator.py thanks to its corresponding forward solution from Propagator.py
-        └── utils.py		#load the data
-    └──Notebooks/
-    	├── Experiment
-        └── Test Current Density Reconstruction
-        └── Test Magnetisation Reconstruction
-        └── Test Propagation
-└── 3D/ # contains the reconstruction of current density in 3 dimensions
+magrec
+├── prop  # propagation modules to transform between fields and sources
+│  ├── Fourier.py
+│  ├── Kernel.py
+│  ├── Propagator.py  # contains forward propagation 
+│  ├── utils.py
+│  └── constants.py   # module-wide physical constants in appropriate units
+├── nn  # neural network related modules
+│  ├── arch.py
+│  └── utils.py
+├── misc  # helper functions
+│  ├── load.py  # loading data for analysis
+│  ├── plot.py  # plotting relevant bits of data
+│  └── plotly_plot.py  # interactive plotting functions
+├── notebooks  # notebooks to test modules, training, and reconstuction
+│  ├── Experiment
+│  ├── Test Current Density Reconstruction
+│  ├── Test Magnetisation Reconstruction
+│  ├── Test Propagation
+│  └── Train Network on Datasets
+└── scripts
+
 ```
 
 ## 1.Installation and Requirements
