@@ -56,3 +56,12 @@ def load_matlab_simulation(datapath):
         raise ValueError("Shape of the magnetic field data does not match the shape of the magnetization data.")
             
     return datadict
+
+
+def load_matlab_data(datapath):
+    """
+    Load a general data set from a .mat file produced by matlab.
+    """
+    import scipy.io as sio
+    mat = sio.loadmat(datapath)
+    return mat

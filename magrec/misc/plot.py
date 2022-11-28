@@ -40,6 +40,8 @@ def plot_n_components(
     Returns:
         fig (plt.Figure, list[plt.Figure]): figure or a list of figures with n_components
     """
+    plt.rcParams['text.usetex'] = True
+
     if imshow_kwargs is None:
         imshow_kwargs = {}
 
@@ -151,19 +153,6 @@ def plot_n_components(
 
         # do at the beginning of row
         if i % n_components == 0:
-            # if norm is calculated by row, do it here
-            # if norm_type == 'row':
-            #     norm = get_color_norm(datum, symmetric=symmetric)
-            # # handle case when norm_type specifies grouping of norms such as 'AAAB'
-            # elif norm_type != 'row' and norm_type != 'all':
-            #     norm_key = norm_type[i // n_components]
-            #     if norm_dict[norm_key] is None:
-            #         # if this group has not been created, make a colormap for it
-            #         norm_dict[norm_key] = get_color_norm(datum, symmetric=symmetric)
-            #         norm = norm_dict[norm_key]
-            #     else:
-            #         # otherwise get the colormap from the dictionary for that group
-            #         norm = norm_dict[norm_key]
             # assign colormap to the row if colormap is given as a list | tuple (cmap1, cmap2, ...)
             if isinstance(cmap, (list, tuple)):
                 c = cmap[i // n_components]
