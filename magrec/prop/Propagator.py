@@ -428,8 +428,6 @@ class FourierPadder(object):
         return x
 
 
-<<<<<<< Updated upstream
-=======
     @staticmethod
     def pad_2d(x: torch.Tensor, pad_width: int, mode: str, plot: bool = False) -> torch.Tensor:
         """
@@ -454,4 +452,3 @@ class FourierPadder(object):
         return x
 
 
->>>>>>> Stashed changes
