@@ -10,6 +10,7 @@ import numpy as np
 
 from magrec.prop.Fourier import FourierTransform2d
 from magrec.prop.Kernel import MagnetizationFourierKernel2d, CurrentFourierKernel2d
+import matplotlib.pyplot as plt
 
 
 # CurrentFourierPropagtor3d
@@ -428,3 +429,28 @@ class FourierPadder(object):
         return x
 
 
+    @staticmethod
+    def pad_linear2d(x: torch.Tensor, pad_width: int, mode: str, plot: bool = False) -> torch.Tensor:
+        """
+        Pads the input with zeros along two dimensions.
+
+        Args:
+            x (torch.Tensor):      input tensor
+
+        Returns:
+            torch.Tensor:          padded tensor
+
+        """
+        npArray = x.numpy()
+        
+        # numpy.pad(array, pad_width, mode='constant', **kwargs)
+        paddedArray = np.pad(npArray, pad_width, mode=mode)
+        x = torch.from_numpy(paddedArray)
+        
+
+        if plot:
+            plt.figure()
+            plt.imshow(paddedArray)
+            plt.title('Padded array')
+
+        return x
