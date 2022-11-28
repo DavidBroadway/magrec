@@ -88,18 +88,36 @@ class MagnetizationFourierKernel2d(object):
         # Deal with the case where k = 0 by setting the corresponding elements to 0
         _M[[0, 1, 1], [0, 0, 1], [0, 0, 0], [0, 0, 0]] = 0
 
-        depth_factor = (
-                torch.exp(-k_matrix * height)
-                / k_matrix
-                * (torch.exp(-k_matrix * layer_thickness) - 1)
-        )
-
-        depth_factor[0, 0] = 0  # k = 0 case
+        depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
 
         # Use the property of the M matrix that it is symmetric (that's why we divide by 1/2 above, to get the proper diagonal terms)
         M = _M + _M.transpose(0, 1)
         M = -(MU0 / 2) * depth_factor * M
         return M
+    
+
+class UniformLayerFactor2d(object):
+    """
+    Defines a factor that appears after integration of a uniform distribution along the z axis.
+    """
+
+    @staticmethod
+    def define_depth_factor(k_matrix: torch.Tensor, height: float, layer_thickness: float):
+        """
+        Returns a matrix that scales each k-vector by the factor that appears after integration of a uniform source distribution.
+
+        Args:
+            k_matrix:   matrix with all possible k = sqrt(k_x ** 2 + k_y ** 2), shape (n_kx, n_ky)
+            height (float):     height above the layer at which to evaluate the factor
+            layer_thickness (float):    thickness of the layer
+        """
+        depth_factor = (
+                torch.exp(-k_matrix * height)
+                / k_matrix
+                * (torch.exp(-k_matrix * layer_thickness) - 1)
+        )
+        depth_factor[0, 0] = 0
+        return depth_factor
 
 
 class HarmonicFunctionComponentsKernel(object):
@@ -140,7 +158,7 @@ class HarmonicFunctionComponentsKernel(object):
         pass
 
     @staticmethod
-    def define_kernel_matrix(kx_vector, ky_vector, theta, phi):
+    def define_kernel_matrix(kx_vector, ky_vector, theta, phi) -> torch.Tensor:
         """
         Defines a transform matrix that maps from a single component of the magnetic field, usually
         denoted by b_NV in 2d Fourier space, to the three components of the magnetic field in the Cartesian coordinate system,
@@ -197,3 +215,36 @@ class HarmonicFunctionComponentsKernel(object):
 
         return M
 
+
+class MagneticFieldToCurrentInversion2d(object):
+    """
+    Implmenets inversion in 2d Fourier space from the b_x, b_y magnetic field map to the current map j_x, j_y. 
+    In this case, the connection is invertable in k-space, below is the inverse transform:
+
+    .. math::
+                             ┌─        ─┐
+                       2  1  │  0   -1  │  
+        j(k_x, k_y) = -- --- │          │ b(k_x, k_y)
+                       μ0 D  │  1    0  │ 
+                             └─        ─┘
+    
+    where :math:`\mu_0` is the permeability of free space, and D is the depth factor as in `MagnetizationFourierKernel2d`, defined by `UniformLayerFactor2d`.
+    """
+
+    @staticmethod
+    def define_kernel_matrix(kx_vector, ky_vector, height, layer_thickness):
+        k_matrix = FourierTransform2d.define_k_matrix(kx_vector, ky_vector)
+
+        M = torch.zeros((2, 2,) + k_matrix.shape, dtype=torch.complex64,)
+
+        M[0, 1, :, :] = -torch.ones_like(k_matrix)
+        M[1, 0, :, :] =  torch.ones_like(k_matrix)
+
+        depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
+        # Temporary set to avoid division by zero
+        depth_factor[0, 0] = 1
+
+        M = (2 / MU0) / depth_factor * M
+        # Deal with the case where k = 0 by setting the corresponding elements to 0
+        M[0, 0] = 0
+        return M
