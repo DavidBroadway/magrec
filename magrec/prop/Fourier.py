@@ -184,6 +184,7 @@ class FourierTransform2d(object):
         else:
             ky_vector = twopi * torch.fft.fftfreq(grid_shape[-1], dy)
 
+        # return kx_vector +  torch.finfo().eps, ky_vector +  torch.finfo().eps
         return kx_vector, ky_vector
 
     @staticmethod

@@ -190,6 +190,10 @@ class HarmonicFunctionComponentsKernel(object):
         theta = torch.deg2rad(torch.tensor(theta))
         phi = torch.deg2rad(torch.tensor(phi))
 
+        # theta = torch.tensor(theta)
+        # phi = torch.tensor(phi)
+
+
         # Define the unit vector along the NV axis
         n = torch.tensor(
             [torch.sin(theta) * torch.cos(phi),
