@@ -428,3 +428,30 @@ class FourierPadder(object):
         return x
 
 
+<<<<<<< Updated upstream
+=======
+    @staticmethod
+    def pad_2d(x: torch.Tensor, pad_width: int, mode: str, plot: bool = False) -> torch.Tensor:
+        """
+        Pads using numpy. Converts the torch tensor to a numpy array, performs the padding, and then converts back. 
+
+        Args:
+            x (torch.Tensor):      input tensor
+
+        Returns:
+            torch.Tensor:          padded tensor
+
+        """
+        npArray = x.numpy()
+        paddedArray = np.pad(npArray, pad_width, mode=mode)
+        x = torch.from_numpy(paddedArray)
+        
+        if plot:
+            plt.figure()
+            plt.imshow(paddedArray, cmap='bwr')
+            plt.title('Padded array')
+            plt.colorbar()
+        return x
+
+
+>>>>>>> Stashed changes
