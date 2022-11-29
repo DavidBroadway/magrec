@@ -193,56 +193,32 @@ class HarmonicFunctionComponentsKernel(object):
         theta = torch.deg2rad(torch.tensor(theta))
         phi = torch.deg2rad(torch.tensor(phi))
 
-        # theta = torch.tensor(theta)
-        # phi = torch.tensor(phi)
-
-
         # Define the unit vector along the NV axis
         n = torch.tensor(
             [torch.sin(theta) * torch.cos(phi),
              torch.sin(theta) * torch.sin(phi),
              torch.cos(theta)],
             dtype=torch.complex64)
+
         # Define the vector in 2d Fourier space that represent the Hamilton operator ∇
-        u = torch.empty((3, 3,) + k_matrix.shape, dtype=torch.complex64,)
+        u = torch.empty((3,) + k_matrix.shape, dtype=torch.complex64,)
+        u[0, :, :] = kx_vector[:, None]
+        u[1, :, :] = ky_vector[None, :]
+        u[2, :, :] = 1j * k_matrix
+        _denominator = torch.einsum('cjk,c->jk', u, n)
 
-        # Old version which I think is missing offdiagonal terms
-        # Define the vector in 2d Fourier space that represent the Hamilton operator ∇
-        # u = torch.empty((3,) + k_matrix.shape, dtype=torch.complex64,)
-        # u[0, :, :] = kx_vector[:, None]
-        # u[1, :, :] = ky_vector[None, :]
-        # u[2, :, :] = 1j * k_matrix
-        # _denominator = torch.einsum('jkl,c->jkl', u, n)
-
-        u[0, 0, :] = 1
-        u[1, 0 , :] = ky_vector[None, :]  / kx_vector[:, None]
-        u[2, 0 , :] = 1j * k_matrix / kx_vector[:, None]
-
-        u[0, 1, :] = kx_vector[:, None] / ky_vector[None, :] 
-        u[1, 1 , :] = 1
-        u[2, 1 , :] = 1j * k_matrix/ ky_vector[None, :] 
-
-        u[0, 2, :] = -1j * kx_vector[:, None] / k_matrix
-        u[1, 2, :] = -1j * ky_vector[None, :]  / k_matrix
-        u[2, 2, :] = 1
-
-
-        # _denominator = torch.einsum('cjkl,c->jkl', u, n)
         # denominator is zero for k = 0, where u = (k_x, k_y, ik) = 0. We set it to 1 to avoid division by zero, and later
         # set the corresponding elements of the kernel matrix to zero to null those components.
-        # _denominator[0, 0] = 1
+        _denominator[0, 0] = 1
 
-        u[0, 0] = 1
-        M = 1 / u
+        M = u / _denominator
 
         # Set the components of the kernel matrix to zero for k = 0, where the denominator is zero
-        M[:, :, 0, 0] = 0
+        M[:, 0, 0] = 0
 
         # Remove and nans or infs from the division of the k vectors
         idxs = torch.logical_or(torch.isnan(M), torch.isinf(M))
         M[idxs] = 0
-
-        # torch.nan_to_num(M,nan= 0, posinf = 0)
 
         return M
 

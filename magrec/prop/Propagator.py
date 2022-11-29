@@ -7,6 +7,7 @@ magnetization distribution m.
 """
 import torch
 import numpy as np
+import matplotlib.pyplot as plt
 
 from magrec.prop.Fourier import FourierTransform2d
 from magrec.prop.Kernel import MagnetizationFourierKernel2d, CurrentFourierKernel2d
@@ -426,8 +427,6 @@ class FourierPadder(object):
 
         # a nice bonus: now the tensor size is divisible by 2
         return x
-<<<<<<< Updated upstream
-
 
     @staticmethod
     def pad_2d(x: torch.Tensor, pad_width: int, mode: str, plot: bool = False) -> torch.Tensor:
@@ -452,6 +451,47 @@ class FourierPadder(object):
             plt.colorbar()
         return x
 
+    @staticmethod
+    def apply_hanning(x: torch.Tensor, k_matrix, HanningWavelength, high_freq_cutoff = None, low_freq_cutoff = None, plot: bool = False) -> torch.Tensor:
+        """
+        Pads using numpy. Converts the torch tensor to a numpy array, performs the padding, and then converts back. 
 
-=======
->>>>>>> Stashed changes
+        Args:
+            x (torch.Tensor):      input tensor
+
+        Returns:
+            torch.Tensor:          padded tensor
+
+        """
+        han2d = 0.5*(1 + np.cos(k_matrix * HanningWavelength/2 ))
+        img_filter = han2d
+        # apply frequency cutoffs
+        if high_freq_cutoff:
+            print(f"Applied a high frequency filter, removing all components smaller than {high_freq_cutoff} um")
+            high_freq_cutoff = 2* np.pi / high_freq_cutoff
+            img_filter[(k_matrix > high_freq_cutoff)] = 0
+        if low_freq_cutoff:
+            print(f"Applied a high frequency filter, removing all components larger than {low_freq_cutoff} um")
+            low_freq_cutoff = 2* np.pi / low_freq_cutoff
+            img_filter[(k_matrix < low_freq_cutoff)] = 0
+            
+        x = img_filter * x 
+        
+        if plot:
+            plt.figure()
+
+            plt.subplot(1,3,1)
+            plt.imshow(img_filter.real, cmap='bwr')
+            plt.title('Filter')
+            plt.colorbar()
+
+            plt.subplot(1,3,2)
+            plt.imshow(x.real, cmap='bwr')
+            plt.title('Filtered array real component')
+            plt.colorbar()
+
+            plt.subplot(1,3,3)
+            plt.imshow(x.imag, cmap='bwr')
+            plt.title('Filtered array imaginary component')
+            plt.colorbar()
+        return x
