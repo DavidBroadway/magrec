@@ -426,6 +426,7 @@ class FourierPadder(object):
 
         # a nice bonus: now the tensor size is divisible by 2
         return x
+<<<<<<< Updated upstream
 
 
     @staticmethod
@@ -452,3 +453,5 @@ class FourierPadder(object):
         return x
 
 
+=======
+>>>>>>> Stashed changes

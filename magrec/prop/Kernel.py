@@ -114,8 +114,11 @@ class UniformLayerFactor2d(object):
         depth_factor = (
                 torch.exp(-k_matrix * height)
                 / k_matrix
-                * (torch.exp(-k_matrix * layer_thickness) - 1)
+                * (torch.exp(-k_matrix * layer_thickness)-1)
         )
+        if layer_thickness == 0:
+                 depth_factor = (
+                torch.exp(-k_matrix * height))
         depth_factor[0, 0] = 0
         return depth_factor
 
