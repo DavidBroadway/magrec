@@ -475,23 +475,36 @@ class FourierPadder(object):
             low_freq_cutoff = 2* np.pi / low_freq_cutoff
             img_filter[(k_matrix < low_freq_cutoff)] = 0
             
-        x = img_filter * x 
+        x_filtered = x * img_filter 
         
         if plot:
-            plt.figure()
+            fig = plt.figure()
+            fig.set_figheight(10)
 
-            plt.subplot(1,3,1)
-            plt.imshow(img_filter.real, cmap='bwr')
+            plt.subplot(5,1,1)
+            plt.imshow(torch.rot90(img_filter.real), cmap='bwr')
             plt.title('Filter')
             plt.colorbar()
 
-            plt.subplot(1,3,2)
-            plt.imshow(x.real, cmap='bwr')
+            plt.subplot(5,1,2)
+            plt.imshow(torch.rot90(x.real), cmap='bwr')
+            plt.title('array real component')
+            plt.colorbar()
+            
+            plt.subplot(5,1,3)
+            plt.imshow(torch.rot90(x_filtered.real), cmap='bwr')
             plt.title('Filtered array real component')
             plt.colorbar()
 
-            plt.subplot(1,3,3)
-            plt.imshow(x.imag, cmap='bwr')
+            plt.subplot(5,1,4)
+            plt.imshow(torch.rot90(x.imag), cmap='bwr')
+            plt.title('array imaginary component')
+            plt.colorbar()
+
+            plt.subplot(5,1,5)
+            plt.imshow(torch.rot90(x_filtered.imag), cmap='bwr')
             plt.title('Filtered array imaginary component')
             plt.colorbar()
-        return x
+
+
+        return x_filtered
