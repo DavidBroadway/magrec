@@ -5,12 +5,15 @@ provided by magrec.Fourier module, to evaluate Biot-Savart integral which
 connects the magnetic field B with the current density distribution J or
 magnetization distribution m.
 """
+# used for base class methods that need to be implemented
+from abc import abstractmethod
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 
 from magrec.prop.Fourier import FourierTransform2d
-from magrec.prop.Kernel import MagnetizationFourierKernel2d, CurrentFourierKernel2d
+from magrec.prop.Kernel import MagnetizationFourierKernel2d, CurrentFourierKernel2d, CurrentLayerFourierKernel2d, SphericalUnitVectorKernel
 
 
 # CurrentFourierPropagtor3d
@@ -348,6 +351,85 @@ class MagnetizationPropagator2d(object):
         b = self.get_b_from_m(m, magnetisation_theta, magnetisation_phi)
         B = self.ft.backward(b, dim=(-2, -1))
         return B
+
+
+class Padder(object):
+    """Class to pad a torch.tensor according to the specified rule. The constructor method takes a
+    torch.Tensor as it would appear in the input or a shape.
+    """
+
+    def __init__(self, shape=None, tensor=None):
+        """Initialize the class with a shape or a tensor. Shape specifies the shape of the last two dimensions
+        that are to be expaded, if tensor is provided, its last two dimensions are used to calculate the expected
+        expanded shape."""
+        if tensor is not None:
+            self.shape = tensor.shape[-2:]
+        elif shape is not None:
+            self.shape = shape
+        else:
+            raise ValueError("Either `shape` or `tensor` must be specified.")
+
+        self.expanded_shape = self.shape[:-2] + \
+            (self.shape[-2] * 3, self.shape[-1] * 3,)
+
+    @abstractmethod
+    def pad(self, tensor):
+        """Pad a tensor according to the rule."""
+        raise NotImplementedError
+
+    def unpad(self, x):
+        """Unpad a tensor according to the rule."""
+        W, H = self.shape[-2:]
+        return x[..., W-1:2*W, H-1:2*H]
+
+class HeightContinuationPadder(Padder):
+
+    def pad(self, x: torch.Tensor) -> torch.Tensor:
+        """Pad a tensor according to the rule."""
+        y = torch.zeros(size=self.expanded_shape)
+        # take (W, H) size image X and turn it into (3*W, 3*H) obtained by appending 0s to X along W to get 0X0, 
+        # and repeating the last lines of X along H, which we call H, H times, to get HXH vertically, like so:
+        # 0H0
+        # 0X0
+        # 0H0
+        W, H = self.shape[-2:]
+        y[..., W:2*W, H:2*H] = x
+        # how to propagate shape (W, 1) into the proper (W, H) shape?
+        y[..., W:2*W, 2*H:] = x[..., -1][..., None]
+        y[..., W:2*W, :H] = x[..., 0][..., None]
+        return y
+
+class WidthContinuationPadder(Padder):
+
+    def pad(self, x: torch.Tensor) -> torch.Tensor:
+        """Pad a tensor according to the rule."""
+        y = torch.zeros(size=self.expanded_shape)
+        # take (W, H) size image X and turn it into (3*W, 3*H) obtained by appending 0s to X along H to get 0X0, 
+        # and repeating the last lines of X along W, which we call W, W times, to get WXW horizontally, like so:
+        # 000
+        # WXW
+        # 000
+        W, H = self.shape[-2:]
+        # TODO: Here is a problem that makes y to be of incorrect shape. y[..., W:2*W, H:2*H] gets implicitly 
+        # expanded to y[..., x.shape[-3], W:2*W, H:2*H] to fit the shape of x, instead of assigning the values 
+        # to the other axis of y.
+        y[..., W:2*W, H:2*H] = x[..., :, :]
+        # how to propagate shape (W, 1) into the proper (W, H) shape?
+        y[..., 2*W:, H:2*H] = x[..., 1, :][..., None, :]
+        y[..., :W, H:2*H] = x[..., 0, :][..., None, :]
+        return y
+
+class ZeroPadder(Padder):
+
+    def pad(self, x: torch.Tensor) -> torch.Tensor:
+        """Pad a tensor with zeros symmetrically."""
+        y = torch.zeros(size=self.expanded_shape)
+        # 000
+        # 0X0
+        # 000
+        W, H = self.shape[-2:]
+        y[..., W:2*W, H:2*H] = x
+        return y
 
 
 class FourierPadder(object):
