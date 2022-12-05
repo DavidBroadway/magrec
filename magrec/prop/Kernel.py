@@ -39,9 +39,9 @@ class CurrentFourierKernel2d(object):
                                ┌─                ─┐ μ0 │                              │ │     │
            b(k_x, k_y, z) =  ∫ │ exp(-k [z - z']) │ -- │    -1        0     -ik_x / k │ │ j_y │ dz'
                                └─                ─┘  2 │                              │ │     │
-                               ─── [k_x, k_y, z] ──    │-ik_y / k  ik_x / k      0    │ │ j_z │
-                                     `exp_matrix`      └─                            ─┘ └─   ─┘
-                                                    ───────── M[k_x, k_y, :, :] ───────  ──┬──
+                               └── [k_x, k_y, z] ─┘    │-ik_y / k  ik_x / k      0    │ │ j_z │
+                                    `exp_matrix`       └─                            ─┘ └─   ─┘
+                                                   └───────── M[:, :, k_x, k_y] ──────┘ └──┬──┘
                                                                                             j[k_x, k_y, z']
 
 
@@ -64,6 +64,59 @@ class CurrentFourierKernel2d(object):
         M = (MU0 / 2) * M  # scale by mu0 to get [mT * mm / A] units
         return M
 
+    
+class CurrentLayerFourierKernel2d(object):
+
+    @staticmethod
+    def define_kernel_matrix(kx_vector, ky_vector, height, layer_thickness):
+        """Defines a transformation matrix that connects a 2d current distribution that has 2 components of
+        the current density to the magnetic field it creates, that has 3 components.
+        ```
+                                            ┌─                 ─┐ 
+                                            │     0        1    │ ┌─   ─┐
+                            μ0              │                   │ │ j_x │
+           b(k_x, k_y, z) = -- depth_factor │    -1        0    │ │     │ 
+                             2              │                   │ │ j_y │
+                                            │-ik_y / k  ik_x / k│ └─   ─┘
+                                            └─                 ─┘ └──┬──┘ 
+                           └───────── M[:, :, k_x, k_y] ────────┘    │
+                                                                 j[k_x, k_y]
+
+        ```
+        where `depth_factor` is a factor that accounts for the fact that the current layer has finite thickness and 
+        is at `height` standoff distance from the observation plane. The factor is defined in `UniformLayerFactor2d`.
+
+        Example:
+            
+            .. code-block:: python
+            M = CurrentLayerFourierKernel2d.define_kernel_matrix(kx_vector, ky_vector, height, layer_thickness)
+            b = torch.einsum('ijkl,jkl->ikl', M, j)
+            # i — component of the magnetic field
+            # j — component of the current density
+            # k — spatial frequency in x direction
+            # l — spatial frequency in y direction
+
+        """
+        k_matrix = FourierTransform2d.define_k_matrix(kx_vector, ky_vector)
+        # components of ─┐  ┌─ components of
+        # magnetic field │  │  current density
+        #                V  V   
+        M = torch.zeros((3, 2,) + k_matrix.shape, dtype=torch.complex64,)
+
+        M[0, 1, :, :] =  torch.ones_like(k_matrix)
+        M[1, 0, :, :] = -torch.ones_like(k_matrix)
+
+        M[2, 0, :, :] = -1j * ky_vector[None, :] / k_matrix
+        M[2, 1, :, :] =  1j * kx_vector[:, None] / k_matrix        
+
+        # Deal with the case where k = 0 by setting the corresponding elements to 0
+        M[[2, 2], [0, 1], [0, 0], [0, 0]] = 0
+
+        depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
+
+        M = (MU0 / 2) * depth_factor * M
+        return M  
+    
 
 class MagnetizationFourierKernel2d(object):
 
@@ -107,8 +160,8 @@ class UniformLayerFactor2d(object):
         Returns a matrix that scales each k-vector by the factor that appears after integration of a uniform source distribution.
 
         Args:
-            k_matrix:   matrix with all possible k = sqrt(k_x ** 2 + k_y ** 2), shape (n_kx, n_ky)
-            height (float):     height above the layer at which to evaluate the factor
+            k_matrix:                   matrix with all possible k = sqrt(k_x ** 2 + k_y ** 2), shape (n_kx, n_ky)
+            height (float):             height above the layer at which to evaluate the factor
             layer_thickness (float):    thickness of the layer
         """
         depth_factor = (
@@ -119,6 +172,7 @@ class UniformLayerFactor2d(object):
         if layer_thickness == 0:
                  depth_factor = (
                 torch.exp(-k_matrix * height))
+
         depth_factor[0, 0] = 0
         return depth_factor
 
@@ -216,10 +270,6 @@ class HarmonicFunctionComponentsKernel(object):
         # Set the components of the kernel matrix to zero for k = 0, where the denominator is zero
         M[:, 0, 0] = 0
 
-        # Remove and nans or infs from the division of the k vectors
-        idxs = torch.logical_or(torch.isnan(M), torch.isinf(M))
-        M[idxs] = 0
-
         return M
 
 
@@ -255,3 +305,30 @@ class MagneticFieldToCurrentInversion2d(object):
         # Deal with the case where k = 0 by setting the corresponding elements to 0
         M[0, 0] = 0
         return M
+
+
+class SphericalUnitVectorKernel(object):
+
+    @staticmethod
+    def define_unit_vector(theta, phi):
+        """
+        Defines a unit vector in the Cartesian coordinate system given by the spherical angles `theta` and `phi`.
+
+        Args:
+            theta (float):  a single value of the polar angle (angle with respect to polar axis, z axis) [deg]
+            phi (float):    a single value of the azimuthal angle (angle of rotation from the initial meridian plane [deg]
+
+        Returns: a unit vector of shape (3,)
+
+        """
+        # Do type conversion
+        theta = torch.deg2rad(torch.tensor(theta))
+        phi = torch.deg2rad(torch.tensor(phi))
+
+        # Define the unit vector along the NV axis
+        n = torch.tensor(
+            [torch.sin(theta) * torch.cos(phi),
+             torch.sin(theta) * torch.sin(phi),
+             torch.cos(theta)],)
+
+        return n

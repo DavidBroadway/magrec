@@ -351,6 +351,48 @@ class MagnetizationPropagator2d(object):
         b = self.get_b_from_m(m, magnetisation_theta, magnetisation_phi)
         B = self.ft.backward(b, dim=(-2, -1))
         return B
+    
+
+class CurrentPropagator2d(object):
+    def __init__(self, source_shape, dx, dy, height, layer_thickness):
+        """
+        Create a propagator for a 2d current distribution that computes the magnetic field at `height` above
+        the 2d current layer of finite thickness `layer_thickness`.
+
+        Assumes uniform current distribution across the layer thickness and uses the integration factor to account for the finite thickness.
+
+        Args:
+            source_shape:       shape of the magnetization distribution, shape (3, n_x, n_y)
+            dx:                 pixel size in the x direction, in [mm]
+            dy:                 pixel size in the y direction, in [mm]
+            height:             height above the magnetization layer at which to evaluate the magnetic field, in [mm]
+            layer_thickness:    thickness of the magnetization layer, in [mm]
+        """
+        self.ft = FourierTransform2d(grid_shape=source_shape, dx=dx, dy=dy, real_signal=True)
+
+        self.j_to_b_matrix = CurrentLayerFourierKernel2d\
+            .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, height, layer_thickness)
+        """Forward field matrix that connects sources to the measured field"""
+        pass
+
+    def __call__(self, J):
+        """Propagates planar magnetization M of shape (batch_size, 3, width, height) to the magnetic field
+        this magnetization creates at distance `self.height` from the plane where this magnetization is present.
+        """
+        return self.B_from_J(J)
+
+    def get_b_from_j(self, j):
+        b = torch.einsum("...ijkl,...jkl->...ikl", self.j_to_b_matrix, j)
+        return b
+
+    def B_from_J(self, J):
+        if isinstance(J, np.ndarray):
+            J = torch.from_numpy(J)
+
+        j = self.ft.forward(J, dim=(-2, -1))
+        b = self.get_b_from_j(j)
+        B = self.ft.backward(b, dim=(-2, -1))
+        return B
 
 
 class Padder(object):
@@ -590,3 +632,12 @@ class FourierPadder(object):
 
 
         return x_filtered
+
+
+class AxisProjectionPropagator(object):
+
+    def __init__(self, theta, phi):
+        self.n = SphericalUnitVectorKernel.define_unit_vector(theta, phi)
+
+    def project(self, x):
+        return torch.einsum('...cij,c->...ij', x, self.n.type(x.type()))
