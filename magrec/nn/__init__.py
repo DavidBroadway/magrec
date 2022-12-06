@@ -4,4 +4,4 @@ __all__ = [
     "GeneratorCNN"
 ]
 
-from currec.nn.arch import GeneratorCNN
+from magrec.nn.arch import GeneratorCNN

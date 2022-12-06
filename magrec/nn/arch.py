@@ -11,8 +11,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from magrec.prop.Propagator import Propagator
-
 import numpy as np
 
 # Variotional estimator is used to calculate uncertainties on the reconstructed parameters. So far we do not do this.
@@ -38,7 +36,7 @@ class GeneratorCNN(nn.Module):
         Returns:
             GeneratorCNN:   the net
         """
-        super(GeneratorCNN, self).__init__()
+        super().__init__()
 
         M = size
 
