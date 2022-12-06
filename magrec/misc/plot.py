@@ -177,6 +177,16 @@ def plot_n_components(
             cbar = ax.cax.colorbar(im)
             cbar.set_label(units)
 
+    # Make an array of tick positions from 0 to datum.shape[0] so that there are at least 5 ticks
+    # and the last tick is at the end of the array
+    xticks = np.arange(0, datum.shape[0], max(20, datum.shape[0] // 5))
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(xticks)
+    
+    yticks = np.arange(0, datum.shape[1], max(20, datum.shape[1] // 5))
+    ax.set_yticks(yticks)
+    ax.set_yticklabels(yticks)
+
     fig.subplots_adjust(hspace=None)
 
     if not show:
