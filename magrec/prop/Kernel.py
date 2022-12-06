@@ -169,9 +169,15 @@ class UniformLayerFactor2d(object):
                 / k_matrix
                 * (torch.exp(-k_matrix * layer_thickness)-1)
         )
+        # TODO: Check when this condition is satisfied, currently layer_thickness = 0 case gives proper field, but the 
+        # expression below seems wrong.
+        # 
+        # `layer_thickness` parameters does not play role and can be set to 0 in the limit of k * thickness ≫ 1,
+        # in which case the factor is just -exp(-k * height) / k. Since that must be true for the smallest k which 
+        # is of order 1/L, the neccessary and satisfactory condition is that the L ≫ thickness, where L is the window size
         if layer_thickness == 0:
                  depth_factor = (
-                torch.exp(-k_matrix * height))
+                 torch.exp(-k_matrix * height)) 
 
         depth_factor[0, 0] = 0
         return depth_factor
