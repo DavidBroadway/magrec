@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 import torch.utils.data
 
-from currec.core.Propagator import Propagator
-from currec.nn.arch import GeneratorCNN, GeneratorMultipleCNN
+from magrec.prop.Propagator import Propagator
+from magrec.nn.arch import GeneratorCNN, GeneratorMultipleCNN
 
 import numpy as np
 
