@@ -405,7 +405,7 @@ class Padder(object):
         that are to be expaded, if tensor is provided, its last two dimensions are used to calculate the expected
         expanded shape."""
         if tensor is not None:
-            self.shape = tensor.shape[-2:]
+            self.shape = tensor.shape
         elif shape is not None:
             self.shape = shape
         else:
@@ -422,7 +422,7 @@ class Padder(object):
     def unpad(self, x):
         """Unpad a tensor according to the rule."""
         W, H = self.shape[-2:]
-        return x[..., W-1:2*W, H-1:2*H]
+        return x[..., W-1:2*W-1, H-1:2*H-1]
 
 class HeightContinuationPadder(Padder):
 
