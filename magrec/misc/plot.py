@@ -18,6 +18,7 @@ def plot_n_components(
         show: bool = False,
         symmetric: bool = True,
         norm_type: str = 'row',
+        alignment: str = 'horizontal',
 ) -> plt.Figure | list[plt.Figure]:
     """
     Plots n_components of a field in the provided axes or creates a new figure with axes.
@@ -36,6 +37,8 @@ def plot_n_components(
                                             have the same absolute value
         norm_type ('row', 'all', str):      type of the normalization: per row ('row'), common to all ('all'), or by row with grouping,
                                             e.g. 'AAB' for 1st and 2nd rows to have the same norm, 3rd row to have its own norm
+        alignment (str):                    alignment of the same quantity components, either 'horizontal' or 'vertical'
+                                            if 'horizontal', then components will be plotted in the same row, if 'vertical', then in the same column
 
     Returns:
         fig (plt.Figure, list[plt.Figure]): figure or a list of figures with n_components
@@ -104,16 +107,28 @@ def plot_n_components(
         cax = axes[0].cax
     else:
         fig = plt.figure()
-        grid = ImageGrid(fig, rect=(0, 0, 1, 1),
-                         nrows_ncols=(n_rows, n_components),
-                         axes_pad=0.05,
-                         label_mode="1",
-                         share_all=True,
-                         cbar_location="right",
-                         cbar_mode="edge",
-                         cbar_size="10%",
-                         cbar_pad=0.05,
-                         )
+        if alignment == "horizontal":
+            grid = ImageGrid(fig, rect=(0, 0, 1, 1),
+                            nrows_ncols=(n_rows, n_components),
+                            axes_pad=0.05,
+                            label_mode="1",
+                            share_all=True,
+                            cbar_location="right",
+                            cbar_mode="edge",
+                            cbar_size="10%",
+                            cbar_pad=0.05,
+                            )
+        elif alignment == "vertical":
+            grid = ImageGrid(fig, rect=(0, 0, 1, 1),
+                            nrows_ncols=(n_components, n_rows),
+                            axes_pad=0.05,
+                            label_mode="1",
+                            share_all=True,
+                            cbar_location="bottom",
+                            cbar_mode="edge",
+                            cbar_size="10%",
+                            cbar_pad=0.3,
+                            )
         axes = grid.axes_all
 
     # use default colormap if not specified
@@ -170,7 +185,11 @@ def plot_n_components(
                        **imshow_kwargs)  # extent=(0, 1, 0, 1))
         # https://github.com/matplotlib/matplotlib/issues/16910 — seems to be related
         ax.set_label(labels[i % n_components])
-        add_inner_title(ax, labels[i % n_components], loc='upper left')
+        if cmap == 'bwr':
+            label_color = 'black'
+        else:
+            label_color = None
+        add_inner_title(ax, labels[i % n_components], loc='upper left', color=label_color)
 
         if (i + 1) % n_components == 0:
             # if last component, plot the colorbar
@@ -179,11 +198,11 @@ def plot_n_components(
 
     # Make an array of tick positions from 0 to datum.shape[0] so that there are at least 5 ticks
     # and the last tick is at the end of the array
-    xticks = np.arange(0, datum.shape[0], max(20, datum.shape[0] // 5))
+    xticks = np.arange(0, datum.shape[1], max(20, datum.shape[1] // 5))
     ax.set_xticks(xticks)
     ax.set_xticklabels(xticks)
     
-    yticks = np.arange(0, datum.shape[1], max(20, datum.shape[1] // 5))
+    yticks = np.arange(0, datum.shape[0], max(20, datum.shape[0] // 5))
     ax.set_yticks(yticks)
     ax.set_yticklabels(yticks)
 
@@ -217,9 +236,12 @@ def get_color_norm(z=None, vmin=None, vmax=None,
     return norm
 
 
-def add_inner_title(ax: plt.Axes, title: str, loc, **kwargs):
+def add_inner_title(ax: plt.Axes, title: str, loc, color=None, **kwargs):
     from matplotlib.offsetbox import AnchoredText
     properties = {'size': plt.rcParams['legend.fontsize']}
+    # add an option to adjust color
+    if color is not None:
+        properties['color'] = color
     # got it from here: https://matplotlib.org/stable/gallery/axes_grid1/demo_axes_grid2.html
     at = AnchoredText(title, loc=loc, prop=properties, pad=0., borderpad=0.5,
                       frameon=False, **kwargs)
