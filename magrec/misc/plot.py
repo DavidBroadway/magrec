@@ -4,6 +4,7 @@ import numpy as np
 import torch
 
 from mpl_toolkits.axes_grid1 import ImageGrid
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 import matplotlib
 from matplotlib import cm
 
@@ -205,6 +206,16 @@ def plot_n_components(
     yticks = np.arange(0, datum.shape[0], max(20, datum.shape[0] // 5))
     ax.set_yticks(yticks)
     ax.set_yticklabels(yticks)
+
+    # On the last axis, show an inset with coordinate system directions: arrows pointing to the right and up
+    ax_inset = inset_axes(ax, width="30%", height="30%", loc='lower left')
+    ax_inset.set_aspect('equal')
+    ax_inset.set_axis_off()
+    ax_inset.arrow(0, 0, 1, 0, head_width=0.3, head_length=0.3, linewidth=0.3, capstyle='butt', facecolor='k', edgecolor='k')
+    ax_inset.arrow(0, 0, 0, 1, head_width=0.3, head_length=0.3, linewidth=0.3, capstyle='butt', facecolor='k', edgecolor='k')
+    ax_inset.text(1.5, 0, r'$x$', fontsize=12, color='k')
+    ax_inset.text(0, 1.7, r'$y$', fontsize=12, color='k')
+
 
     fig.subplots_adjust(hspace=None)
 
