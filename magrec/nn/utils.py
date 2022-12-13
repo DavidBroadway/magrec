@@ -4,10 +4,39 @@ import torch
 import torch.nn as nn
 import torch.utils.data
 
-from magrec.prop.Propagator import Propagator
+from magrec.prop.Propagator import CurrentFourierPropagator3d as Propagator
 from magrec.nn.arch import GeneratorCNN, GeneratorMultipleCNN
 
 import numpy as np
+
+
+def create_zero_padder(required_shape: tuple[int, int], W: int, H: int):
+    # calculate the required padding to get to the expanded shape
+    pad_width = (required_shape[0] - W*3) 
+    pad_height = (required_shape[1] - H*3)
+
+    # if the padding is odd, we need to add one more pixel to the right and bottom
+    if pad_width % 2 == 1:
+        pad_left = pad_width // 2 + 1
+        pad_right = pad_width // 2
+    else:
+        pad_left = pad_width // 2
+        pad_right = pad_width // 2
+
+    # similar to height
+    if pad_height % 2 == 1:
+        pad_bottom = pad_height // 2 + 1
+        pad_top = pad_height // 2
+    else:
+        pad_bottom = pad_height // 2
+        pad_top = pad_height // 2
+
+    # calculate the ROI to crop the result to
+    roi_left = pad_left + W
+    roi_bottom = pad_bottom + H
+
+    pad_zero = torch.nn.ZeroPad2d((pad_bottom, pad_top, pad_left, pad_right))
+    return pad_zero, (roi_left, roi_bottom)
 
 
 def train(net: GeneratorCNN, train_set: torch.utils.data.TensorDataset, optimizer: torch.optim.Optimizer,
