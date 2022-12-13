@@ -142,10 +142,14 @@ class MagnetizationFourierKernel2d(object):
         _M[[0, 1, 1], [0, 0, 1], [0, 0, 0], [0, 0, 0]] = 0
 
         depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
-
         # Use the property of the M matrix that it is symmetric (that's why we divide by 1/2 above, to get the proper diagonal terms)
         M = _M + _M.transpose(0, 1)
+
         M = -(MU0 / 2) * depth_factor * M
+
+        # Set the components of the kernel matrix to zero for k = 0, where the denominator is zero
+        M[:, 0, 0] = 0
+        
         return M
     
 
