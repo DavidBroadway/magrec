@@ -21,3 +21,5 @@ MU0: float = 1.25663706212  # [mT * mm / A]
 """Magnetic permeability of free space, 4π * 1e-7 in [H/m = T * m / A]."""
 
 EPSILON0 = 8.854187817e-12
+
+convert_AperM2_to_ubpernm2 = 1.0783e+05
