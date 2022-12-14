@@ -290,6 +290,7 @@ class MagnetizationPropagator2d(object):
         self.ft = FourierTransform2d(grid_shape=source_shape, dx=dx, dy=dy, real_signal=True)
 
         k_matrix = self.ft.k_matrix
+        self.Filter = None
 
         self.depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
 
@@ -388,6 +389,10 @@ class MagnetizationPropagator2d(object):
         # If there exists any nans set them to zero
         b_to_m_matrix[b_to_m_matrix != b_to_m_matrix] = 0
 
+        # Apply Filter
+        if self.Filter is not None:
+            b_to_m_matrix = self.Filter*b_to_m_matrix
+
         m = b * b_to_m_matrix
         m[0,0] = 0 # remove DC componenet
         return m
@@ -403,7 +408,21 @@ class MagnetizationPropagator2d(object):
         M = self.ft.backward(m, dim=(-2, -1))
         return M
 
+    def add_hanning_filter(self, 
+            HanningWavelength, 
+            high_freq_cutoff = None, 
+            low_freq_cutoff = None, 
+            plot: bool = False):
+        Padder = FourierPadder()
+        self.Filter = Padder.get_hanning(
+            self.ft.k_matrix, 
+            HanningWavelength = HanningWavelength, 
+            high_freq_cutoff = high_freq_cutoff, 
+            low_freq_cutoff = low_freq_cutoff, 
+            plot = plot)
+        
 
+        return filter
         
     
 
@@ -629,8 +648,8 @@ class FourierPadder(object):
             plt.colorbar()
         return x
 
-    @staticmethod
-    def apply_hanning(x: torch.Tensor, k_matrix, HanningWavelength, high_freq_cutoff = None, low_freq_cutoff = None, plot: bool = False) -> torch.Tensor:
+
+    def get_hanning(self, k_matrix, HanningWavelength, high_freq_cutoff = None, low_freq_cutoff = None, plot: bool = False) -> torch.Tensor:
         """
         Pads using numpy. Converts the torch tensor to a numpy array, performs the padding, and then converts back. 
 
@@ -642,17 +661,44 @@ class FourierPadder(object):
 
         """
         han2d = 0.5*(1 + np.cos(k_matrix * HanningWavelength/2 ))
-        img_filter = han2d
+        filter = han2d
         # apply frequency cutoffs
         if high_freq_cutoff:
             print(f"Applied a high frequency filter, removing all components smaller than {high_freq_cutoff} um")
             high_freq_cutoff = 2* np.pi / high_freq_cutoff
-            img_filter[(k_matrix > high_freq_cutoff)] = 0
+            filter[(k_matrix > high_freq_cutoff)] = 0
         if low_freq_cutoff:
             print(f"Applied a high frequency filter, removing all components larger than {low_freq_cutoff} um")
             low_freq_cutoff = 2* np.pi / low_freq_cutoff
-            img_filter[(k_matrix < low_freq_cutoff)] = 0
+            filter[(k_matrix < low_freq_cutoff)] = 0
+        return filter
+
+    def apply_hanning(self, x: torch.Tensor, k_matrix, HanningWavelength, high_freq_cutoff = None, low_freq_cutoff = None, plot: bool = False) -> torch.Tensor:
+        """
+        Pads using numpy. Converts the torch tensor to a numpy array, performs the padding, and then converts back. 
+
+        Args:
+            x (torch.Tensor):      input tensor
+
+        Returns:
+            torch.Tensor:          padded tensor
+
+        """
+        # han2d = 0.5*(1 + np.cos(k_matrix * HanningWavelength/2 ))
+        # img_filter = han2d
+        # # apply frequency cutoffs
+        # if high_freq_cutoff:
+        #     print(f"Applied a high frequency filter, removing all components smaller than {high_freq_cutoff} um")
+        #     high_freq_cutoff = 2* np.pi / high_freq_cutoff
+        #     img_filter[(k_matrix > high_freq_cutoff)] = 0
+        # if low_freq_cutoff:
+        #     print(f"Applied a high frequency filter, removing all components larger than {low_freq_cutoff} um")
+        #     low_freq_cutoff = 2* np.pi / low_freq_cutoff
+        #     img_filter[(k_matrix < low_freq_cutoff)] = 0
             
+        img_filter = self.get_hanning(k_matrix, HanningWavelength, high_freq_cutoff = high_freq_cutoff, low_freq_cutoff = low_freq_cutoff , plot=plot)
+
+
         x_filtered = x * img_filter 
         
         if plot:
