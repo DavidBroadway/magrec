@@ -13,7 +13,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from magrec.prop.Fourier import FourierTransform2d
-from magrec.prop.Kernel import MagnetizationFourierKernel2d, CurrentFourierKernel2d, CurrentLayerFourierKernel2d, SphericalUnitVectorKernel
+from magrec.prop.Kernel import UniformLayerFactor2d, MagnetizationFourierKernel2d, CurrentFourierKernel2d, CurrentLayerFourierKernel2d, SphericalUnitVectorKernel
 
 
 # CurrentFourierPropagtor3d
@@ -291,11 +291,7 @@ class MagnetizationPropagator2d(object):
 
         k_matrix = self.ft.k_matrix
 
-        self.depth_factor = (
-            torch.exp(-k_matrix * height)
-            / k_matrix
-            * (torch.exp(-k_matrix * layer_thickness) - 1)
-        )
+        self.depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
 
         self.m_to_b_matrix = MagnetizationFourierKernel2d\
             .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, height, layer_thickness)
@@ -351,6 +347,65 @@ class MagnetizationPropagator2d(object):
         b = self.get_b_from_m(m, magnetisation_theta, magnetisation_phi)
         B = self.ft.backward(b, dim=(-2, -1))
         return B
+
+
+
+    def get_m_from_b(self, b, magnetisation_theta, magnetisation_phi, sensor_theta, sensor_phi):
+        # Calculate the matrix product M @ j for each k_x, k_y, z
+        # b — batch index
+        # i — index of the magnetic field component, i.e. b_x, b_y, b_z,
+        # j — index of the magnetization distribution component, i.e. m_x, m_y, m_z
+        # k, l — indices of k_x and k_y, respectively
+        # b = torch.einsum("ijkl,bjkl->bikl", self.m_to_b_matrix, m)
+
+        #b = torch.tensor(b, dtype=torch.complex64)
+
+        magnetisation_phi = np.deg2rad(magnetisation_phi)
+        magnetisation_theta = np.deg2rad(magnetisation_theta)
+        magnetisation_dir = torch.tensor([ \
+            np.cos(magnetisation_phi)*np.sin(magnetisation_theta), \
+            np.sin(magnetisation_phi)*np.sin(magnetisation_theta), \
+            np.cos(magnetisation_theta)], dtype=torch.complex64)
+
+        # sum the the magnetisation direction
+        m_to_b_matrix = torch.einsum("ijkl,i->jkl", self.m_to_b_matrix, magnetisation_dir)
+
+        sensor_phi = np.deg2rad(sensor_phi)
+        sensor_theta = np.deg2rad(sensor_theta)
+        sensor_dir = torch.tensor([ \
+            np.cos(sensor_phi)*np.sin(sensor_theta), \
+            np.sin(sensor_phi)*np.sin(sensor_theta), \
+            np.cos(sensor_theta)], dtype=torch.complex64)
+
+        # sum the the sensor direction
+        m_to_b_matrix = torch.einsum("jkl,j->kl", m_to_b_matrix, sensor_dir)
+
+        # Define the finally transformation 
+        # b_to_m_matrix = self.depth_factor * m_to_b_matrix
+
+        b_to_m_matrix = self.depth_factor/m_to_b_matrix
+
+        # remove the 0 componenet
+        b_to_m_matrix[0,0] = 0
+        # If there exists any nans set them to zero
+        #b_to_m_matrix[b_to_m_matrix != b_to_m_matrix] = 0
+
+        m = b * b_to_m_matrix
+        m[0,0] = 0 # remove DC componenet
+        return m
+
+
+    def M_from_B(self, B, magnetisation_theta, magnetisation_phi,  sensor_theta, sensor_phi):
+        if isinstance(B, np.ndarray):
+            B = torch.from_numpy(B)
+
+        b = self.ft.forward(B, dim=(-2, -1))
+        m = self.get_m_from_b(b, magnetisation_theta, magnetisation_phi, sensor_theta, sensor_phi)
+        M = self.ft.backward(m, dim=(-2, -1))
+        return M
+
+
+        
     
 
 class CurrentPropagator2d(object):

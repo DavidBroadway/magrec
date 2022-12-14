@@ -149,6 +149,8 @@ class MagnetizationFourierKernel2d(object):
 
         # Set the components of the kernel matrix to zero for k = 0, where the denominator is zero
         M[:, 0, 0] = 0
+        # If there exists any nans set them to zero
+        M[M != M] = 0
         
         return M
     
@@ -181,7 +183,7 @@ class UniformLayerFactor2d(object):
         # is of order 1/L, the neccessary and satisfactory condition is that the L ≫ thickness, where L is the window size
         if layer_thickness == 0:
                  depth_factor = (
-                 torch.exp(-k_matrix * height)) 
+                 torch.exp(-k_matrix * height) /k_matrix)
 
         depth_factor[0, 0] = 0
         return depth_factor
