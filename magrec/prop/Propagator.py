@@ -410,18 +410,17 @@ class MagnetizationPropagator2d(object):
 
     def add_hanning_filter(self, 
             HanningWavelength, 
-            high_freq_cutoff = None, 
-            low_freq_cutoff = None, 
-            plot: bool = False):
+            short_wavelength_cutoff = None, 
+            long_wavelength_cutoff = None):
+        # load the padder class    
         Padder = FourierPadder()
+        # get the filter.
         self.Filter = Padder.get_hanning(
             self.ft.k_matrix, 
             HanningWavelength = HanningWavelength, 
-            high_freq_cutoff = high_freq_cutoff, 
-            low_freq_cutoff = low_freq_cutoff, 
-            plot = plot)
-        
-
+            short_wavelength_cutoff = short_wavelength_cutoff, 
+            long_wavelength_cutoff = long_wavelength_cutoff, 
+            plot = False)
         return filter
         
     
@@ -649,7 +648,7 @@ class FourierPadder(object):
         return x
 
 
-    def get_hanning(self, k_matrix, HanningWavelength, high_freq_cutoff = None, low_freq_cutoff = None, plot: bool = False) -> torch.Tensor:
+    def get_hanning(self, k_matrix, HanningWavelength, short_wavelength_cutoff = None, long_wavelength_cutoff = None, plot: bool = False) -> torch.Tensor:
         """
         Pads using numpy. Converts the torch tensor to a numpy array, performs the padding, and then converts back. 
 
@@ -663,17 +662,17 @@ class FourierPadder(object):
         han2d = 0.5*(1 + np.cos(k_matrix * HanningWavelength/2 ))
         filter = han2d
         # apply frequency cutoffs
-        if high_freq_cutoff:
-            print(f"Applied a high frequency filter, removing all components smaller than {high_freq_cutoff} um")
-            high_freq_cutoff = 2* np.pi / high_freq_cutoff
+        if short_wavelength_cutoff:
+            print(f"Applied a high frequency filter, removing all components smaller than {short_wavelength_cutoff} um")
+            high_freq_cutoff = 2* np.pi / short_wavelength_cutoff
             filter[(k_matrix > high_freq_cutoff)] = 0
-        if low_freq_cutoff:
-            print(f"Applied a high frequency filter, removing all components larger than {low_freq_cutoff} um")
-            low_freq_cutoff = 2* np.pi / low_freq_cutoff
+        if long_wavelength_cutoff:
+            print(f"Applied a high frequency filter, removing all components larger than {long_wavelength_cutoff} um")
+            low_freq_cutoff = 2* np.pi / long_wavelength_cutoff
             filter[(k_matrix < low_freq_cutoff)] = 0
         return filter
 
-    def apply_hanning(self, x: torch.Tensor, k_matrix, HanningWavelength, high_freq_cutoff = None, low_freq_cutoff = None, plot: bool = False) -> torch.Tensor:
+    def apply_hanning(self, x: torch.Tensor, k_matrix, HanningWavelength, short_wavelength_cutoff = None, long_wavelength_cutoff = None, plot: bool = False) -> torch.Tensor:
         """
         Pads using numpy. Converts the torch tensor to a numpy array, performs the padding, and then converts back. 
 
@@ -684,21 +683,8 @@ class FourierPadder(object):
             torch.Tensor:          padded tensor
 
         """
-        # han2d = 0.5*(1 + np.cos(k_matrix * HanningWavelength/2 ))
-        # img_filter = han2d
-        # # apply frequency cutoffs
-        # if high_freq_cutoff:
-        #     print(f"Applied a high frequency filter, removing all components smaller than {high_freq_cutoff} um")
-        #     high_freq_cutoff = 2* np.pi / high_freq_cutoff
-        #     img_filter[(k_matrix > high_freq_cutoff)] = 0
-        # if low_freq_cutoff:
-        #     print(f"Applied a high frequency filter, removing all components larger than {low_freq_cutoff} um")
-        #     low_freq_cutoff = 2* np.pi / low_freq_cutoff
-        #     img_filter[(k_matrix < low_freq_cutoff)] = 0
             
-        img_filter = self.get_hanning(k_matrix, HanningWavelength, high_freq_cutoff = high_freq_cutoff, low_freq_cutoff = low_freq_cutoff , plot=plot)
-
-
+        img_filter = self.get_hanning(k_matrix, HanningWavelength, short_wavelength_cutoff = short_wavelength_cutoff, long_wavelength_cutoff = long_wavelength_cutoff , plot=plot)
         x_filtered = x * img_filter 
         
         if plot:
@@ -729,7 +715,6 @@ class FourierPadder(object):
             plt.imshow(torch.rot90(x_filtered.imag), cmap='bwr')
             plt.title('Filtered array imaginary component')
             plt.colorbar()
-
 
         return x_filtered
 
