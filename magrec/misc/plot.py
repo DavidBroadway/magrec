@@ -18,6 +18,7 @@ def plot_n_components(
         imshow_kwargs: dict | None = None,
         show: bool = False,
         symmetric: bool = True,
+        climits: tuple = None,
         norm_type: str = 'row',
         alignment: str = 'horizontal',
 ) -> plt.Figure | list[plt.Figure]:
@@ -144,8 +145,10 @@ def plot_n_components(
     norm_dict = {key: None for key in norm_type}
     for i, norm_group in enumerate(norm_type):
         row_data = data[i]
-        if norm_dict[norm_group] is None:
+        if norm_dict[norm_group] is None and climits is None:
             norm_dict[norm_group] = get_color_norm(row_data, symmetric=symmetric)
+        elif climits is not None:
+            norm_dict[norm_group] = get_color_norm(vmin=min(climits), vmax= max(climits), symmetric=False)
         else:
             new_norm = get_color_norm(row_data, symmetric=symmetric)
             norm_dict[norm_group].vmin = min(norm_dict[norm_group].vmin, new_norm.vmin)

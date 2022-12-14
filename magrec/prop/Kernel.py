@@ -183,7 +183,7 @@ class UniformLayerFactor2d(object):
         # is of order 1/L, the neccessary and satisfactory condition is that the L ≫ thickness, where L is the window size
         if layer_thickness == 0:
                  depth_factor = (
-                 torch.exp(-k_matrix * height) /k_matrix)
+                 torch.exp(-k_matrix * height))
 
         depth_factor[0, 0] = 0
         return depth_factor

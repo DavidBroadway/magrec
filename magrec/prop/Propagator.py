@@ -367,7 +367,7 @@ class MagnetizationPropagator2d(object):
             np.sin(magnetisation_phi)*np.sin(magnetisation_theta), \
             np.cos(magnetisation_theta)], dtype=torch.complex64)
 
-        # sum the the magnetisation direction
+        # sum over the magnetisation direction
         m_to_b_matrix = torch.einsum("ijkl,i->jkl", self.m_to_b_matrix, magnetisation_dir)
 
         sensor_phi = np.deg2rad(sensor_phi)
@@ -377,18 +377,16 @@ class MagnetizationPropagator2d(object):
             np.sin(sensor_phi)*np.sin(sensor_theta), \
             np.cos(sensor_theta)], dtype=torch.complex64)
 
-        # sum the the sensor direction
+        # sum over the sensor direction
         m_to_b_matrix = torch.einsum("jkl,j->kl", m_to_b_matrix, sensor_dir)
 
         # Define the finally transformation 
-        # b_to_m_matrix = self.depth_factor * m_to_b_matrix
-
-        b_to_m_matrix = self.depth_factor/m_to_b_matrix
+        b_to_m_matrix =  1/ m_to_b_matrix
 
         # remove the 0 componenet
         b_to_m_matrix[0,0] = 0
         # If there exists any nans set them to zero
-        #b_to_m_matrix[b_to_m_matrix != b_to_m_matrix] = 0
+        b_to_m_matrix[b_to_m_matrix != b_to_m_matrix] = 0
 
         m = b * b_to_m_matrix
         m[0,0] = 0 # remove DC componenet
@@ -400,6 +398,7 @@ class MagnetizationPropagator2d(object):
             B = torch.from_numpy(B)
 
         b = self.ft.forward(B, dim=(-2, -1))
+        b[0,0] = 0
         m = self.get_m_from_b(b, magnetisation_theta, magnetisation_phi, sensor_theta, sensor_phi)
         M = self.ft.backward(m, dim=(-2, -1))
         return M
