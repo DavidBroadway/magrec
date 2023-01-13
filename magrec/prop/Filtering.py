@@ -1,11 +1,6 @@
-"""This module implements evaluation of Biot-Savart law using FFT.
-
-The following code uses Fourier transform and its approximation by FFT
-provided by magrec.Fourier module, to evaluate Biot-Savart integral which
-connects the magnetic field B with the current density distribution J or
-magnetization distribution m.
 """
-# used for base class methods that need to be implemented
+This module implements filtering of 2D arrays
+"""
 
 import torch
 import numpy as np
@@ -17,7 +12,6 @@ class DataFiltering(object):
 
     def __init__(self, data, dx, dy):
         """
-    
         Args:
             data:               2D array of data
             dx:                 pixel size in the x direction, in [mm]
