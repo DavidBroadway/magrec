@@ -5,25 +5,25 @@ import numpy as np
 
 
 class GenericModel(object):
-    # Super class that other models can be based off. 
+    # Super class that other models can be based off.
 
     def __init__(self, data):
         """
         Args:
-            data:   The 2D array that will be used in the training. 
+            data:   The 2D array that will be used in the training.
                     This is passed to automatically define the size of the network.
 
         """
-        # Define the default values fro the architexure for this model. 
+        # Define the default values fro the architexure for this model.
         self.arch = dict()
         self.arch["n_channels_in"] = 1
         self.arch["n_channels_out"] = 1
-        
+
         self.arch["kernel"] = 5
         self.arch["stride"] = 2
         self.arch["padding"] = 2
 
-        # Pad the data to define the size of the neural network. 
+        # Pad the data to define the size of the neural network.
         padded_data = self.pad_2d_array(data)
         self.arch["size"] = np.shape(padded_data)[0]
 
@@ -56,17 +56,17 @@ class UniformDirectionMagnetisation(GenericModel):
 
         # Define the propagator so that this isn't performed during a loop.
         self.define_propagtor(data, dx, dy, height, layer_thickness)
-    
+
     def define_propagtor(self, data, dx, dy, height, layer_thickness):
         from magrec.prop.Propagator import MagnetizationPropagator2d as Propagator
         self.propagator = Propagator(data.shape, dx, dy, height, layer_thickness)
 
-        
+
 
     def model(self, nn_output):
         """
         Args:
-            nn_output:  The output of the neural network which is a be a 2D array of 
+            nn_output:  The output of the neural network which is a be a 2D array of
                         magnetisation along a single direction
 
         Returns:

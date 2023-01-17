@@ -5,12 +5,15 @@ provided by magrec.Fourier module, to evaluate Biot-Savart integral which
 connects the magnetic field B with the current density distribution J or
 magnetization distribution m.
 """
+# used for base class methods that need to be implemented
+from abc import abstractmethod
+
 import torch
 import numpy as np
+import matplotlib.pyplot as plt
 
 from magrec.prop.Fourier import FourierTransform2d
-from magrec.prop.Kernel import MagnetizationFourierKernel2d, CurrentFourierKernel2d
-import matplotlib.pyplot as plt
+from magrec.prop.Kernel import UniformLayerFactor2d, MagnetizationFourierKernel2d, CurrentFourierKernel2d, CurrentLayerFourierKernel2d, SphericalUnitVectorKernel
 
 
 # CurrentFourierPropagtor3d
@@ -287,12 +290,9 @@ class MagnetizationPropagator2d(object):
         self.ft = FourierTransform2d(grid_shape=source_shape, dx=dx, dy=dy, real_signal=True)
 
         k_matrix = self.ft.k_matrix
+        self.Filter = None
 
-        self.depth_factor = (
-            torch.exp(-k_matrix * height)
-            / k_matrix
-            * (torch.exp(-k_matrix * layer_thickness) - 1)
-        )
+        self.depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
 
         self.m_to_b_matrix = MagnetizationFourierKernel2d\
             .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, height, layer_thickness)
@@ -350,6 +350,202 @@ class MagnetizationPropagator2d(object):
         return B
 
 
+
+    def get_m_from_b(self, b, magnetisation_theta, magnetisation_phi, sensor_theta, sensor_phi):
+        # Calculate the matrix product M @ j for each k_x, k_y, z
+        # b — batch index
+        # i — index of the magnetic field component, i.e. b_x, b_y, b_z,
+        # j — index of the magnetization distribution component, i.e. m_x, m_y, m_z
+        # k, l — indices of k_x and k_y, respectively
+        # b = torch.einsum("ijkl,bjkl->bikl", self.m_to_b_matrix, m)
+
+        #b = torch.tensor(b, dtype=torch.complex64)
+
+        magnetisation_phi = np.deg2rad(magnetisation_phi)
+        magnetisation_theta = np.deg2rad(magnetisation_theta)
+        magnetisation_dir = torch.tensor([ \
+            np.cos(magnetisation_phi)*np.sin(magnetisation_theta), \
+            np.sin(magnetisation_phi)*np.sin(magnetisation_theta), \
+            np.cos(magnetisation_theta)], dtype=torch.complex64)
+
+        # sum over the magnetisation direction
+        m_to_b_matrix = torch.einsum("ijkl,i->jkl", self.m_to_b_matrix, magnetisation_dir)
+
+        sensor_phi = np.deg2rad(sensor_phi)
+        sensor_theta = np.deg2rad(sensor_theta)
+        sensor_dir = torch.tensor([ \
+            np.cos(sensor_phi)*np.sin(sensor_theta), \
+            np.sin(sensor_phi)*np.sin(sensor_theta), \
+            np.cos(sensor_theta)], dtype=torch.complex64)
+
+        # sum over the sensor direction
+        m_to_b_matrix = torch.einsum("jkl,j->kl", m_to_b_matrix, sensor_dir)
+
+        # Define the finally transformation
+        b_to_m_matrix =  1/ m_to_b_matrix
+
+        # remove the 0 componenet
+        b_to_m_matrix[0,0] = 0
+        # If there exists any nans set them to zero
+        b_to_m_matrix[b_to_m_matrix != b_to_m_matrix] = 0
+
+        # Apply Filter
+        if self.Filter is not None:
+            b_to_m_matrix = self.Filter*b_to_m_matrix
+
+        m = b * b_to_m_matrix
+        m[0,0] = 0 # remove DC componenet
+        return m
+
+
+    def M_from_B(self, B, magnetisation_theta, magnetisation_phi,  sensor_theta, sensor_phi):
+        if isinstance(B, np.ndarray):
+            B = torch.from_numpy(B)
+
+        b = self.ft.forward(B, dim=(-2, -1))
+        b[0,0] = 0
+        m = self.get_m_from_b(b, magnetisation_theta, magnetisation_phi, sensor_theta, sensor_phi)
+        M = self.ft.backward(m, dim=(-2, -1))
+        return M
+
+    def add_hanning_filter(self,
+            HanningWavelength,
+            short_wavelength_cutoff = None,
+            long_wavelength_cutoff = None):
+        # load the padder class
+        Padder = FourierPadder()
+        # get the filter.
+        self.Filter = Padder.get_hanning(
+            self.ft.k_matrix,
+            HanningWavelength = HanningWavelength,
+            short_wavelength_cutoff = short_wavelength_cutoff,
+            long_wavelength_cutoff = long_wavelength_cutoff,
+            plot = False)
+        return filter
+
+
+
+class CurrentPropagator2d(object):
+    def __init__(self, source_shape, dx, dy, height, layer_thickness):
+        """
+        Create a propagator for a 2d current distribution that computes the magnetic field at `height` above
+        the 2d current layer of finite thickness `layer_thickness`.
+
+        Assumes uniform current distribution across the layer thickness and uses the integration factor to account for the finite thickness.
+
+        Args:
+            source_shape:       shape of the magnetization distribution, shape (3, n_x, n_y)
+            dx:                 pixel size in the x direction, in [mm]
+            dy:                 pixel size in the y direction, in [mm]
+            height:             height above the magnetization layer at which to evaluate the magnetic field, in [mm]
+            layer_thickness:    thickness of the magnetization layer, in [mm]
+        """
+        self.ft = FourierTransform2d(grid_shape=source_shape, dx=dx, dy=dy, real_signal=True)
+
+        self.j_to_b_matrix = CurrentLayerFourierKernel2d\
+            .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, height, layer_thickness)
+        """Forward field matrix that connects sources to the measured field"""
+        pass
+
+    def __call__(self, J):
+        """Propagates planar magnetization M of shape (batch_size, 3, width, height) to the magnetic field
+        this magnetization creates at distance `self.height` from the plane where this magnetization is present.
+        """
+        return self.B_from_J(J)
+
+    def get_b_from_j(self, j):
+        b = torch.einsum("...ijkl,...jkl->...ikl", self.j_to_b_matrix, j)
+        return b
+
+    def B_from_J(self, J):
+        if isinstance(J, np.ndarray):
+            J = torch.from_numpy(J)
+
+        j = self.ft.forward(J, dim=(-2, -1))
+        b = self.get_b_from_j(j)
+        B = self.ft.backward(b, dim=(-2, -1))
+        return B
+
+
+class Padder(object):
+    """Class to pad a torch.tensor according to the specified rule. The constructor method takes a
+    torch.Tensor as it would appear in the input or a shape.
+    """
+
+    def __init__(self, shape=None, tensor=None):
+        """Initialize the class with a shape or a tensor. Shape specifies the shape of the last two dimensions
+        that are to be expaded, if tensor is provided, its last two dimensions are used to calculate the expected
+        expanded shape."""
+        if tensor is not None:
+            self.shape = tensor.shape
+        elif shape is not None:
+            self.shape = shape
+        else:
+            raise ValueError("Either `shape` or `tensor` must be specified.")
+
+        self.expanded_shape = self.shape[:-2] + \
+            (self.shape[-2] * 3, self.shape[-1] * 3,)
+
+    @abstractmethod
+    def pad(self, tensor):
+        """Pad a tensor according to the rule."""
+        raise NotImplementedError
+
+    def unpad(self, x):
+        """Unpad a tensor according to the rule."""
+        W, H = self.shape[-2:]
+        return x[..., W-1:2*W-1, H-1:2*H-1]
+
+class HeightContinuationPadder(Padder):
+
+    def pad(self, x: torch.Tensor) -> torch.Tensor:
+        """Pad a tensor according to the rule."""
+        y = torch.zeros(size=self.expanded_shape)
+        # take (W, H) size image X and turn it into (3*W, 3*H) obtained by appending 0s to X along W to get 0X0,
+        # and repeating the last lines of X along H, which we call H, H times, to get HXH vertically, like so:
+        # 0H0
+        # 0X0
+        # 0H0
+        W, H = self.shape[-2:]
+        y[..., W:2*W, H:2*H] = x
+        # how to propagate shape (W, 1) into the proper (W, H) shape?
+        y[..., W:2*W, 2*H:] = x[..., -1][..., None]
+        y[..., W:2*W, :H] = x[..., 0][..., None]
+        return y
+
+class WidthContinuationPadder(Padder):
+
+    def pad(self, x: torch.Tensor) -> torch.Tensor:
+        """Pad a tensor according to the rule."""
+        y = torch.zeros(size=self.expanded_shape)
+        # take (W, H) size image X and turn it into (3*W, 3*H) obtained by appending 0s to X along H to get 0X0,
+        # and repeating the last lines of X along W, which we call W, W times, to get WXW horizontally, like so:
+        # 000
+        # WXW
+        # 000
+        W, H = self.shape[-2:]
+        # TODO: Here is a problem that makes y to be of incorrect shape. y[..., W:2*W, H:2*H] gets implicitly
+        # expanded to y[..., x.shape[-3], W:2*W, H:2*H] to fit the shape of x, instead of assigning the values
+        # to the other axis of y.
+        y[..., W:2*W, H:2*H] = x[..., :, :]
+        # how to propagate shape (W, 1) into the proper (W, H) shape?
+        y[..., 2*W:, H:2*H] = x[..., 1, :][..., None, :]
+        y[..., :W, H:2*H] = x[..., 0, :][..., None, :]
+        return y
+
+class ZeroPadder(Padder):
+
+    def pad(self, x: torch.Tensor) -> torch.Tensor:
+        """Pad a tensor with zeros symmetrically."""
+        y = torch.zeros(size=self.expanded_shape)
+        # 000
+        # 0X0
+        # 000
+        W, H = self.shape[-2:]
+        y[..., W:2*W, H:2*H] = x
+        return y
+
+
 class FourierPadder(object):
     """
     Class to deal with padding tensors before converting them to Fourier space.
@@ -374,25 +570,25 @@ class FourierPadder(object):
 
         Args:
             x (torch.Tensor):      input tensor
-            dim (tuple):           two dimensions along which to pad, for example for a 2d tensor, dim=(0, 1) will pad along the x and y dimensions, 
-                                   for a higher dimensional tensor, where there are (batch_n, component_n, x_n, y_n, z_n) dimensions, dims=(-3, -2) will pad 
+            dim (tuple):           two dimensions along which to pad, for example for a 2d tensor, dim=(0, 1) will pad along the x and y dimensions,
+                                   for a higher dimensional tensor, where there are (batch_n, component_n, x_n, y_n, z_n) dimensions, dims=(-3, -2) will pad
                                    along the x and y dimensions, as is expected for the Fourier transform in FourierTransform2d.
 
         Returns:
             torch.Tensor:          padded tensor
 
         Notes:
-            It works specifically along 2 dimensions, because it is not so trivial to implement reflection in more dimensions, and 
-            in this library it is not needed, actually. 
+            It works specifically along 2 dimensions, because it is not so trivial to implement reflection in more dimensions, and
+            in this library it is not needed, actually.
 
-            TODO: When doing backpropagation, check how the padding gradient is calculated. In principle, it should matter, so I need to check 
+            TODO: When doing backpropagation, check how the padding gradient is calculated. In principle, it should matter, so I need to check
             math how it is properly done.
-        """ 
+        """
         # size along each dimension remains the same unless dimension is in dim, in which case it is doubled for padding
         replication = torch.nn.ReplicationPad1d((0, 1, 0, 1))  # to pad by 1 along x, y dimensions
         height, width = x.shape[-2:]
-        reflection = torch.nn.ReflectionPad2d((0, width - 1, 0, height - 1))  
-        
+        reflection = torch.nn.ReflectionPad2d((0, width - 1, 0, height - 1))
+
         if len(x.shape) == 2:
             x = x.unsqueeze(0)
             x = reflection(replication(x))
@@ -402,7 +598,7 @@ class FourierPadder(object):
 
         # a nice bonus: now the tensor size is divisible by 2
         return x
-    
+
     @staticmethod
     def pad_zeros2d(x: torch.Tensor) -> torch.Tensor:
         """
@@ -428,11 +624,10 @@ class FourierPadder(object):
         # a nice bonus: now the tensor size is divisible by 2
         return x
 
-
     @staticmethod
-    def pad_linear2d(x: torch.Tensor, pad_width: int, mode: str, plot: bool = False) -> torch.Tensor:
+    def pad_2d(x: torch.Tensor, pad_width: int, mode: str, plot: bool = False) -> torch.Tensor:
         """
-        Pads the input with zeros along two dimensions.
+        Pads using numpy. Converts the torch tensor to a numpy array, performs the padding, and then converts back.
 
         Args:
             x (torch.Tensor):      input tensor
@@ -442,15 +637,92 @@ class FourierPadder(object):
 
         """
         npArray = x.numpy()
-        
-        # numpy.pad(array, pad_width, mode='constant', **kwargs)
         paddedArray = np.pad(npArray, pad_width, mode=mode)
         x = torch.from_numpy(paddedArray)
-        
 
         if plot:
             plt.figure()
-            plt.imshow(paddedArray)
+            plt.imshow(paddedArray, cmap='bwr')
             plt.title('Padded array')
-
+            plt.colorbar()
         return x
+
+
+    def get_hanning(self, k_matrix, HanningWavelength, short_wavelength_cutoff = None, long_wavelength_cutoff = None, plot: bool = False) -> torch.Tensor:
+        """
+        Pads using numpy. Converts the torch tensor to a numpy array, performs the padding, and then converts back.
+
+        Args:
+            x (torch.Tensor):      input tensor
+
+        Returns:
+            torch.Tensor:          padded tensor
+
+        """
+        han2d = 0.5*(1 + np.cos(k_matrix * HanningWavelength/2 ))
+        filter = han2d
+        # apply frequency cutoffs
+        if short_wavelength_cutoff:
+            print(f"Applied a high frequency filter, removing all components smaller than {short_wavelength_cutoff} um")
+            high_freq_cutoff = 2* np.pi / short_wavelength_cutoff
+            filter[(k_matrix > high_freq_cutoff)] = 0
+        if long_wavelength_cutoff:
+            print(f"Applied a high frequency filter, removing all components larger than {long_wavelength_cutoff} um")
+            low_freq_cutoff = 2* np.pi / long_wavelength_cutoff
+            filter[(k_matrix < low_freq_cutoff)] = 0
+        return filter
+
+    def apply_hanning(self, x: torch.Tensor, k_matrix, HanningWavelength, short_wavelength_cutoff = None, long_wavelength_cutoff = None, plot: bool = False) -> torch.Tensor:
+        """
+        Pads using numpy. Converts the torch tensor to a numpy array, performs the padding, and then converts back.
+
+        Args:
+            x (torch.Tensor):      input tensor
+
+        Returns:
+            torch.Tensor:          padded tensor
+
+        """
+
+        img_filter = self.get_hanning(k_matrix, HanningWavelength, short_wavelength_cutoff = short_wavelength_cutoff, long_wavelength_cutoff = long_wavelength_cutoff , plot=plot)
+        x_filtered = x * img_filter
+
+        if plot:
+            fig = plt.figure()
+            fig.set_figheight(10)
+
+            plt.subplot(5,1,1)
+            plt.imshow(torch.rot90(img_filter.real), cmap='bwr')
+            plt.title('Filter')
+            plt.colorbar()
+
+            plt.subplot(5,1,2)
+            plt.imshow(torch.rot90(x.real), cmap='bwr')
+            plt.title('array real component')
+            plt.colorbar()
+
+            plt.subplot(5,1,3)
+            plt.imshow(torch.rot90(x_filtered.real), cmap='bwr')
+            plt.title('Filtered array real component')
+            plt.colorbar()
+
+            plt.subplot(5,1,4)
+            plt.imshow(torch.rot90(x.imag), cmap='bwr')
+            plt.title('array imaginary component')
+            plt.colorbar()
+
+            plt.subplot(5,1,5)
+            plt.imshow(torch.rot90(x_filtered.imag), cmap='bwr')
+            plt.title('Filtered array imaginary component')
+            plt.colorbar()
+
+        return x_filtered
+
+
+class AxisProjectionPropagator(object):
+
+    def __init__(self, theta, phi):
+        self.n = SphericalUnitVectorKernel.define_unit_vector(theta, phi)
+
+    def project(self, x):
+        return torch.einsum('...cij,c->...ij', x, self.n.type(x.type()))
