@@ -19,8 +19,7 @@ class DataFiltering(object):
         """
         self.data = data
         self.data_filtered = data
-        self.ft = FourierTransform2d(grid_shape=data.shape(), dx=dx, dy=dy, real_signal=True)
-
+        self.ft = FourierTransform2d(grid_shape=data.size(), dx=dx, dy=dy, real_signal=True)
 
     def remove_DC_background(self, data=None):
         if data is None:    

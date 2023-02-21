@@ -10,7 +10,6 @@ class GenericMethod(object):
         self.model = model
         self.data = data
 
-
     def prepare_fit(self):
         # Prepare the method for fitting.
         # In the case of a NN this is making the network.

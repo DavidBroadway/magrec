@@ -16,7 +16,7 @@ import numpy as np
 # Variotional estimator is used to calculate uncertainties on the reconstructed parameters. So far we do not do this.
 # @variational_estimator
 class GeneratorCNN(nn.Module):
-    r"""
+    """
     Architecture for 2d → 2d image reconstruction, which learns to reconstruct 2d image from another 2d image.
     """
 
