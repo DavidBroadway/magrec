@@ -1,13 +1,13 @@
-#  Magnetisation_reconstruction
+#  Magnetic field reconstruction
 
-Magnetization reconstruction is a package allowing the reconstruction of the source quantity from the measured magnetic field. 
+Magrec is a package for the reconstruction of the source quantity from the measured magnetic field. 
 The source quantity can be the magnetisation or the current density in 2 dimensions.
-The reconstruction of current density in 3D is in progress.
 The task is completed by a untrained physics informed neural networks that learn on the fly on each new single image.
 
 
 ### Table of Contents
 * [0. Structure](#0-Structure)
+  * [0.1 Programming conventions]
 * [1. Installation and Requirements](#1-Installation and Requirements)
   * [1.1. Required Libraries](#11-Required Libraries)
   * [1.2. Installation](#12-installation)
@@ -30,19 +30,44 @@ The task is completed by a untrained physics informed neural networks that learn
 
 ```
 magrec
-├── prop  # propagation modules to transform between fields and sources
-│  ├── Fourier.py
-│  ├── Kernel.py
-│  ├── Propagator.py  # contains forward propagation 
-│  ├── utils.py
-│  └── constants.py   # module-wide physical constants in appropriate units
-├── nn  # neural network related modules
-│  ├── arch.py
-│  └── utils.py
-├── misc  # helper functions
-│  ├── load.py  # loading data for analysis
-│  ├── plot.py  # plotting relevant bits of data
-│  └── plotly_plot.py  # interactive plotting functions
+
+├── database # data that can be used for testing the code
+|	├── experimental # Data from actually measurements
+|		├──  Magnetisation in plane
+|		├──  Magnetisation out of plane
+|		└──  NbWire # measurement of current density
+|	├── Simulations # Data from simulations of magnetic fields
+|
+├── data  # functions for handling the data
+│  	├── Data.py  # class for data
+│  		├── load  # loading data for analysis
+│  		├── plot  # plotting relevant bits of data
+│  		└── plotly_plot  # interactive plotting functions
+|
+├── models # module for different models of transforming a source to a magnetic field
+|	├── GenericModel.py # generic class that is inhereted by other models
+|	├── Magnetisation2B.py
+|	└── Current2B.py
+|
+├── image_processing  # functions and classes for processing images
+│  	├── Pad
+│  	├── Filter
+│  	├── denoise
+│  	├── extend
+|	
+├── Transform  # propagation modules to transform between fields and sources
+│  	├── Fourier.py
+│  	├── Kernel.py
+│  	├── Propagator.py  # contains forward propagation 
+│ 	├── utils.py
+│  	└── constants.py   # module-wide physical constants in appropriate units
+|
+├── method  # fitting method
+|	├── OptimisationArch.py
+|	├── OptimisationUtils.py
+│  	├── NNarch.py
+│  	└── NNutils.py
+|
 ├── notebooks  # notebooks to test modules, training, and reconstuction
 │  ├── Experiment
 │  ├── Test Current Density Reconstruction
@@ -53,13 +78,23 @@ magrec
 
 ```
 
+### 0.1. Programming conventions
+
+Classes are defined in CamelCase
+functions are defined using snake_case
+
+
 ## 1.Installation and Requirements
 
 ### 1.1. Installation
 
 The software cloned with:
 ```
-git@gitlab.com:qnami-labq/magnetisation_reconstruction.git
+git@github.com:DavidBroadway/magrec.git
+```
+or 
+```
+https://github.com/DavidBroadway/magrec.git
 ```
 
 ### 1.1. Required libraries
@@ -96,7 +131,7 @@ source FOLDER_FOR_ENVS/ve_tf_dmtf/bin/activate       # If using csh, source ve_t
 
 ### 1.3. GPU processing
 
-As the network learn a single image, it can be run on the cpu without any problem.
+As the network learns on a single image, it can be run on the cpu without any problem.
 
 ##  2. Usage
 
@@ -204,11 +239,15 @@ the training can be controlled with the following options :
 
 #### 3.1. Citation
 If you are publishing scientific results, mentioning this package in your methods description is the least you can do as good scientific practice. 
+
 You should cite our paper : 
+Dubois, A. E. E., Broadway, D. A., Stark, A., Tschudin, M. A., Healey, A. J., Huber, S. D., Tetienne, J.-P., Greplova, E., & Maletinsky, P. (2022). Untrained Physically Informed Neural Network for Image Reconstruction of Magnetic Field Sources. Physical Review Applied, 18(6), 064076. <https://doi.org/10.1103/PhysRevApplied.18.064076>
 
 ### 3.2. Documentation
 
-Improved Current Density and Magnetization Reconstruction Through Vector Magnetic Field Measurements
+Improved Current Density and Magnetization Reconstruction Through Vector Magnetic Field Measurements.
+
+Untrained Physically Informed Neural Network for Image Reconstruction of Magnetic Field Sources.
 
 ### 3.3 Collaboration
 
@@ -240,12 +279,15 @@ SOFTWARE.
 
 ### 3.5. Contributors
 
-Adrien Dubois (adr.dubois@gmail.com)
+Adrien E. E. Dubois (adr.dubois@gmail.com)
+Mykhailo Flaks (mykhailo.flaks@unibas.ch)
+David A. Broadway (davidaaron.broadway@unibas.ch)
 
-David Broadway (davidaaron.broadway@unibas.ch)
 
+[1] Broadway, D. A., Lillie, S. E., Scholten, S. C., Rohner, D., Dontschuk, N., Maletinsky, P., Tetienne, J.-P., & Hollenberg, L. C. L. (2020). Improved Current Density and Magnetization Reconstruction Through Vector Magnetic Field Measurements. Physical Review Applied, 14(2), 024076. <https://doi.org/10.1103/PhysRevApplied.14.024076>
 
-[1] **David Aaron Broadway**, Lillie S.E., Scholten S.C.e, Rohner D.,  D. , Dontschuk N. , Maletinsky P. , Tetienne J.-P. , Hollenberg, L.C.L. “[Improved Current Density and Magnetization Reconstruction Through Vector Magnetic Field Measurements][paper1]”, *American Physical Society, 2020*.
+[2] Dubois, A. E. E., Broadway, D. A., Stark, A., Tschudin, M. A., Healey, A. J., Huber, S. D., Tetienne, J.-P., Greplova, E., & Maletinsky, P. (2022). Untrained Physically Informed Neural Network for Image Reconstruction of Magnetic Field Sources. Physical Review Applied, 18(6), 064076. <https://doi.org/10.1103/PhysRevApplied.18.064076>
+
 
 
 [//]: # (reference links)
