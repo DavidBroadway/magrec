@@ -3,6 +3,7 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 from magrec.prop.Filtering import DataFiltering
 from magrec.prop.Padding import Padder
 
@@ -12,10 +13,16 @@ class Data(object):
 
     def __init__(self):
         """ Initialise the data class. """
-        self.actions = []
-        self.Padder = Padder()
+        self.actions = pd.DataFrame(
+            columns=[
+                "action type", 
+                "reverseable",
+                "reverse action", 
+                "description", 
+                "parameters"])
+        self.actions["reverseable"] = self.actions["reverseable"].astype(bool)
 
-    def load_data(self, image):
+    def load_data(self, image, dx, dy, height, theta, phi, layer_thickness):
         """ Load the data. """
 
         # Convert the data to a torch tensor.
@@ -23,10 +30,31 @@ class Data(object):
             image = torch.from_numpy(image)
         elif type(image) == list:
             image = torch.from_numpy(np.array(image))
+        
+        # Define the parameters of the data.
+        self.define_pixel_size(dx, dy)
+        self.define_height(height)
+        self.define_sensor_angles(theta, phi)
+        self.define_layer_thickness(layer_thickness)
 
+        # Define the data as the target of the reconstruction.
         self.target = image
-        self.data_modifications = dict()
-        self.data_modifications["0"] = image
+
+        # Define the data objects for tracking the actions on the data.
+        self.data_modifications = tuple()
+        self.reverse_parameters = tuple()
+        action = pd.DataFrame({
+            'action type': "load_data",
+            'reverseable': False,
+            'reverse action': None,
+            'description': "loaded the data",
+            'parameters': None
+        }, index=[0])
+        self.track_actions(action)
+
+        # load classes
+        self.load_filter_Class()
+        self.Padder = Padder()
 
     def define_pixel_size(self, dx, dy):
         self.dx = dx
@@ -44,27 +72,59 @@ class Data(object):
 
 
     # ------------------------- Data Modification Functions ------------------------- #
-    
+    def load_filter_Class(self):
+        """ Load the data filtering class. """
+        self.Filtering = DataFiltering(self.target, self.dx, self.dy)
+
     def add_hanning_filter(self, wavelength):
-        Filtering = DataFiltering(self.target, self.dx, self.dy)
-        self.target = Filtering.apply_hanning_filter(wavelength, data=self.target, plot_results=False)
-        self.track_actions('hanning_filter')
+        """ Add a hanning filter to the data. """
+        self.target = self.Filtering.apply_hanning_filter(wavelength, data=self.target, plot_results=False)
+        # Track the action on the dataset
+        self.filter_action(
+            'hanning_filter', 
+            f"Applied a low frequency filter, removing all components larger than {wavelength} um", 
+            f"wavelength = {wavelength}")
+
 
     def remove_DC_background(self):
-        Filtering = DataFiltering(self.target, self.dx, self.dy)
-        self.target = Filtering.remove_DC_background(data=self.target)
-        self.track_actions('remove_DC_background')
+        """ Remove the DC background from the data. """
+        self.target = self.Filtering.remove_DC_background(data=self.target)
+        # Track the action on the dataset
+        self.filter_action(
+            'remove_DC_background',
+            "Removed the DC background from the data",
+            None)
+
 
     def add_short_wavelength_filter(self, wavelength):
-        Filtering = DataFiltering(self.target, self.dx, self.dy)
-        self.target = Filtering.apply_short_wavelength_filter(wavelength, data=self.target, plot_results=False)
-        self.track_actions('short_wavelength_filter')
-    
-    def add_long_wavelength_filter(self, wavelength):
-        Filtering = DataFiltering(self.target, self.dx, self.dy)
-        self.target = Filtering.apply_long_wavelength_filter(wavelength, data=self.target, plot_results=False)
-        self.track_actions('long_wavelength_filter')
+        """ Add a short wavelength filter to the data. """
+        self.target = self.Filtering.apply_short_wavelength_filter(wavelength, data=self.target, plot_results=False)
+        # Track the action on the dataset
+        self.filter_action(
+            'short_wavelength_filter',
+            f"Applied a high frequency filter, removing all components smaller than {wavelength} um",
+            f"wavelength = {wavelength}")
 
+    def add_long_wavelength_filter(self, wavelength):
+        """ Add a long wavelength filter to the data. """
+        self.target = self.Filtering.apply_long_wavelength_filter(wavelength, data=self.target, plot_results=False)
+        # Track the action on the dataset
+        self.filter_action(
+            'long_wavelength_filter',
+            f"Applied a low frequency filter, removing all components larger than {wavelength} um",
+            f"wavelength = {wavelength}")
+
+    def filter_action(self, action, description, parameters):
+        """ Defines the dictionary of the filter action and tracks the action. """
+        action = pd.DataFrame({
+            'action type': action,
+            'reverseable': False,
+            'reverse action': None,
+            'description': description,
+            'parameters': parameters
+        }, index=[0])
+        self.track_actions(action)
+        return
 
     # ------------------------- Data Padding Functions ------------------------- #
 
@@ -73,29 +133,57 @@ class Data(object):
         self.target = self.Padder.pad_data(padding)
         self.track_actions('pad_data')
     
-    def crop_data(self, padding):
+    def crop_data(self, roi):
         """ Crop the data by removing the padding. """
-        self.target = self.Padder.crop_data(padding)
-        self.track_actions('crop_data')
+        self.target = self.Padder.crop_data(self.target, roi)
+
+        roi_string = ''.join(str(x) + ',' for x in roi)
+
+        self.crop_action(
+            'crop_data',
+            "crop the data with the given region of interest",
+            "roi = [" + roi_string  + "]"
+            )
 
     def pad_data_to_power_of_two(self):
         """ Pad the data to a power of two. """
-        self.target = self.Padder.pad_to_next_power_of_2(self.target)
-        self.track_actions('pad_data_to_power_of_two')
+        self.target, original_roi = self.Padder.pad_to_next_power_of_2(self.target)
+        self.pad_action(
+            'pad_data',
+            "Padded the data to a square image with dimension that are a power of two",
+            None,
+            original_roi)
 
-    def crop_data_to_power_of_two(self):
-        """ Crop the data to a power of two. """
-        self.target = self.Padder.crop_data_to_power_of_two()
-        self.track_actions('crop_data_to_power_of_two')
+    def pad_action(self, action, description, parameters, reverse_parameters):
+        """ Defines the dictionary of the filter action and tracks the action. """
+        action = pd.DataFrame({
+            'action type': action,
+            'reverseable': True,
+            'reverse action': 'crop_data',
+            'description': description,
+            'parameters': parameters
+        }, index=[0])
+        self.track_actions(action, reverse_parameters=reverse_parameters)
+        return
 
+    def crop_action(self, action, description, parameters):
+        """ Defines the dictionary of the filter action and tracks the action. """
+        action = pd.DataFrame({
+            'action type': action,
+            'reverseable': False,
+            'reverse action': 'crop_data',
+            'description': description,
+            'parameters': parameters
+        }, index=[0])
+        self.track_actions(action)
+        return
 
     # ------------------------- Data Modification Tracking Functions ------------------------- #
-    def track_actions(self, action):
+    def track_actions(self, action, reverse_parameters=None):
         """ Track the actions performed on the data. """
-        self.actions.append(action)
-        action_num = len(self.actions)
-        self.data_modifications[str(action_num)] = self.target
-
+        self.actions = pd.concat([self.actions, action], ignore_index=True)
+        self.data_modifications = self.data_modifications + (self.target,)
+        self.reverse_parameters = self.reverse_parameters + (reverse_parameters,)
 
     # ------------------------- Data Plotting Functions ------------------------- #
 
@@ -105,12 +193,12 @@ class Data(object):
         # REPLACE THIS WITH THE ALREADY EXISTING PLOT FUNCTION IN MISC
 
         range = torch.max(torch.abs(self.target*1e3))
-        size = self.target.size()
-        x = torch.linspace(0, size[0]*self.dx, size[0])
-        y = torch.linspace(0, size[1]*self.dy, size[1])
-        extent = [0, size[0]*self.dx, 0, size[1]*self.dy]
+        # size = self.target.size()
+        # x = torch.linspace(0, size[0]*self.dx, size[0])
+        # y = torch.linspace(0, size[1]*self.dy, size[1])
+        # extent = [0, size[0]*self.dx, 0, size[1]*self.dy]
         plt.figure()
-        plt.imshow(self.target*1e3, extent=extent, cmap="bwr", vmin=-range, vmax=range)
+        plt.imshow(self.target*1e3, cmap="bwr", vmin=-range, vmax=range)
         cb = plt.colorbar()
         plt.xlabel("x (um)")
         plt.ylabel("y (um)")

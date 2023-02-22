@@ -1,8 +1,5 @@
-
-
 import torch
 import numpy as np
-
 
 class GenericModel(object):
     # Super class that other models can be based off.
@@ -46,8 +43,6 @@ class GenericModel(object):
 
     def next_power_of_two(self, x: int) -> int:
         return 1 if x == 0 else 2**(x - 1).bit_length()
-
-
 
 
 class UniformDirectionMagnetisation(GenericModel):

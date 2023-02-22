@@ -18,15 +18,30 @@ class Padder(object):
     error when using the representation of the field components connection in the Fourier domain.
     """
 
-
+    def crop_data(self, x, ROI):
+        """
+        Crops the data to the region of interest (ROI).
+        """
+        x = x.numpy()
+        x = x[ROI[0]:ROI[1], ROI[2]:ROI[3]]
+        return torch.from_numpy(x)
 
     def pad_to_next_power_of_2(self, x):
+        """
+        Pads the input with zeros to the next power of 2 such that the array is 
+        now square.
+        """
         x = x.numpy()
         rows, cols = x.shape
+        original_roi = [0, rows, 0, cols]
+        # find the next power of 2
         new_rows = self.next_power_of_two(rows)
         new_cols = self.next_power_of_two(cols)
-        padded_x = np.pad(x, [(0, new_rows - rows), (0, new_cols - cols)], mode='constant')
-        return torch.from_numpy(padded_x)
+        new_size = max(new_rows, new_cols)
+        # pad the array with zeros
+        padded_x = np.pad(x, ((0,new_size - rows),(0,new_size - cols)), mode='constant')
+    
+        return torch.from_numpy(padded_x), original_roi
 
     def next_power_of_two(self, x: int) -> int:
         return 1 if x == 0 else 2**(x - 1).bit_length()

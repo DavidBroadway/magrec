@@ -95,13 +95,14 @@ class CNN(object):
             if epoch_n % print_every_n == 0 or epoch_n == 0:
                 print(f'epoch {epoch_n + 1:5d} | loss on last mini-batch: {self.track_loss[-1]: .2e}')
 
+        self.final_output = outputs
         # Return the loss and accuracy
         return self.track_loss
 
 
     def extract_results(self):
         # Extract the results from the model and return them.
-        return self.model.unpack_results()
+        self.results = self.model.unpack_results(self.final_output)
 
     def plot_results(self):
         # Plot the results from the model.
