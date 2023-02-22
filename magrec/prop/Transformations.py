@@ -76,13 +76,21 @@ class MagneticField2Magnetisation(object):
         self.s_theta = np.deg2rad(dataset.sensor_theta)
         self.s_phi = np.deg2rad(dataset.sensor_phi)
 
+        self.mag_dir = torch.tensor([ \
+            np.cos(self.m_phi)*np.sin( self.m_theta ), \
+            np.sin(self.m_phi)*np.sin( self.m_theta ), \
+            np.cos(self.m_theta)], dtype=torch.complex64)
+
+        self.sensor_dir = torch.tensor([ \
+            np.cos(self.s_phi)*np.sin(self.s_theta), \
+            np.sin(self.s_phi)*np.sin(self.s_theta), \
+            np.cos(self.s_theta)], dtype=torch.complex64)
 
         self.dataset = dataset
 
         self.m_to_b_matrix = MagnetizationFourierKernel2d\
             .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, dataset.height, dataset.layer_thickness)
-
-        pass
+        
 
     def get_m_from_b(self, b):
         # Calculate the matrix product M @ j for each k_x, k_y, z
@@ -94,21 +102,11 @@ class MagneticField2Magnetisation(object):
 
         #b = torch.tensor(b, dtype=torch.complex64)
 
-        magnetisation_dir = torch.tensor([ \
-            np.cos(self.m_phi)*np.sin( self.m_theta ), \
-            np.sin(self.m_phi)*np.sin( self.m_theta ), \
-            np.cos(self.m_theta)], dtype=torch.complex64)
-
         # sum over the magnetisation direction
-        m_to_b_matrix = torch.einsum("ijkl,i->jkl", self.m_to_b_matrix, magnetisation_dir)
-
-        sensor_dir = torch.tensor([ \
-            np.cos(self.s_phi)*np.sin(self.s_theta), \
-            np.sin(self.s_phi)*np.sin(self.s_theta), \
-            np.cos(self.s_theta)], dtype=torch.complex64)
+        m_to_b_matrix = torch.einsum("ijkl,i->jkl", self.m_to_b_matrix, self.mag_dir)
 
         # sum over the sensor direction
-        m_to_b_matrix = torch.einsum("jkl,j->kl", m_to_b_matrix, sensor_dir)
+        m_to_b_matrix = torch.einsum("jkl,j->kl", m_to_b_matrix, self.sensor_dir)
 
         # Define the finally transformation
         b_to_m_matrix =  1/ m_to_b_matrix
@@ -134,4 +132,57 @@ class MagneticField2Magnetisation(object):
         # convert from A/M to uB/nm^2
         unit_conversion = 1e-18 / 9.27e-24
         return M * unit_conversion
+
+
+
+class Magnetisation2MagneticField(object):
+
+    def __init__(self, dataset, m_theta = 0, m_phi = 0):
+        """
+        Create a propagator for a 2d magnetization distribution that computes the magnetic field at `height` above
+        the 2d magnetization layer of finite thickness `layer_thickness`, that has potentially 3 components of the magnetization.
+
+        Assumes uniform magnetization across the layers thickness and uses the integration factor to account for the finite thickness.
+
+        Args:
+            source_shape:       shape of the magnetization distribution, shape (3, n_x, n_y)
+            dx:                 pixel size in the x direction, in [mm]
+            dy:                 pixel size in the y direction, in [mm]
+            height:             height above the magnetization layer at which to evaluate the magnetic field, in [mm]
+            layer_thickness:    thickness of the magnetization layer, in [mm]
+        """
+        self.ft = FourierTransform2d(grid_shape=dataset.target.size(), dx=dataset.dx, dy=dataset.dy, real_signal=True)
+        self.m_theta = np.deg2rad(m_theta)
+        self.m_phi = np.deg2rad(m_phi)
+        self.s_theta = np.deg2rad(dataset.sensor_theta)
+        self.s_phi = np.deg2rad(dataset.sensor_phi)
+
+        self.mag_dir = torch.tensor([ \
+            np.cos(self.m_phi)*np.sin( self.m_theta ), \
+            np.sin(self.m_phi)*np.sin( self.m_theta ), \
+            np.cos(self.m_theta)], dtype=torch.complex64)
+
+        self.sensor_dir = torch.tensor([ \
+            np.cos(self.s_phi)*np.sin(self.s_theta), \
+            np.sin(self.s_phi)*np.sin(self.s_theta), \
+            np.cos(self.s_theta)], dtype=torch.complex64)
+
+        self.dataset = dataset
+
+        m_to_b_matrix = MagnetizationFourierKernel2d\
+            .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, dataset.height, dataset.layer_thickness)
+        
+        m_to_b_matrix = torch.einsum("ijkl,i->jkl", m_to_b_matrix, self.mag_dir)
+        
+        # sum over the sensor direction
+        self.m_to_b_matrix = torch.einsum("jkl,j->kl", m_to_b_matrix, self.sensor_dir)   
+
+    def transform(self, M):
+        m = self.ft.forward(M, dim=(-2, -1))
+        b =  m * self.m_to_b_matrix
+        B = self.ft.backward(b, dim=(-2, -1))
+
+        # convert from A/M to uB/nm^2
+        unit_conversion = 1e-18 / 9.27e-24
+        return B /unit_conversion
 

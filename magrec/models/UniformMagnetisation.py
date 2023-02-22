@@ -4,16 +4,15 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
-import magrec.models.generic_model as GenericModel
-from magrec.prop.Propagator import MagnetizationPropagator2d as Propagator
-
+from magrec.models.generic_model import GenericModel
+from magrec.prop.Transformations import Magnetisation2MagneticField as M2B
 
 class UniformMagnetisation(GenericModel):
-    def __init__(self, data, loss_type):
+    def __init__(self, data, loss_type,  m_theta, m_phi,):
         super().__init__(data, loss_type)
 
         # Define the propagator so that this isn't performed during a loop.
-        self.define_propagtor()
+        self.magClass = M2B(data, m_theta = 0, m_phi = 0)
 
         self.requirements()
 
@@ -28,24 +27,8 @@ class UniformMagnetisation(GenericModel):
         self.require["num_targets"] = 1
         self.require["num_sources"] = 1
         
-    def transform(self):
-        self.transform = Propagator(
-            self.data.shape, 
-            self.dx, 
-            self.dy, 
-            self.height, 
-            self.layer_thickness)
-
     def transform(self, nn_output):
-        """
-        Args:
-            nn_output:  The output of the neural network which is a be a 2D array of
-                        magnetisation along a single direction
-
-        Returns:
-            magnetic_field: The magnetic field produced from the output of the network
-        """
-        return self.transform.m2b(nn_output)
+        return self.magClass(nn_output)
 
     def calculate_loss(self, nn_output, target):
         """

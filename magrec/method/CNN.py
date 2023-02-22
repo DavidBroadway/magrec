@@ -3,6 +3,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
+from torch.utils.data import TensorDataset, DataLoader
 
 class CNN(object):
 
@@ -10,20 +12,18 @@ class CNN(object):
         self.model = model
         self.data = data
 
-
     def prepare_fit(self, n_channels_in=1, n_channels_out=1, size=2, kernel=5, stride=2, padding=2):
         # Prepare the method for fitting.
        
-
         # Check the size of the data and pad it if necessary.
 
         # check model requirements
         self.model.requirements()
-        if "num_sources" in self.require:
-            n_channels_out = self.require["num_sources"]
+        if "num_sources" in self.model.require:
+            n_channels_out = self.model.require["num_sources"]
             print("Number of sources: {}".format(n_channels_out))
-        if "num_targets" in self.require:
-            n_channels_in = self.require["num_targets"]
+        if "num_targets" in self.model.require:
+            n_channels_in = self.model.require["num_targets"]
             print("Number of targets: {}".format(n_channels_out))
 
         # define the device
@@ -31,13 +31,23 @@ class CNN(object):
         # Define the network.
         self.Network = self.Arch(n_channels_in=n_channels_in, 
             n_channels_out=n_channels_out, 
-            size=size, 
+            ImageSize = self.data.target.size()[0], 
             kernel=kernel, 
             stride=stride, 
             padding=padding).to(self.device)
+        
+        # Define the data for loading into the network.
+
+        self.mask = np.where(self.data.target.numpy() == 0,0,1)  
+        self.mask = torch.from_numpy(self.mask)
+        train_data_cnn = TensorDataset(self.data.target, self.mask)
+        self.train_loader = DataLoader(train_data_cnn)
+
+        # Define the optimizer
+        self.optimizer = torch.optim.Adam(self.Network.parameters())
 
 
-    def fit(self, net, train_set: torch.utils.data.TensorDataset, optimizer: torch.optim.Optimizer, n_epochs=25, batch_size=100, print_every_n=1):    
+    def fit(self, n_epochs=25, print_every_n=10):    
         """
         Run gradient descent on the network to optimize the weights and biases.
 
@@ -56,29 +66,27 @@ class CNN(object):
         """
 
         # Create a train_loader to load the training data in batches
-        train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
         self.track_loss = []
 
-        net.train()
+        self.Network.train()
 
         # Iterate for each epoch
         for epoch_n in range(n_epochs):
             # Note that the training data is shuffled every epoch by the DataLoader
 
             # Iterate for each batch
-            for batch in train_loader:
+            for batch in self.train_loader:
                 # Get the batch data and labels
-                inputs, labels = batch
-
+                inputs = batch
                 # zero the parameter gradients
                 # As described here: https://pytorch.org/tutorials/recipes/recipes/zeroing_out_gradients.html
-                optimizer.zero_grad()
+                self.optimizer.zero_grad()
 
                 # Forward pass
                 # Calling .forward(inputs) skips any PyTorch hooks before the call, and should avoided:
                 # Source: https://pytorch.org/docs/stable/_modules/torch/nn/modules/module.html#Module
                 # See also: https://stackoverflow.com/questions/55338756/why-there-are-different-output-between-model-forwardinput-and-modelinput
-                outputs = net(inputs)
+                outputs = self.Network.forward(inputs)
 
                 # Compute the loss
                 loss = self.model.calculate_loss(outputs, self.data.target)
@@ -87,7 +95,7 @@ class CNN(object):
                 loss.backward()
 
                 # Update the weights and biases
-                optimizer.step()
+                self.optimizer.step()
 
                 # Keep track of loss at each iteration
                 self.track_loss.append(loss.item())
@@ -119,8 +127,8 @@ class CNN(object):
         """
         Architecture for 2d → 2d image reconstruction, which learns to reconstruct 2d image from another 2d image.
         """
-
-        def __init__(self, n_channels_in=3, n_channels_out=3, size=2, kernel=5, stride=2, padding=2):
+        def __init__(self, Size=1, ImageSize=256, kernel = 5, stride = 2, padding = 2, n_channels_in = 1, n_channels_out=1):
+ 
             """
             Create the net that takes an image of currents of size (3, W, H) and creates another image (3, W, H).
             3 corresponds to the number of channels in the input image. W and H must be multiples of 2^4 = 16, because the
@@ -138,33 +146,62 @@ class CNN(object):
             """
             super().__init__()
 
-            M = size
+            M=Size
+        
+            if ImageSize == 512:
+                ConvolutionSize = 32
+            elif ImageSize == 256:
+                ConvolutionSize = 16
+            else: # size is 128
+                ConvolutionSize = 8
+            # first index is the number of channels
+            self.convi = nn.Conv2d(n_channels_in, 8*M, kernel, 1, padding)
+            self.conv_r0 = nn.Conv2d(1, 8*M, kernel, 1, padding)
+            self.conv1 = nn.Conv2d(8*M, 8*M, kernel, stride, padding)
+            self.bn1  = nn.BatchNorm2d(8*M)
+            self.conv2 = nn.Conv2d(8*M, 16*M, kernel, stride, padding)
+            self.bn2  = nn.BatchNorm2d(16*M)
+            self.conv3 = nn.Conv2d(16*M, 32*M, kernel, stride, padding)
+            self.bn3  = nn.BatchNorm2d(32*M)
+            self.conv4 = nn.Conv2d(32*M, 64*M, kernel, stride, padding)
+            self.bn4  = nn.BatchNorm2d(64*M)
 
-            self.convi = nn.Conv2d(in_channels=n_channels_in, out_channels=8 * M, kernel_size=kernel, stride=1, padding=padding)
-            # This was in the original architecture given by Adrien, but it is not used anywhere AFAIS
-            # self.conv_r0 = nn.Conv2d(3, 8 * M, kernel, 1, padding)
-            self.conv1 = nn.Conv2d(8 * M, 8 * M, kernel, stride, padding)
-            self.bn1 = nn.BatchNorm2d(8 * M)
-            self.conv2 = nn.Conv2d(8 * M, 16 * M, kernel, stride, padding)
-            self.bn2 = nn.BatchNorm2d(16 * M)
-            self.conv3 = nn.Conv2d(16 * M, 32 * M, kernel, stride, padding)
-            self.bn3 = nn.BatchNorm2d(32 * M)
-            self.conv4 = nn.Conv2d(32 * M, 64 * M, kernel, stride, padding)
-            self.bn4 = nn.BatchNorm2d(64 * M)
+            self.conv5 = nn.Conv2d(64*M, 128*M, 5, 1, 2)
+            self.bn5  = nn.BatchNorm2d(128*M)
 
-            self.conv5 = nn.Conv2d(64 * M, 128 * M, 5, 1, 2)
-            self.bn5 = nn.BatchNorm2d(128 * M)
-
-            self.trans1 = nn.ConvTranspose2d(128 * M, 64 * M, kernel, stride, padding, 1)
-            self.bn4t = nn.BatchNorm2d(64 * M)
-            self.trans2 = nn.ConvTranspose2d(64 * M + 32 * M, 32 * M, kernel, stride, padding, 1)
-            self.bn3t = nn.BatchNorm2d(32 * M)
-            self.trans3 = nn.ConvTranspose2d(32 * M + 16 * M, 16 * M, kernel, stride, padding, 1)
-            self.bn2t = nn.BatchNorm2d(16 * M)
-            self.trans4 = nn.ConvTranspose2d(16 * M + 8 * M, 8 * M, kernel, stride, padding, 1)
-            self.bn1t = nn.BatchNorm2d(8 * M)
-            self.conv6 = nn.Conv2d(8 * M, n_channels_out, 5, 1, 2)
+            self.trans1 = nn.ConvTranspose2d(128*M, 64*M, kernel, stride, padding,1)
+            self.trans2 = nn.ConvTranspose2d(64*M+32*M, 32*M, kernel, stride, padding,1)
+            self.trans3 = nn.ConvTranspose2d(32*M+16*M, 16*M, kernel, stride, padding,1)
+            self.trans4 = nn.ConvTranspose2d(16*M+8*M, 8*M, kernel, stride, padding,1)
+            self.conv6 = nn.Conv2d(8*M, n_channels_out, kernel, 1, padding)
             self.conv7 = nn.Conv2d(n_channels_out, n_channels_out, kernel, 1, padding)
+            # self.conv6 = nn.Conv2d(8*M, 2, 5, 1, 2)
+            # self.conv7 = nn.Conv2d(2, 1, kernel, 1, padding)
+            # add the 2 at the first index for 2 outputs. 
+
+            self.fc11 = nn.Linear(64*M * ConvolutionSize*ConvolutionSize, 120)
+            self.fc12 = nn.Linear(120, 84)
+            self.fc13 = nn.Linear(84, 1)
+
+            self.fc21 = nn.Linear(64*M * ConvolutionSize*ConvolutionSize, 120)
+            self.fc22 = nn.Linear(120, 84)
+            self.fc23 = nn.Linear(84, 1)
+
+            self.fc31 = nn.Linear(64*M * ConvolutionSize*ConvolutionSize, 120)
+            self.fc32 = nn.Linear(120, 84)
+            self.fc33 = nn.Linear(84, 1)
+
+            self.fc41 = nn.Linear(64*M * ConvolutionSize*ConvolutionSize, 120)
+            self.fc42 = nn.Linear(120, 84)
+            self.fc43 = nn.Linear(84, 1)
+
+            self.fc51 = nn.Linear(64*M * ConvolutionSize*ConvolutionSize, 120)
+            self.fc52 = nn.Linear(120, 84)
+            self.fc53 = nn.Linear(84, 1)
+
+            self.transfc1 = nn.Linear(64*M * ConvolutionSize*ConvolutionSize, 120)
+            self.transfc2 = nn.Linear(120, 256)
+            self.transfc3 = nn.Linear(256, 65536)
 
         def forward(self, input):
 
