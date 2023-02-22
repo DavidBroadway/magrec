@@ -4,6 +4,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+from magrec.prop.Fourier import FourierTransform2d
 from magrec.prop.Filtering import DataFiltering
 from magrec.prop.Padding import Padder
 
@@ -55,6 +56,8 @@ class Data(object):
         # load classes
         self.load_filter_Class()
         self.Padder = Padder()
+        self.Ft = FourierTransform2d(self.target.shape, dx=self.dx, dy=self.dy)
+
 
     def define_pixel_size(self, dx, dy):
         self.dx = dx
@@ -178,12 +181,27 @@ class Data(object):
         self.track_actions(action)
         return
 
+
+    # ------------------------- Data Transformation Functions ------------------------- #
+
+    def set_transformer(self, transform_class, **kwargs):
+        """ Set the transformation class. """
+        self.Transformer = transform_class(self, **kwargs)
+
+    def transform_data(self):
+        """ Transform the data. """
+        self.transformed_target = self.Transformer.transform()
+
+
     # ------------------------- Data Modification Tracking Functions ------------------------- #
     def track_actions(self, action, reverse_parameters=None):
         """ Track the actions performed on the data. """
         self.actions = pd.concat([self.actions, action], ignore_index=True)
         self.data_modifications = self.data_modifications + (self.target,)
         self.reverse_parameters = self.reverse_parameters + (reverse_parameters,)
+
+
+
 
     # ------------------------- Data Plotting Functions ------------------------- #
 
