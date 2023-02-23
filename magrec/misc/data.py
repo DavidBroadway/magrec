@@ -28,9 +28,9 @@ class Data(object):
 
         # Convert the data to a torch tensor.
         if type(image) == np.ndarray:
-            image = torch.from_numpy(image)
+            image = torch.from_numpy(image, dtype=torch.float32)
         elif type(image) == list:
-            image = torch.from_numpy(np.array(image))
+            image = torch.from_numpy(np.array(image, dtype=np.float32))
         
         # Define the parameters of the data.
         self.define_pixel_size(dx, dy)

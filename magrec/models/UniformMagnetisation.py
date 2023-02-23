@@ -28,7 +28,7 @@ class UniformMagnetisation(GenericModel):
         self.require["num_sources"] = 1
         
     def transform(self, nn_output):
-        return self.magClass(nn_output)
+        return self.magClass.transform(nn_output)
 
     def calculate_loss(self, nn_output, target):
         """
@@ -39,6 +39,7 @@ class UniformMagnetisation(GenericModel):
         Returns:
             loss: The loss function
         """
+
         b = self.transform(nn_output)
     
 
