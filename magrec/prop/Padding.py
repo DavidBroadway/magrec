@@ -47,7 +47,7 @@ class Padder(object):
         return 1 if x == 0 else 2**(x - 1).bit_length()
 
 
-    def pad_reflective2d(x: torch.Tensor) -> torch.Tensor:
+    def pad_reflective2d(self, x: torch.Tensor) -> torch.Tensor:
         """
         Pads the input with the reflection of the input along two dimensions.
 
@@ -69,8 +69,9 @@ class Padder(object):
         """
         # size along each dimension remains the same unless dimension is in dim, in which case it is doubled for padding
         replication = torch.nn.ReplicationPad1d((0, 1, 0, 1))  # to pad by 1 along x, y dimensions
-        height, width = x.shape[-2:]
-        reflection = torch.nn.ReflectionPad2d((0, width - 1, 0, height - 1))
+        height, width = x.size()
+        original_roi = [0, height, 0, width]
+        reflection = torch.nn.ReflectionPad2d((0, width  , 0, height ))
 
         if len(x.shape) == 2:
             x = x.unsqueeze(0)
@@ -80,7 +81,7 @@ class Padder(object):
             x = reflection(replication(x))
 
         # a nice bonus: now the tensor size is divisible by 2
-        return x
+        return x, original_roi
 
 
     def pad_zeros2d(x: torch.Tensor) -> torch.Tensor:
@@ -107,7 +108,7 @@ class Padder(object):
         # a nice bonus: now the tensor size is divisible by 2
         return x
 
-    def pad_2d(x: torch.Tensor, pad_width: int, mode: str, plot: bool = False) -> torch.Tensor:
+    def pad_2d(self, x: torch.Tensor, pad_width: int, mode: str, plot: bool = False) -> torch.Tensor:
         """
         Pads using numpy. Converts the torch tensor to a numpy array, performs the padding, and then converts back.
 
@@ -118,6 +119,7 @@ class Padder(object):
             torch.Tensor:          padded tensor
 
         """
+        print(x)
         npArray = x.numpy()
         paddedArray = np.pad(npArray, pad_width, mode=mode)
         x = torch.from_numpy(paddedArray)

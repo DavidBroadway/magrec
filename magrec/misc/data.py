@@ -7,6 +7,7 @@ import pandas as pd
 from magrec.prop.Fourier import FourierTransform2d
 from magrec.prop.Filtering import DataFiltering
 from magrec.prop.Padding import Padder
+from magrec.misc.plot import plot_n_components
 
 
 class Data(object):
@@ -28,10 +29,12 @@ class Data(object):
 
         # Convert the data to a torch tensor.
         if type(image) == np.ndarray:
-            image = torch.from_numpy(image, dtype=torch.float32)
+            image = torch.from_numpy(image.astype(np.float32))
         elif type(image) == list:
             image = torch.from_numpy(np.array(image, dtype=np.float32))
         
+
+
         # Define the parameters of the data.
         self.define_pixel_size(dx, dy)
         self.define_height(height)
@@ -157,6 +160,16 @@ class Data(object):
             None,
             original_roi)
 
+    def pad_reflective2d(self):
+        """ Pad the data with zeros. """
+        self.target, original_roi = self.Padder.pad_reflective2d(self.target)
+        self.pad_action(
+            'pad_data',
+            "Padded with reflective boundary conditions",
+            None,
+            original_roi)
+    
+
     def pad_action(self, action, description, parameters, reverse_parameters):
         """ Defines the dictionary of the filter action and tracks the action. """
         action = pd.DataFrame({
@@ -210,15 +223,28 @@ class Data(object):
         """ Plot the target image """
         # REPLACE THIS WITH THE ALREADY EXISTING PLOT FUNCTION IN MISC
 
-        range = torch.max(torch.abs(self.target*1e3))
-        # size = self.target.size()
-        # x = torch.linspace(0, size[0]*self.dx, size[0])
-        # y = torch.linspace(0, size[1]*self.dy, size[1])
-        # extent = [0, size[0]*self.dx, 0, size[1]*self.dy]
-        plt.figure()
-        plt.imshow(self.target*1e3, cmap="bwr", vmin=-range, vmax=range)
-        cb = plt.colorbar()
-        plt.xlabel("x (um)")
-        plt.ylabel("y (um)")
-        cb.set_label("Magnetic Field (mT)")
-        plt.show()
+
+        if len(self.target.size()) > 2:
+            range = torch.max(torch.abs(self.target*1e3))
+            size = self.target.size()
+            extent = [0, size[0]*self.dx, 0, size[1]*self.dy]
+            plt.figure()
+            plt.imshow(self.target*1e3, cmap="bwr", extent = extent, vmin=-range, vmax=range)
+            cb = plt.colorbar()
+            plt.xlabel("x (um)")
+            plt.ylabel("y (um)")
+            cb.set_label("Magnetic Field (mT)")
+            plt.show()
+
+        else:
+
+            range = torch.max(torch.abs(self.target*1e3))
+            size = self.target.size()
+            extent = [0, size[0]*self.dx, 0, size[1]*self.dy]
+            plt.figure()
+            plt.imshow(self.target*1e3, cmap="bwr", extent = extent, vmin=-range, vmax=range)
+            cb = plt.colorbar()
+            plt.xlabel("x (um)")
+            plt.ylabel("y (um)")
+            cb.set_label("Magnetic Field (mT)")
+            plt.show()

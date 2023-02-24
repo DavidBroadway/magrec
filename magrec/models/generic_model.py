@@ -8,13 +8,13 @@ import numpy as np
 class GenericModel(object):
     # Super class that other models can be based off.
 
-    def __init__(self, data, loss_type):
+    def __init__(self, dataset, loss_type):
         """
         Args:
             data:   class object that contains the data and the parameters of the data.
 
         """
-        self.data = data
+        self.dataset = dataset
         self.define_loss_function(loss_type)
         # Add addtional requirements of the model here.
         self.requirements()
@@ -81,30 +81,3 @@ class GenericModel(object):
             None
         """
         raise NotImplementedError("plot_results must be overridden in a child class.")
-
-
-
-class UniformDirectionMagnetisation(GenericModel):
-    def __init__(self, data, dx, dy, height, layer_thickness):
-        super().__init__(data)
-
-        # Define the propagator so that this isn't performed during a loop.
-        self.define_propagtor(data, dx, dy, height, layer_thickness)
-
-    def define_propagtor(self, data, dx, dy, height, layer_thickness):
-        from magrec.prop.Propagator import MagnetizationPropagator2d as Propagator
-        self.propagator = Propagator(data.shape, dx, dy, height, layer_thickness)
-
-
-
-    def model(self, nn_output):
-        """
-        Args:
-            nn_output:  The output of the neural network which is a be a 2D array of
-                        magnetisation along a single direction
-
-        Returns:
-            magnetic_field: The magnetic field produced from the output of the network
-        """
-        b = self.propagator.get_B(nn_output)
-        return b

@@ -12,9 +12,10 @@ from torch.utils.data import TensorDataset, DataLoader
 
 class CNN(object):
 
-    def __init__(self, model, data):
+    def __init__(self, model, dataset):
         self.model = model
-        self.data = data
+        self.dataset = dataset
+
 
     def prepare_fit(self, n_channels_in=1, n_channels_out=1, size=2, kernel=5, stride=2, padding=2):
         # Prepare the method for fitting.
@@ -28,7 +29,7 @@ class CNN(object):
             print("Number of sources: {}".format(n_channels_out))
         if "num_targets" in self.model.require:
             n_channels_in = self.model.require["num_targets"]
-            print("Number of targets: {}".format(n_channels_out))
+            print("Number of targets: {}".format(n_channels_in))
 
         # define the device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -36,19 +37,23 @@ class CNN(object):
         # Define the network.
         self.Net = Net(n_channels_in=n_channels_in, 
             n_channels_out=n_channels_out, 
-            ImageSize = self.data.target.size()[0], 
+            ImageSize = self.dataset.target.size()[-1], 
             kernel=kernel, 
             stride=stride, 
             padding=padding).to(self.device)
 
         # Define the data for loading into the network.
-        self.mask = np.where(self.data.target.numpy() == 0,0,1)  
+        self.mask = np.where(self.dataset.target.numpy() == 0,0,1)  
 
         # Normalise the data for the network.
-        target = self.data.target 
+        # nomalized_data = (self.data.target - self.data.target.mean()) / torch.sqrt(self.data.target.var())
 
         # Need to add two dimensions to the data to make it a batch
-        self.img_input = torch.FloatTensor(target[np.newaxis, np.newaxis])
+        # if n_channels_in > 1:
+        #     self.img_input = torch.FloatTensor(self.data.target[np.newaxis])
+        #     self.mask_t = torch.FloatTensor(self.mask[np.newaxis])
+        # else:
+        self.img_input = torch.FloatTensor(self.dataset.target[np.newaxis, np.newaxis])
         self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
         
 
@@ -59,7 +64,7 @@ class CNN(object):
         self.optimizer = optim.Adam(self.Net.parameters())
 
 
-    def fit(self, n_epochs=25, print_every_n=10):    
+    def fit(self, n_epochs=25, print_every_n=10, weight = None):    
         """
         Run gradient descent on the network to optimize the weights and biases.
 
@@ -103,13 +108,16 @@ class CNN(object):
                 # Calling .forward(inputs) skips any PyTorch hooks before the call, and should avoided:
                 # Source: https://pytorch.org/docs/stable/_modules/torch/nn/modules/module.html#Module
                 # See also: https://stackoverflow.com/questions/55338756/why-there-are-different-output-between-model-forwardinput-and-modelinput
-                outputs = self.Net.forward(data)
+                outputs = self.Net(data)
+
+                if weight is not None:
+                    outputs[0,0,:,:] = outputs[0,0,:,:]*weight
 
                 # Convert to magnetic field
                 b = self.model.transform(outputs)
 
                 # Compute the loss
-                loss = self.model.calculate_loss(outputs, self.img_input)
+                loss = self.model.calculate_loss(b, self.img_input)
 
                 # Backpropagate the loss
                 loss.backward()
@@ -124,10 +132,10 @@ class CNN(object):
                     print(f'epoch {epoch_n + 1:5d} | loss on last mini-batch: {self.track_loss[-1]: .2e}')
 
         self.final_output = outputs[0,0,:,:].detach().numpy() 
-        self.final_b = b[0,0,:,:].detach().numpy()
+        self.final_b = b[0,0,:,:].detach().numpy() 
 
         # Return the loss and accuracy
-        return outputs, self.track_loss
+        return 
 
 
     def extract_results(self):
@@ -152,7 +160,7 @@ class CNN(object):
     def save_results(self):
         # Save the results from the model.
         results = self.extract_results()
-        self.data.save_results(results)
+        self.dataset.save_results(results)
 
 
 # Subclass for the architecture of the NN
