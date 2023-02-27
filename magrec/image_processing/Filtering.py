@@ -6,7 +6,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 
-from magrec.prop.Fourier import FourierTransform2d
+from magrec.transformation.Fourier import FourierTransform2d
 
 class DataFiltering(object):
 

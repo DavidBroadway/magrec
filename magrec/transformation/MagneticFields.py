@@ -9,8 +9,7 @@ magnetization distribution m.
 import torch
 
 from magrec.transformation.generic import GenericTranformation
-from magrec.prop.Fourier import FourierTransform2d
-from magrec.prop.Kernel import HarmonicFunctionComponentsKernel
+from magrec.transformation.Kernel import HarmonicFunctionComponentsKernel
 
 
 class MagneticFields(GenericTranformation):

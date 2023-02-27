@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class GenericMethod(object):
 
     def __init__(self, model, data):

@@ -3,7 +3,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
-
+from magrec.image_processing.Padding import Padder
 
 class GenericModel(object):
     # Super class that other models can be based off.
@@ -29,6 +29,17 @@ class GenericModel(object):
         else:
             raise ValueError("ERROR: Loss type not recognised. Options are: L1 and MSE (L2)")
 
+    def remove_padding_from_results(self):
+        # Remove the padding from the results.
+        
+        padding = Padder()
+        print('Removed the padding that was applied to the data')
+
+        for idx in range(len(self.dataset.actions)):
+            if self.dataset.actions.loc[len(self.dataset.actions) - 1-idx].reverseable:
+                    roi = self.dataset.reverse_parameters[-1-idx]
+                    for key in self.results.keys():
+                        self.results[key] = padding.crop_data(self.results[key], roi)
 
     def requirements(self):
         """
@@ -61,7 +72,7 @@ class GenericModel(object):
         raise NotImplementedError("loss_function must be overridden in a child class.")
 
 
-    def unpack_results(self, nn_output):
+    def extract_results(self, nn_output):
         """
         Args:
             nn_output: The output of the neural network
@@ -69,7 +80,7 @@ class GenericModel(object):
         Returns:
             results: The results of the neural network
         """
-        raise NotImplementedError("unpack_results must be overridden in a child class.")
+        raise NotImplementedError("extract_results must be overridden in a child class.")
 
     def plot_results(self, nn_output, target):
         """

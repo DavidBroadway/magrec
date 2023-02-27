@@ -8,8 +8,8 @@ magnetization distribution m.
 # used for base class methods that need to be implemented
 import torch
 import numpy as np 
-from magrec.prop.Fourier import FourierTransform2d
-from magrec.prop.Kernel import HarmonicFunctionComponentsKernel
+from magrec.transformation.Fourier import FourierTransform2d
+from magrec.transformation.Kernel import HarmonicFunctionComponentsKernel
 
 class GenericTranformation(object):
      # Super class that other transformation can be based off.

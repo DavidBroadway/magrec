@@ -5,14 +5,15 @@ import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 from magrec.models.generic_model import GenericModel
-from magrec.prop.Transformations import Bsensor2Jxy 
+from magrec.transformation.Jxy2Bsensor import Jxy2Bsensor 
+from magrec.image_processing.Padding import Padder
 
 class Jxy(GenericModel):
     def __init__(self, data, loss_type):
         super().__init__(data, loss_type)
 
-        # Define the propagator so that this isn't performed during a loop.
-        self.magClass = Bsensor2Jxy(data)
+        # Define the transformation so that this isn't performed during a loop.
+        self.magClass = Jxy2Bsensor(data)
 
         self.requirements()
 
@@ -30,7 +31,7 @@ class Jxy(GenericModel):
     def transform(self, nn_output):
         return self.magClass.transform(nn_output)
 
-    def calculate_loss(self, nn_output, target):
+    def calculate_loss(self, b, target, loss_weight = None):
         """
         Args:
             nn_output: The output of the neural network
@@ -40,12 +41,14 @@ class Jxy(GenericModel):
             loss: The loss function
         """
 
-        b = self.transform(nn_output)
-    
+        if loss_weight is not None:
+            # b = b* loss_weight
+            b = torch.einsum("...kl,kl->...kl", b, loss_weight)
+            target = torch.einsum("...kl,kl->...kl", target, loss_weight)
 
         return self.loss_function(b, target)
 
-    def unpack_results(self, nn_output):
+    def extract_results(self, final_output, final_b, remove_padding = True):
         """
         Args:
             nn_output: The output of the neural network
@@ -53,13 +56,30 @@ class Jxy(GenericModel):
         Returns:
             results: The results of the neural network
         """
+
         self.results = dict()
-        self.results["J"] = nn_output.detach().numpy()
-        self.results["Reconstructed Magnetic Field"] = self.transform(nn_output).detach().numpy()
+        self.results["Jx"] = final_output[0,0,::]
+        self.results["Jy"] = final_output[0,1,::]
+        self.results["Recon B"] = final_b[0,::]
+        self.results["original B"] = self.dataset.target
+
+        if remove_padding:
+            self.remove_padding_from_results()
+            # padding = Padder()
+            # print('Removed the padding that was applied to the data')
+
+            # for idx in range(len(self.dataset.actions)):
+            #     if self.dataset.actions.loc[len(self.dataset.actions) - 1-idx].reverseable:
+            #             roi = self.dataset.reverse_parameters[-1-idx]
+            #             self.results["Jx"] = padding.crop_data(self.results["Jx"], roi)
+            #             self.results["Jy"] = padding.crop_data(self.results["Jy"], roi)
+            #             self.results["Recon B"] = padding.crop_data(self.results["Recon B"], roi)
+            #             self.results["original B"] = padding.crop_data(self.results["original B"], roi)
+
         return self.results
 
 
-    def plot_results(self, nn_output, target):  
+    def plot_results(self, results):  
         """
         Args:
             nn_output: The output of the neural network
@@ -68,21 +88,44 @@ class Jxy(GenericModel):
         Returns:
             None
         """
-        b = self.unpack_results(nn_output)
+        
         plt.figure()
-        plt.subplot(1, 4, 1)
-        plt.imshow(self.data.target)
-        plt.colorbar()
-        plt.subplot(1, 4, 2)
-        plt.imshow(self.results["Reconstructed Magnetic Field"])
-        plt.colorbar()
-        plt.subplot(1, 4, 3)
-        plt.imshow(self.results["J"][0,::])
-        plt.colorbar()
+        plt.subplot(2, 2, 1)
+        plot_data = results["original B"]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('original magnetic field')
+        cb.set_label("Magnetic Field (uT)")
 
-        plt.subplot(1, 4, 4)
-        plt.imshow(self.results["J"][1,::])
-        plt.colorbar()
-        plt.show()
 
+        plt.subplot(2, 2, 2)
+        plot_data = results["Recon B"]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('reconstructed magnetic field')
+        cb.set_label("Magnetic Field (uT)")
+
+        plt.subplot(2,2,3)
+        plot_data = results["Jx"]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        cb.set_label("Jx (A/m)")
+
+        plt.subplot(2,2,4)
+        plot_data = results["Jy"]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        cb.set_label("Jy (A/m)")
 

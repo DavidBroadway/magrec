@@ -30,7 +30,7 @@ class UniformMagnetisation(GenericModel):
     def transform(self, nn_output):
         return self.magClass.transform(nn_output)
 
-    def calculate_loss(self, b, target):
+    def calculate_loss(self, b, target, loss_weight=None):
         """
         Args:
             nn_output: The output of the neural network
@@ -39,12 +39,13 @@ class UniformMagnetisation(GenericModel):
         Returns:
             loss: The loss function
         """
-
-        # b = self.transform(nn_output)
+        if loss_weight is not None:
+            b = torch.einsum("...kl,kl->...kl", b, loss_weight)
+            target = torch.einsum("...kl,kl->...kl", target, loss_weight)
     
         return self.loss_function(b, target)
 
-    def unpack_results(self, nn_output):
+    def extract_results(self, final_output, final_b):
         """
         Args:
             nn_output: The output of the neural network
@@ -53,12 +54,15 @@ class UniformMagnetisation(GenericModel):
             results: The results of the neural network
         """
         self.results = dict()
-        self.results["Magnetisation"] = nn_output.detach().numpy()
-        self.results["Reconstructed Magnetic Field"] = self.transform(nn_output).detach().numpy()
+        self.results["Magnetisation"] = final_output[0,0,::]
+        self.results["Recon B"] = final_b[0,0, ::]
+        self.results["original B"] = self.dataset.target
         return self.results
+    
 
 
-    def plot_results(self, nn_output, target):  
+
+    def plot_results(self, results):  
         """
         Args:
             nn_output: The output of the neural network
@@ -67,17 +71,45 @@ class UniformMagnetisation(GenericModel):
         Returns:
             None
         """
-        b = self.unpack_results(nn_output)
+        
         plt.figure()
-        plt.subplot(1, 3, 1)
-        plt.imshow(target)
-        plt.colorbar()
-        plt.subplot(1, 3, 2)
-        plt.imshow(self.results["Reconstructed Magnetic Field"])
-        plt.colorbar()
-        plt.subplot(1, 3, 2)
-        plt.imshow(self.results["Magnetisation"])
-        plt.colorbar()
-        plt.show()
+        plt.subplot(2, 2, 1)
+        plot_data = 1e3*results["original B"]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('original magnetic field')
+        cb.set_label("Magnetic Field (mT)")
 
 
+        plt.subplot(2, 2, 2)
+        plot_data = 1e3*results["Recon B"]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('reconstructed magnetic field')
+        cb.set_label("Magnetic Field (mT)")
+
+        plt.subplot(2, 2, 3)
+        plot_data = 1e3*results["original B"] - 1e3*results["Recon B"]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('difference $\Delta B$')
+        cb.set_label("Magnetic Field (mT)")
+
+        plt.subplot(2,2,4)
+        plot_data = results["Magnetisation"]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('reconstructed magnetisation')
+        cb.set_label("magnetisation ($\mu_b/nm^2$)")

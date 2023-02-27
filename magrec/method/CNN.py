@@ -17,7 +17,15 @@ class CNN(object):
         self.dataset = dataset
 
 
-    def prepare_fit(self, n_channels_in=1, n_channels_out=1, size=2, kernel=5, stride=2, padding=2):
+    def prepare_fit(self, 
+                    n_channels_in=1, 
+                    n_channels_out=1, 
+                    size=2, 
+                    kernel=5, 
+                    stride=2, 
+                    padding=2 , 
+                    loss_weight = None
+                    ):
         # Prepare the method for fitting.
        
         # Check the size of the data and pad it if necessary.
@@ -30,6 +38,11 @@ class CNN(object):
         if "num_targets" in self.model.require:
             n_channels_in = self.model.require["num_targets"]
             print("Number of targets: {}".format(n_channels_in))
+
+
+        # check if the dataset meets the requirements of the model
+        # NEEDS TO BE IMPLEMENTED this will probably just mean padding. 
+
 
         # define the device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -50,12 +63,13 @@ class CNN(object):
 
         # Need to add two dimensions to the data to make it a batch
         # if n_channels_in > 1:
-        #     self.img_input = torch.FloatTensor(self.data.target[np.newaxis])
+        #     self.img_input = torch.FloatTensor(self.dataset.target[np.newaxis])
         #     self.mask_t = torch.FloatTensor(self.mask[np.newaxis])
         # else:
         self.img_input = torch.FloatTensor(self.dataset.target[np.newaxis, np.newaxis])
         self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
         
+        self.loss_weight = loss_weight
 
         self.train_data_cnn = TensorDataset(self.img_input, self.mask_t)
         self.train_loader = DataLoader(self.train_data_cnn)
@@ -111,13 +125,13 @@ class CNN(object):
                 outputs = self.Net(data)
 
                 if weight is not None:
-                    outputs[0,0,:,:] = outputs[0,0,:,:]*weight
+                    outputs = torch.einsum("...kl,kl->...kl", outputs, weight)
 
                 # Convert to magnetic field
                 b = self.model.transform(outputs)
 
                 # Compute the loss
-                loss = self.model.calculate_loss(b, self.img_input)
+                loss = self.model.calculate_loss(b, self.img_input, loss_weight = self.loss_weight)
 
                 # Backpropagate the loss
                 loss.backward()
@@ -131,20 +145,25 @@ class CNN(object):
                 if epoch_n % print_every_n == 0 or epoch_n == 0:
                     print(f'epoch {epoch_n + 1:5d} | loss on last mini-batch: {self.track_loss[-1]: .2e}')
 
-        self.final_output = outputs[0,0,:,:].detach().numpy() 
-        self.final_b = b[0,0,:,:].detach().numpy() 
+        self.final_output = outputs.detach().numpy() 
+        self.final_b = b.detach().numpy() 
 
         # Return the loss and accuracy
         return 
 
 
-    def extract_results(self):
+    def extract_results(self, remove_padding = True):
         # Extract the results from the model and return them.
-        self.results = self.model.unpack_results(self.final_output)
+        self.results = self.model.extract_results(self.final_output, self.final_b, remove_padding = remove_padding)
 
-    def plot_results(self):
+    def plot_results(self, remove_padding = True):
         # Plot the results from the model.
-        self.model.plot_results()
+
+        # check is results have been unpacked
+        if not hasattr(self, "results"):
+            self.results = self.model.extract_results(self.final_output, self.final_b, remove_padding = remove_padding)
+
+        self.model.plot_results(self.results)
 
     def plot_loss(self):
         # Plot the evolution of the loss function at the end of the train
@@ -216,9 +235,7 @@ class Net(nn.Module):
         self.trans4 = nn.ConvTranspose2d(16*M+8*M, 8*M, kernel, stride, padding,1)
         self.conv6 = nn.Conv2d(8*M, n_channels_out, kernel, 1, padding)
         self.conv7 = nn.Conv2d(n_channels_out, n_channels_out, kernel, 1, padding)
-        # self.conv6 = nn.Conv2d(8*M, 2, 5, 1, 2)
-        # self.conv7 = nn.Conv2d(2, 1, kernel, 1, padding)
-        # add the 2 at the first index for 2 outputs. 
+
 
         self.fc11 = nn.Linear(64*M * ConvolutionSize*ConvolutionSize, 120)
         self.fc12 = nn.Linear(120, 84)

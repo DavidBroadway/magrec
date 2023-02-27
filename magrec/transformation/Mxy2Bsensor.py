@@ -10,7 +10,7 @@ import torch
 import numpy as np
 
 from magrec.transformation.generic import GenericTranformation
-from magrec.prop.Kernel import MagnetizationFourierKernel2d
+from magrec.transformation.Kernel import MagnetizationFourierKernel2d
 
 
 class Mxy2Bsensor(GenericTranformation):

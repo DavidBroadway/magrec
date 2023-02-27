@@ -4,9 +4,9 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from magrec.prop.Fourier import FourierTransform2d
-from magrec.prop.Filtering import DataFiltering
-from magrec.prop.Padding import Padder
+from magrec.transformation.Fourier import FourierTransform2d
+from magrec.image_processing.Filtering import DataFiltering
+from magrec.image_processing.Padding import Padder
 from magrec.misc.plot import plot_n_components
 
 
@@ -139,9 +139,14 @@ class Data(object):
         self.target = self.Padder.pad_data(padding)
         self.track_actions('pad_data')
     
-    def crop_data(self, roi):
+    def crop_data(self, roi, image=None):
         """ Crop the data by removing the padding. """
-        self.target = self.Padder.crop_data(self.target, roi)
+        if image is None:
+            image = self.target
+            btarget = True
+        else:
+            btarget = False
+        image = self.Padder.crop_data(image, roi)
 
         roi_string = ''.join(str(x) + ',' for x in roi)
 
@@ -150,6 +155,11 @@ class Data(object):
             "crop the data with the given region of interest",
             "roi = [" + roi_string  + "]"
             )
+        
+        if btarget:
+            self.target = image
+        else:
+            return image
 
     def pad_data_to_power_of_two(self):
         """ Pad the data to a power of two. """

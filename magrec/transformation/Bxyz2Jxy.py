@@ -10,12 +10,12 @@ import torch
 import numpy as np
 
 from magrec.transformation.generic import GenericTranformation
-from magrec.transformation.Kernel import MagnetizationFourierKernel2d
+from magrec.transformation.Kernel import CurrentLayerFourierKernel2d
+from magrec.transformation.Fourier import FourierTransform2d
 
 
-class Bsensor2Mxy(GenericTranformation):
-
-    def __init__(self, dataset, m_theta = 0, m_phi = 0):
+class Bxyz2Jxy(GenericTranformation):
+    def __init__(self, dataset):
         """
         Create a propagator for a 2d magnetization distribution that computes the magnetic field at `height` above
         the 2d magnetization layer of finite thickness `layer_thickness`, that has potentially 3 components of the magnetization.
@@ -29,54 +29,51 @@ class Bsensor2Mxy(GenericTranformation):
             height:             height above the magnetization layer at which to evaluate the magnetic field, in [mm]
             layer_thickness:    thickness of the magnetization layer, in [mm]
         """
-        super().__init__(dataset)
+        self.ft = FourierTransform2d(grid_shape=dataset.target.size(), dx=dataset.dx, dy=dataset.dy, real_signal=True)
+        self.s_theta = np.deg2rad(dataset.sensor_theta)
+        self.s_phi = np.deg2rad(dataset.sensor_phi)
 
-        # Define the magnetization direction
-        self.mag_dir = self.get_cartesian_dir(m_theta, m_phi)
+        self.sensor_dir = torch.tensor([ \
+            np.cos(self.s_phi)*np.sin(self.s_theta), \
+            np.sin(self.s_phi)*np.sin(self.s_theta), \
+            np.cos(self.s_theta)], dtype=torch.complex64)
 
-        # Define the sensor direction
-        self.sensor_dir = self.get_cartesian_dir(dataset.sensor_theta, dataset.sensor_phi)
+        self.dataset = dataset
 
-        # Define the kernal for the transformation
-        self.m_to_b_matrix = MagnetizationFourierKernel2d\
-            .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, dataset.height, dataset.layer_thickness)
+        self.j_to_b_matrix = CurrentLayerFourierKernel2d\
+            .define_kernel_matrix(
+                self.ft.kx_vector, 
+                self.ft.ky_vector, 
+                dataset.height, 
+                dataset.layer_thickness)
         
-        # sum over the magnetisation direction
-        self.m_to_b_matrix = torch.einsum("...ijkl,i->...jkl", self.m_to_b_matrix, self.mag_dir)
+        self.b_to_j_matrix = 1/self.j_to_b_matrix
+        # set the Bz term to zero as we don't need it
+        self.b_to_j_matrix[2, 0, :, :] = 0 
+        self.b_to_j_matrix[2, 1, :, :] = 0 
 
-        # sum over the sensor direction
-        self.m_to_b_matrix = torch.einsum("...jkl,j->...kl", self.m_to_b_matrix, self.sensor_dir)
+        # set the DC component to zero
+        self.b_to_j_matrix[0,0] = 0
 
-    def get_m_from_b(self, b):
+        # # If there exists any nans set them to zero
+        self.b_to_j_matrix[self.b_to_j_matrix != self.b_to_j_matrix] = 0
+
+
+    def get_j_from_b(self, b):
         # Calculate the matrix product M @ j for each k_x, k_y, z
         # b — batch index
         # i — index of the magnetic field component, i.e. b_x, b_y, b_z,
         # j — index of the magnetization distribution component, i.e. m_x, m_y, m_z
         # k, l — indices of k_x and k_y, respectively
-        # b = torch.einsum("ijkl,bjkl->bikl", self.m_to_b_matrix, m)
-
-        # Define the finally transformation
-        transform =  1/ self.m_to_b_matrix
-
-        # remove the 0 componenet
-        transform[0,0] = 0
-        # If there exists any nans set them to zero
-        transform[transform != transform] = 0
-
-        m = b * transform
-        m[0,0] = 0 # remove DC componenet
-        return m
+        # j = torch.einsum("...ijkl,...ikl->...jkl", self.b_to_j_matrix, b)
+        return torch.einsum("...ijkl,...ikl->...jkl", self.b_to_j_matrix, b)
 
 
     def transform(self):
-
         B = self.dataset.target
 
         b = self.ft.forward(B, dim=(-2, -1))
         b[0,0] = 0
-        m = self.get_m_from_b(b)
-        M = self.ft.backward(m, dim=(-2, -1))
-        # convert from A/M to uB/nm^2
-        unit_conversion = 1e-18 / 9.27e-24
-        return M * unit_conversion
-    
+        j = self.get_j_from_b(b)
+        J = self.ft.backward(j, dim=(-2, -1))
+        return J

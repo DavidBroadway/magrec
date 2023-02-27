@@ -22,9 +22,13 @@ class Padder(object):
         """
         Crops the data to the region of interest (ROI).
         """
-        x = x.numpy()
-        x = x[ROI[0]:ROI[1], ROI[2]:ROI[3]]
-        return torch.from_numpy(x)
+        if type(x) == np.ndarray:
+            x = x[ROI[0]:ROI[1], ROI[2]:ROI[3]]
+            return x
+        else:
+            x = x.numpy()
+            x = x[ROI[0]:ROI[1], ROI[2]:ROI[3]]
+            return torch.from_numpy(x)
 
     def pad_to_next_power_of_2(self, x):
         """
@@ -38,8 +42,27 @@ class Padder(object):
         new_rows = self.next_power_of_two(rows)
         new_cols = self.next_power_of_two(cols)
         new_size = max(new_rows, new_cols)
+
+        # make the image in the center of the padded array and round the array indices accordingly
+        row_offset = np.int(np.floor( (new_size - rows) // 2))
+        col_offset = np.int(np.floor( (new_size - cols) // 2))
+        if row_offset*2 + rows < new_size:
+            start_row = row_offset
+            end_row = row_offset + 1
+        else:
+            start_row = row_offset
+            end_row = row_offset
+        if col_offset*2 + cols < new_size:
+            start_col = col_offset
+            end_col = col_offset + 1
+        else:
+            start_col = col_offset
+            end_col = col_offset
+
+        original_roi = [start_row, new_size - end_row, start_col, new_size - end_col]
+        print(original_roi)
         # pad the array with zeros
-        padded_x = np.pad(x, ((0,new_size - rows),(0,new_size - cols)), mode='constant')
+        padded_x = np.pad(x, ((start_row,end_row),(start_col, end_col)), mode='constant')
     
         return torch.from_numpy(padded_x), original_roi
 

@@ -1,7 +1,7 @@
 import torch
 
-from magrec.prop.Fourier import FourierTransform2d
-from magrec.prop.constants import MU0, twopi
+from magrec.transformation.Fourier import FourierTransform2d
+from magrec.misc.constants import MU0, twopi
 
 
 class CurrentFourierKernel2d(object):
@@ -55,7 +55,7 @@ class CurrentFourierKernel2d(object):
         _M[1, 2, :, :] = -1j * kx_vector[:, None] / k_matrix
 
         # Deal with the case where k = 0 by setting the corresponding elements to 0
-        _M[[0, 1], [2, 2], [0, 0], [0, 0]] = 0
+        # _M[[0, 1], [2, 2], [0, 0], [0, 0]] = 0
 
         # M has a nice property that is it antisymmetric, when viewed for specific values of k_x and k_y
         # above we defined its upper triangle, below we add the parts of the antisymmetric parts together.
@@ -110,7 +110,7 @@ class CurrentLayerFourierKernel2d(object):
         M[2, 1, :, :] =  1j * kx_vector[:, None] / k_matrix
 
         # Deal with the case where k = 0 by setting the corresponding elements to 0
-        M[[2, 2], [0, 1], [0, 0], [0, 0]] = 0
+        # M[[2, 2], [0, 1], [0, 0], [0, 0]] = 0
 
         depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
 
@@ -139,7 +139,7 @@ class MagnetizationFourierKernel2d(object):
         _M[2, 2, :, :] = k_matrix / 2
 
         # Deal with the case where k = 0 by setting the corresponding elements to 0
-        _M[[0, 1, 1], [0, 0, 1], [0, 0, 0], [0, 0, 0]] = 0
+        # _M[[0, 1, 1], [0, 0, 1], [0, 0, 0], [0, 0, 0]] = 0
 
         depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
         # Use the property of the M matrix that it is symmetric (that's why we divide by 1/2 above, to get the proper diagonal terms)
