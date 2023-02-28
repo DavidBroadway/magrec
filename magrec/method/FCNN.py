@@ -44,6 +44,8 @@ class FCNN(object):
         # NEEDS TO BE IMPLEMENTED this will probably just mean padding. 
 
 
+        self.model.prepareTargetData()    
+
         # define the device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

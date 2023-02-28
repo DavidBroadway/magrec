@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from magrec.image_processing.Padding import Padder
+from magrec.transformation.Fourier import FourierTransform2d
 
 class GenericModel(object):
     # Super class that other models can be based off.
@@ -19,6 +20,15 @@ class GenericModel(object):
         # Add addtional requirements of the model here.
         self.requirements()
 
+        self.ft = FourierTransform2d(
+            grid_shape=self.dataset.target.shape,
+            dx=self.dataset.dx,
+            dy=self.dataset.dy,
+        )
+
+    def prepareTargetData(self):
+        # Do nothing unless needed.
+        return
 
     def define_loss_function(self, loss_type):
         
