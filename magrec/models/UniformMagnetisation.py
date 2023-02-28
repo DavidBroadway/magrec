@@ -45,7 +45,7 @@ class UniformMagnetisation(GenericModel):
     
         return self.loss_function(b, target)
 
-    def extract_results(self, final_output, final_b):
+    def extract_results(self, final_output, final_b, remove_padding = True):
         """
         Args:
             nn_output: The output of the neural network
@@ -57,6 +57,9 @@ class UniformMagnetisation(GenericModel):
         self.results["Magnetisation"] = final_output[0,0,::]
         self.results["Recon B"] = final_b[0,0, ::]
         self.results["original B"] = self.dataset.target
+
+        if remove_padding:
+            self.remove_padding_from_results()
         return self.results
     
 

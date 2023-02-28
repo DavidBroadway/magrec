@@ -65,16 +65,6 @@ class Jxy(GenericModel):
 
         if remove_padding:
             self.remove_padding_from_results()
-            # padding = Padder()
-            # print('Removed the padding that was applied to the data')
-
-            # for idx in range(len(self.dataset.actions)):
-            #     if self.dataset.actions.loc[len(self.dataset.actions) - 1-idx].reverseable:
-            #             roi = self.dataset.reverse_parameters[-1-idx]
-            #             self.results["Jx"] = padding.crop_data(self.results["Jx"], roi)
-            #             self.results["Jy"] = padding.crop_data(self.results["Jy"], roi)
-            #             self.results["Recon B"] = padding.crop_data(self.results["Recon B"], roi)
-            #             self.results["original B"] = padding.crop_data(self.results["original B"], roi)
 
         return self.results
 
