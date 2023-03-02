@@ -68,11 +68,15 @@ class UniformMxyFspace(GenericModel):
         Returns:
             results: The results of the neural network
         """
+        nn_shape = final_output.shape
+        real_component =  torch.from_numpy(final_output[0,0, :, 0:int(0.5*nn_shape[-1])])
+        imag_component =  torch.from_numpy(final_output[0,0, :, int(0.5*nn_shape[-1]):nn_shape[-1]])
+        complex_out = torch.complex(real_component, imag_component)
 
-        complex_out = torch.complex(torch.from_numpy(final_output[0,0,::].real), 
-                                    torch.from_numpy(final_output[0,0,::].imag))
-        complex_b = torch.complex(torch.from_numpy(final_b[0,0,::].real), 
-                                   torch.from_numpy(final_b[0,0,::].imag))
+        real_component =  torch.from_numpy(final_b[0,0, :, 0:int(0.5*nn_shape[-1])])
+        imag_component =  torch.from_numpy(final_b[0,0, :, int(0.5*nn_shape[-1]):nn_shape[-1]])
+        complex_b = torch.complex(real_component, imag_component)
+
 
         self.results = dict()
         self.results["Magnetisation"] = self.ft.backward(complex_out,  dim=(-2, -1))
