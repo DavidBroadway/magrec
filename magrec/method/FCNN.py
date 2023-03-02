@@ -52,26 +52,18 @@ class FCNN(object):
         # Define the network.
         self.Net = Net(self.dataset.target).to(self.device)
 
-        self.img_comp = torch.FloatTensor(self.dataset.target)
-        self.img_input = torch.FloatTensor(torch.flatten(self.dataset.target))
+        self.img_comp = torch.Tensor(self.dataset.target)
+        self.img_input = torch.Tensor(torch.flatten(self.dataset.target))
         # Define the data for loading into the network.
         self.mask =np.where(self.img_input.numpy()  == 0,0,1) 
 
         # Normalise the data for the network.
         # nomalized_data = (self.data.target - self.data.target.mean()) / torch.sqrt(self.data.target.var())
 
-        # Need to add two dimensions to the data to make it a batch
-        # if n_channels_in > 1:
-        #     self.img_input = torch.FloatTensor(self.dataset.target[np.newaxis])
-        #     self.mask_t = torch.FloatTensor(self.mask[np.newaxis])
-        # else:
-        # self.img_input = torch.FloatTensor(self.dataset.target[np.newaxis, np.newaxis])
-        self.img_comp = torch.FloatTensor(self.img_comp[np.newaxis, np.newaxis])
-        self.img_input = torch.FloatTensor(self.img_input[np.newaxis, np.newaxis])
-        self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
         
-        # self.img_input = torch.FloatTensor(torch.unsqueeze(self.dataset.target, 0))
-        # self.mask_t = torch.FloatTensor(torch.unsqueeze(self.mask, 0))
+        self.img_comp = torch.Tensor(self.img_comp[np.newaxis, np.newaxis])
+        self.img_input = torch.Tensor(self.img_input[np.newaxis, np.newaxis])
+        self.mask_t = torch.Tensor(self.mask[np.newaxis,np.newaxis])
 
         self.loss_weight = loss_weight
 
@@ -193,6 +185,7 @@ class Net(nn.Module):
     # class to create a fully connected neural network for magnetisation reconstruction
     def __init__(self, dataset):
         super(Net, self).__init__()
+
 
         self.output_size = dataset.shape
         self.input_size = len(torch.flatten(dataset))

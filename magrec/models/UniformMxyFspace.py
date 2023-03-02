@@ -29,11 +29,21 @@ class UniformMxyFspace(GenericModel):
     
     def prepareTargetData(self):
         self.dataset.original_target = self.dataset.target
-        self.dataset.target = self.ft.forward(self.dataset.target, dim=(-2, -1))
-        self.dataset.target = self.dataset.target.to(torch.complex64)
+        self.dataset.target_fourier = self.ft.forward(self.dataset.target, dim=(-2, -1))
+        self.dataset.target = torch.cat((torch.real(self.dataset.target_fourier), 
+                               torch.imag(self.dataset.target_fourier)), dim=-1)
         
     def transform(self, nn_output):
-        return  nn_output * self.magClass.transformation
+        nn_shape = nn_output.shape
+        real_component =  nn_output[..., 0:int(0.5*nn_shape[-1])]
+        imag_component =  nn_output[..., int(0.5*nn_shape[-1]):nn_shape[-1]]
+        complex_form = torch.complex(real_component, imag_component)
+
+        transformed = torch.einsum("kl,...kl->...kl", self.magClass.transformation, complex_form)
+        # transformed = complex_form * self.magClass.transformation
+        b = torch.cat((torch.real(transformed), torch.imag(transformed)), dim=-1)
+
+        return  b
 
     def calculate_loss(self, b, target, loss_weight=None):
         """
@@ -47,7 +57,7 @@ class UniformMxyFspace(GenericModel):
         if loss_weight is not None:
             b = torch.einsum("...kl,kl->...kl", b, loss_weight)
             target = torch.einsum("...kl,kl->...kl", target, loss_weight)
-    
+
         return self.loss_function(b, target)
 
     def extract_results(self, final_output, final_b, remove_padding = True):
@@ -58,9 +68,15 @@ class UniformMxyFspace(GenericModel):
         Returns:
             results: The results of the neural network
         """
+
+        complex_out = torch.complex(torch.from_numpy(final_output[0,0,::].real), 
+                                    torch.from_numpy(final_output[0,0,::].imag))
+        complex_b = torch.complex(torch.from_numpy(final_b[0,0,::].real), 
+                                   torch.from_numpy(final_b[0,0,::].imag))
+
         self.results = dict()
-        self.results["Magnetisation"] = self.ft.backward(final_output[0,0,::],  dim=(-2, -1))
-        self.results["Recon B"] = self.ft.backward(final_b[0,0, ::],  dim=(-2, -1))
+        self.results["Magnetisation"] = self.ft.backward(complex_out,  dim=(-2, -1))
+        self.results["Recon B"] = self.ft.backward(complex_b,  dim=(-2, -1))
         self.results["original B"] = self.dataset.original_target
 
         if remove_padding:
