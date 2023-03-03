@@ -41,34 +41,29 @@ class FCNN(object):
 
 
         # check if the dataset meets the requirements of the model
-        # NEEDS TO BE IMPLEMENTED this will probably just mean padding. 
-
-
         self.model.prepareTargetData()    
+        training_target = self.model.training_target
 
         # define the device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         # Define the network.
-        self.Net = Net(self.dataset.target).to(self.device)
+        self.Net = Net(training_target, 
+                       n_channels_in=n_channels_in, 
+                       n_channels_out=n_channels_out).to(self.device)
 
-        self.img_comp = torch.Tensor(self.dataset.target)
-        self.img_input = torch.Tensor(torch.flatten(self.dataset.target))
         # Define the data for loading into the network.
+        self.img_comp = torch.Tensor(training_target)
+        self.img_input = torch.Tensor(torch.flatten(training_target))
         self.mask =np.where(self.img_input.numpy()  == 0,0,1) 
 
-        # Normalise the data for the network.
-        # nomalized_data = (self.data.target - self.data.target.mean()) / torch.sqrt(self.data.target.var())
-
-        
-        self.img_comp = torch.Tensor(self.img_comp[np.newaxis, np.newaxis])
-        self.img_input = torch.Tensor(self.img_input[np.newaxis, np.newaxis])
-        self.mask_t = torch.Tensor(self.mask[np.newaxis,np.newaxis])
+        self.img_comp = torch.FloatTensor(self.img_comp[np.newaxis, np.newaxis])
+        self.img_input = torch.FloatTensor(self.img_input[np.newaxis, np.newaxis])
+        self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
 
         self.loss_weight = loss_weight
 
         self.train_data_cnn = TensorDataset(self.img_input, self.mask_t)
-        # self.train_data_cnn = TensorDataset(self.img_input)
         self.train_loader = DataLoader(self.train_data_cnn)
 
         # Define the optimizer
@@ -143,8 +138,8 @@ class FCNN(object):
                 if epoch_n % print_every_n == 0 or epoch_n == 0:
                     print(f'epoch {epoch_n + 1:5d} | loss on last mini-batch: {self.track_loss[-1]: .2e}')
 
-        self.final_output = outputs.detach().numpy() 
-        self.final_b = b.detach().numpy() 
+        self.final_output = outputs.detach()
+        self.final_b = b.detach()
 
         # Return the loss and accuracy
         return 
@@ -165,31 +160,38 @@ class FCNN(object):
 
     def plot_loss(self):
         # Plot the evolution of the loss function at the end of the train
-        fig, ax = plt.subplots()
-        fig.set_figheight(5)
-        fig.set_figwidth(12)
+        plt.figure()
         plt.plot(self.track_loss, label='Loss function')
         plt.xlim([0, len(self.track_loss)])
-        plt.ylabel('Average difference, $\Delta B (T)$')
+        plt.ylabel('Average difference B (mT)')
         plt.title('Error function evolution')
         plt.xlabel('Epochs')
-
-    def save_results(self):
-        # Save the results from the model.
-        results = self.extract_results()
-        self.dataset.save_results(results)
 
 
 # Subclass for the architecture of the NN
 class Net(nn.Module):
     # class to create a fully connected neural network for magnetisation reconstruction
-    def __init__(self, dataset):
+    def __init__(self, dataset, n_channels_in=1, n_channels_out=1):
         super(Net, self).__init__()
 
+        self.n_channels_in = n_channels_in
+        self.n_channels_out = n_channels_out
 
         self.output_size = dataset.shape
         self.input_size = len(torch.flatten(dataset))
-        print(self.input_size)
+
+        # self.enc1 = nn.Linear(in_features=self.input_size, out_features=1024)
+        # self.enc2 = nn.Linear(in_features=1024, out_features=512)
+        # self.enc3 = nn.Linear(in_features=512, out_features=256)
+        # self.enc4 = nn.Linear(in_features=256, out_features=128)
+        # self.enc5 = nn.Linear(in_features=128, out_features=64)
+        # self.enc6 = nn.Linear(in_features=64, out_features=1)
+
+        # self.dec1 = nn.Linear(in_features=64, out_features=128)
+        # self.dec2 = nn.Linear(in_features=128, out_features=256)
+        # self.dec3 = nn.Linear(in_features=256, out_features=512)
+        # self.dec4 = nn.Linear(in_features=512, out_features=1024)
+        # self.dec5 = nn.Linear(in_features=1024, out_features= self.n_channels_out * self.input_size)
 
         self.enc1 = nn.Linear(in_features=self.input_size, out_features=256)
         self.enc2 = nn.Linear(in_features=256, out_features=128)
@@ -202,7 +204,7 @@ class Net(nn.Module):
         self.dec2 = nn.Linear(in_features=32, out_features=64)
         self.dec3 = nn.Linear(in_features=64, out_features=128)
         self.dec4 = nn.Linear(in_features=128, out_features=256)
-        self.dec5 = nn.Linear(in_features=256, out_features=self.input_size)
+        self.dec5 = nn.Linear(in_features=256, out_features= self.n_channels_out * self.input_size)
 
     def forward(self,input):
 
@@ -217,6 +219,6 @@ class Net(nn.Module):
         dec2 = F.relu(self.dec2(dec1))
         dec3 = F.relu(self.dec3(dec2))
         dec4 = F.relu(self.dec4(dec3))
-        out = (self.dec5(dec4))
+        out = self.dec5(dec4)
 
-        return torch.reshape(out, (1,1, self.output_size[-2], self.output_size[-1]))
+        return torch.reshape(out, (1, self.n_channels_out, self.output_size[-2], self.output_size[-1]))

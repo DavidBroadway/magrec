@@ -17,6 +17,10 @@ class GenericModel(object):
         """
         self.dataset = dataset
         self.define_loss_function(loss_type)
+
+        # define the scaling factor to help the network learn
+        self.scaling_factor = 1e6
+        
         # Add addtional requirements of the model here.
         self.requirements()
 
@@ -27,7 +31,9 @@ class GenericModel(object):
         )
 
     def prepareTargetData(self):
-        # Do nothing unless needed.
+        # Add a scalling factor to the target data to help the network learn    
+        self.original_target = self.dataset.target
+        self.training_target = self.dataset.target * self.scaling_factor
         return
 
     def define_loss_function(self, loss_type):

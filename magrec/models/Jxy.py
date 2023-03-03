@@ -58,10 +58,10 @@ class Jxy(GenericModel):
         """
 
         self.results = dict()
-        self.results["Jx"] = final_output[0,0,::]
-        self.results["Jy"] = final_output[0,1,::]
-        self.results["Recon B"] = final_b[0,::]
-        self.results["original B"] = self.dataset.target
+        self.results["Jx"] = final_output[0,0,::] / self.scaling_factor
+        self.results["Jy"] = final_output[0,1,::] / self.scaling_factor
+        self.results["Recon B"] = final_b[0,::] / self.scaling_factor
+        self.results["original B"] = self.original_target
 
         if remove_padding:
             self.remove_padding_from_results()
@@ -79,29 +79,42 @@ class Jxy(GenericModel):
             None
         """
         
-        plt.figure()
-        plt.subplot(2, 2, 1)
-        plot_data = results["original B"]
+        fig = plt.figure()
+        fig.set_figheight(10)
+        fig.set_figwidth(10)
+
+        plt.subplot(3, 2, 1)
+        plot_data = results["original B"] * 1e3
         plot_range = abs(plot_data).max()
-        plt.imshow(plot_data)
+        plt.imshow(plot_data, cmap='bwr', vmin=-plot_range, vmax=plot_range)
         plt.xticks([])
         plt.yticks([])
         cb = plt.colorbar()
-        plt.title('original magnetic field')
-        cb.set_label("Magnetic Field (uT)")
+        plt.title('original B')
+        cb.set_label("B (mT)")
 
 
-        plt.subplot(2, 2, 2)
-        plot_data = results["Recon B"]
+        plt.subplot(3, 2, 2)
+        plot_data = results["Recon B"] * 1e3
         plot_range = abs(plot_data).max()
-        plt.imshow(plot_data)
+        plt.imshow(plot_data, cmap='bwr', vmin=-plot_range, vmax=plot_range)
         plt.xticks([])
         plt.yticks([])
         cb = plt.colorbar()
-        plt.title('reconstructed magnetic field')
-        cb.set_label("Magnetic Field (uT)")
+        plt.title('reconstructed B')
+        cb.set_label("B (mT)")
 
-        plt.subplot(2,2,3)
+        plt.subplot(3, 2, 3)
+        plot_data = (results["original B"] - results["Recon B"])* 1e3
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap='bwr', vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('reconstructed difference')
+        cb.set_label("B (mT)")
+
+        plt.subplot(3, 2, 5)
         plot_data = results["Jx"]
         plot_range = abs(plot_data).max()
         plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
@@ -110,7 +123,7 @@ class Jxy(GenericModel):
         cb = plt.colorbar()
         cb.set_label("Jx (A/m)")
 
-        plt.subplot(2,2,4)
+        plt.subplot(3, 2, 6)
         plot_data = results["Jy"]
         plot_range = abs(plot_data).max()
         plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)

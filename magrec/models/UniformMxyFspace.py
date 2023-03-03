@@ -14,6 +14,10 @@ class UniformMxyFspace(GenericModel):
         # Define the propagator so that this isn't performed during a loop.
         self.magClass = Mxy2Bsensor(dataset, m_theta = m_theta, m_phi = m_phi)
 
+        # define the scaling factor to help the network learn
+        self.scaling_factor = 1e6
+
+        # define the requirements for the model that may change the fitting method
         self.requirements()
 
     def requirements(self):
@@ -28,9 +32,14 @@ class UniformMxyFspace(GenericModel):
         self.require["num_sources"] = 1
     
     def prepareTargetData(self):
-        self.dataset.original_target = self.dataset.target
-        self.dataset.target_fourier = self.ft.forward(self.dataset.target, dim=(-2, -1))
-        self.dataset.target = torch.cat((torch.real(self.dataset.target_fourier), 
+        # Add a scalling factor to the target data to help the network learn    
+        self.original_target = self.dataset.target 
+        self.training_target = self.dataset.target * self.scaling_factor
+        # transform into fourier space
+        self.dataset.target_fourier = self.ft.forward(self.training_target, dim=(-2, -1))
+        # concatenate real and imaginary components to form a single tensor that is real
+        # as the network requires real inputs
+        self.training_target = torch.cat((torch.real(self.dataset.target_fourier), 
                                torch.imag(self.dataset.target_fourier)), dim=-1)
         
     def transform(self, nn_output):
@@ -69,19 +78,19 @@ class UniformMxyFspace(GenericModel):
             results: The results of the neural network
         """
         nn_shape = final_output.shape
-        real_component =  torch.from_numpy(final_output[0,0, :, 0:int(0.5*nn_shape[-1])])
-        imag_component =  torch.from_numpy(final_output[0,0, :, int(0.5*nn_shape[-1]):nn_shape[-1]])
+        real_component =  final_output[0,0, :, 0:int(0.5*nn_shape[-1])]
+        imag_component =  final_output[0,0, :, int(0.5*nn_shape[-1]):nn_shape[-1]]
         complex_out = torch.complex(real_component, imag_component)
 
-        real_component =  torch.from_numpy(final_b[0,0, :, 0:int(0.5*nn_shape[-1])])
-        imag_component =  torch.from_numpy(final_b[0,0, :, int(0.5*nn_shape[-1]):nn_shape[-1]])
+        real_component =  final_b[0,0, :, 0:int(0.5*nn_shape[-1])]
+        imag_component =  final_b[0,0, :, int(0.5*nn_shape[-1]):nn_shape[-1]]
         complex_b = torch.complex(real_component, imag_component)
 
 
         self.results = dict()
-        self.results["Magnetisation"] = self.ft.backward(complex_out,  dim=(-2, -1))
-        self.results["Recon B"] = self.ft.backward(complex_b,  dim=(-2, -1))
-        self.results["original B"] = self.dataset.original_target
+        self.results["Magnetisation"] = self.ft.backward(complex_out,  dim=(-2, -1)) / self.scaling_factor
+        self.results["Recon B"] = self.ft.backward(complex_b,  dim=(-2, -1)) / self.scaling_factor
+        self.results["original B"] = self.original_target
 
         if remove_padding:
             self.remove_padding_from_results()

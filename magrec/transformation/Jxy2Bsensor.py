@@ -12,6 +12,7 @@ import numpy as np
 from magrec.transformation.generic import GenericTranformation
 from magrec.transformation.Kernel import CurrentLayerFourierKernel2d
 from magrec.transformation.Fourier import FourierTransform2d
+from magrec.image_processing.Padding import Padder
 
 
 class Jxy2Bsensor(GenericTranformation):
@@ -30,7 +31,11 @@ class Jxy2Bsensor(GenericTranformation):
             height:             height above the magnetization layer at which to evaluate the magnetic field, in [mm]
             layer_thickness:    thickness of the magnetization layer, in [mm]
         """
-        self.ft = FourierTransform2d(grid_shape=dataset.target.size(), dx=dataset.dx, dy=dataset.dy, real_signal=True)
+        self.Padder = Padder()
+        grid = self.Padder.pad_zeros2d( dataset.target)
+        grid_shape = grid.size()
+
+        self.ft = FourierTransform2d(grid_shape=grid_shape, dx=dataset.dx, dy=dataset.dy, real_signal=True)
         self.s_theta = np.deg2rad(dataset.sensor_theta)
         self.s_phi = np.deg2rad(dataset.sensor_phi)
 
@@ -57,11 +62,17 @@ class Jxy2Bsensor(GenericTranformation):
         self.j_to_b_matrix = torch.einsum("ijkl,i->jkl", self.j_to_b_matrix, self.sensor_dir)
 
 
+
     def transform(self, J):
 
+        J = self.Padder.pad_zeros2d(J)
+
+        # Get the current density from the magnetization
         j = self.ft.forward(J, dim=(-2, -1))
         # Get the magnetic field from the current density
         b = torch.einsum("jkl,...jkl->...kl", self.j_to_b_matrix, j)
         b[0,0] = 0 # remove DC componenet
         B = self.ft.backward(b, dim=(-2, -1))
+
+        B = self.Padder.remove_padding2d(B)
         return B

@@ -107,7 +107,7 @@ class Padder(object):
         return x, original_roi
 
 
-    def pad_zeros2d(x: torch.Tensor) -> torch.Tensor:
+    def pad_zeros2d(self, x: torch.Tensor) -> torch.Tensor:
         """
         Pads the input with zeros along two dimensions.
 
@@ -130,6 +130,14 @@ class Padder(object):
 
         # a nice bonus: now the tensor size is divisible by 2
         return x
+
+    def remove_padding2d(self, x):
+        """
+        Crops the data to the region of interest (ROI).
+        """
+        height, width = x.shape[-2:]
+        x_crop = x[..., 0:int(width/2), 0:int(height/2)]
+        return x_crop
 
     def pad_2d(self, x: torch.Tensor, pad_width: int, mode: str, plot: bool = False) -> torch.Tensor:
         """
