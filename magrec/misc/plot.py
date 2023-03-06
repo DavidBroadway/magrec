@@ -21,6 +21,7 @@ def plot_n_components(
         climits: tuple = None,
         norm_type: str = 'row',
         alignment: str = 'horizontal',
+        show_coordinate_system: bool = True,
 ) -> plt.Figure | list[plt.Figure]:
     """
     Plots n_components of a field in the provided axes or creates a new figure with axes.
@@ -32,7 +33,7 @@ def plot_n_components(
         units (str):                        units of the field to display on the colorbar, e.g. 'mT' or 'A/m'
         norm (matplotlib.colors.Normalize): normalization object to share between different plot, for example
         cmap (str, matplotlib.colors.Colormap): colormap to use, default: viridis, 'cause it looks cool for magnetic fields
-        labels (list[str]):                 list of labels to label components with, e.g. ['x', 'y', 'z'] etc
+        labels (list[str] or str):                 list of labels to label components with, e.g. ['x', 'y', 'z'] etc, if str 'no_labels' is passed then no labels will be shown
         imshow_kwargs (dict, None):         kwargs to pass to .imshow()
         show (bool):                        whether to keep the plot or .close() it, if show is True, the plot will be shown in notebooks
         symmetric (bool):                   whether to symmetrize the colorbar so that 0 is in the middle of the colormap and lower and upper data limits
@@ -41,6 +42,7 @@ def plot_n_components(
                                             e.g. 'AAB' for 1st and 2nd rows to have the same norm, 3rd row to have its own norm
         alignment (str):                    alignment of the same quantity components, either 'horizontal' or 'vertical'
                                             if 'horizontal', then components will be plotted in the same row, if 'vertical', then in the same column
+        show_coordinate_system (bool):      whether to show the coordinate system in the plot, default: True
 
     Returns:
         fig (plt.Figure, list[plt.Figure]): figure or a list of figures with n_components
@@ -99,6 +101,12 @@ def plot_n_components(
             labels = ['x', 'y', 'z', 'w', 'u', 'v'][:n_components]
         else:
             labels = [f'c{i}' for i in range(n_components)]
+    
+    if isinstance(labels, str):
+        if labels == 'no_labels':
+            labels = [''] * n_components
+        else:
+            raise ValueError('If `labels` is a string, it must be "no_labels", got {}'.format(labels))
 
     if axes is not None:
         assert len(axes) == n_components * n_rows, \
@@ -119,6 +127,7 @@ def plot_n_components(
                             cbar_mode="edge",
                             cbar_size="10%",
                             cbar_pad=0.05,
+                            direction="row",
                             )
         elif alignment == "vertical":
             grid = ImageGrid(fig, rect=(0, 0, 1, 1),
@@ -130,6 +139,7 @@ def plot_n_components(
                             cbar_mode="edge",
                             cbar_size="10%",
                             cbar_pad=0.3,
+                            direction="column",
                             )
         axes = grid.axes_all
 
@@ -211,14 +221,14 @@ def plot_n_components(
     ax.set_yticklabels(yticks)
 
     # On the last axis, show an inset with coordinate system directions: arrows pointing to the right and up
-    ax_inset = inset_axes(ax, width="30%", height="30%", loc='lower left')
-    ax_inset.set_aspect('equal')
-    ax_inset.set_axis_off()
-    ax_inset.arrow(0, 0, 1, 0, head_width=0.3, head_length=0.3, linewidth=0.3, capstyle='butt', facecolor='k', edgecolor='k')
-    ax_inset.arrow(0, 0, 0, 1, head_width=0.3, head_length=0.3, linewidth=0.3, capstyle='butt', facecolor='k', edgecolor='k')
-    ax_inset.text(1.5, 0, r'$x$', fontsize=12, color='k')
-    ax_inset.text(0, 1.7, r'$y$', fontsize=12, color='k')
-
+    if show_coordinate_system:
+        ax_inset = inset_axes(ax, width="30%", height="30%", loc='lower left')
+        ax_inset.set_aspect('equal')
+        ax_inset.set_axis_off()
+        ax_inset.arrow(0, 0, 1, 0, head_width=0.3, head_length=0.3, linewidth=0.3, capstyle='butt', facecolor='k', edgecolor='k')
+        ax_inset.arrow(0, 0, 0, 1, head_width=0.3, head_length=0.3, linewidth=0.3, capstyle='butt', facecolor='k', edgecolor='k')
+        ax_inset.text(1.5, 0, r'$x$', fontsize=12, color='k')
+        ax_inset.text(0, 1.7, r'$y$', fontsize=12, color='k')
 
     fig.subplots_adjust(hspace=None)
 

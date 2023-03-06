@@ -110,6 +110,7 @@ class CurrentLayerFourierKernel2d(object):
         M[2, 1, :, :] =  1j * kx_vector[:, None] / k_matrix
 
         # Deal with the case where k = 0 by setting the corresponding elements to 0
+        # The elements in question are M[2, 0, 0, 0] and M[2, 1, 0, 0]
         M[[2, 2], [0, 1], [0, 0], [0, 0]] = 0
 
         depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
