@@ -20,10 +20,6 @@ class FCNN(object):
     def prepare_fit(self, 
                     n_channels_in=1, 
                     n_channels_out=1, 
-                    size=2, 
-                    kernel=5, 
-                    stride=2, 
-                    padding=2 , 
                     loss_weight = None
                     ):
         # Prepare the method for fitting.
@@ -198,7 +194,7 @@ class Net(nn.Module):
         self.enc3 = nn.Linear(in_features=128, out_features=64)
         self.enc4 = nn.Linear(in_features=64, out_features=32)
         self.enc5 = nn.Linear(in_features=32, out_features=16)
-        self.enc6 = nn.Linear(in_features=16, out_features=1)
+
 
         self.dec1 = nn.Linear(in_features=16, out_features=32)
         self.dec2 = nn.Linear(in_features=32, out_features=64)
@@ -213,7 +209,6 @@ class Net(nn.Module):
         enc3 = F.relu(self.enc3(enc2))
         enc4 = F.relu(self.enc4(enc3))
         enc5 = F.relu(self.enc5(enc4))
-        enc6 = F.relu(self.enc6(enc5))
 
         dec1 = F.relu(self.dec1(enc5))
         dec2 = F.relu(self.dec2(dec1))

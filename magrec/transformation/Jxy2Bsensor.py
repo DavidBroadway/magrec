@@ -17,7 +17,7 @@ from magrec.image_processing.Padding import Padder
 
 class Jxy2Bsensor(GenericTranformation):
 
-    def __init__(self, dataset):
+    def __init__(self, dataset, target = None, pad = True, fourier_target = False):
         """
         Create a propagator for a 2d magnetization distribution that computes the magnetic field at `height` above
         the 2d magnetization layer of finite thickness `layer_thickness`, that has potentially 3 components of the magnetization.
@@ -31,9 +31,25 @@ class Jxy2Bsensor(GenericTranformation):
             height:             height above the magnetization layer at which to evaluate the magnetic field, in [mm]
             layer_thickness:    thickness of the magnetization layer, in [mm]
         """
+        self.dataset = dataset
+
         self.Padder = Padder()
-        grid = self.Padder.pad_zeros2d( dataset.target)
-        grid_shape = grid.size()
+        if pad:
+            if target is None:
+                grid = self.Padder.pad_zeros2d(dataset.target)
+            else:
+                grid = self.Padder.pad_zeros2d(target)
+        else:
+            if target is None:
+                grid= dataset.target
+            else:
+                grid = target
+
+        if fourier_target:
+            grid_shape = grid[...,0:-1].size()
+        else:
+            grid_shape = grid.size()
+ 
 
         self.ft = FourierTransform2d(grid_shape=grid_shape, dx=dataset.dx, dy=dataset.dy, real_signal=True)
         self.s_theta = np.deg2rad(dataset.sensor_theta)
@@ -44,7 +60,7 @@ class Jxy2Bsensor(GenericTranformation):
             np.sin(self.s_phi)*np.sin(self.s_theta), \
             np.cos(self.s_theta)], dtype=torch.complex64)
 
-        self.dataset = dataset
+        
 
         self.j_to_b_matrix = CurrentLayerFourierKernel2d\
             .define_kernel_matrix(
@@ -52,6 +68,7 @@ class Jxy2Bsensor(GenericTranformation):
                 self.ft.ky_vector, 
                 dataset.height, 
                 dataset.layer_thickness)
+
 
         # remove the 0 componenet
         self.j_to_b_matrix[0,0] = 0
@@ -61,7 +78,13 @@ class Jxy2Bsensor(GenericTranformation):
         # Multiply the kernel matrix by the sensor direction
         self.j_to_b_matrix = torch.einsum("ijkl,i->jkl", self.j_to_b_matrix, self.sensor_dir)
 
+        self.transformation = self.j_to_b_matrix
+        # remove the 0 componenet
+        self.transformation[0, 0] = 0
+        # If there exists any nans set them to zero
+        self.transformation[self.transformation != self.transformation] = 0
 
+    
 
     def transform(self, J):
 

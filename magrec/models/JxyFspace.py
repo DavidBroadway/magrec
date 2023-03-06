@@ -5,20 +5,24 @@ import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 from magrec.models.generic_model import GenericModel
-from magrec.transformation.Mxy2Bsensor import Mxy2Bsensor
+from magrec.transformation.Jxy2Bsensor import Jxy2Bsensor 
+from magrec.image_processing.Padding import Padder
 
-class UniformMxyFspace(GenericModel):
-    def __init__(self, dataset, loss_type,  m_theta, m_phi,):
-        super().__init__(dataset, loss_type)
+class JxyFspace(GenericModel):
+    def __init__(self, data, loss_type):
+        super().__init__(data, loss_type)
 
-        # Define the propagator so that this isn't performed during a loop.
-        self.magClass = Mxy2Bsensor(dataset, m_theta = m_theta, m_phi = m_phi)
 
-        # define the scaling factor to help the network learn
-        self.scaling_factor = 1e6
+        self.Padder = Padder()
 
-        # define the requirements for the model that may change the fitting method
+        # Define the transformation so that this isn't performed during a loop.
+        self.prepareTargetData()
+
+        self.magClass = Jxy2Bsensor(data, target = self.training_target, pad = False, fourier_target=True)
+        # self.magClass = Jxy2Bsensor(data, pad = False)
+
         self.requirements()
+        
 
     def requirements(self):
         """
@@ -29,12 +33,15 @@ class UniformMxyFspace(GenericModel):
         # Define the number of targets and sources for the network. 
         self.require = dict()
         self.require["num_targets"] = 1
-        self.require["num_sources"] = 1
-    
+        self.require["num_sources"] = 2
+        
+
     def prepareTargetData(self):
         # Add a scalling factor to the target data to help the network learn    
         self.original_target = self.dataset.target 
         self.training_target = self.dataset.target * self.scaling_factor
+        self.training_target = self.Padder.pad_zeros2d(self.training_target)
+
         # transform into fourier space
         self.dataset.target_fourier = self.ft.forward(self.training_target, dim=(-2, -1))
         # concatenate real and imaginary components to form a single tensor that is real
@@ -46,16 +53,15 @@ class UniformMxyFspace(GenericModel):
         nn_shape = nn_output.shape
         real_component =  nn_output[..., 0:int(0.5*nn_shape[-1])]
         imag_component =  nn_output[..., int(0.5*nn_shape[-1]):nn_shape[-1]]
-        complex_form = torch.complex(real_component, imag_component)
-        
+        complex_form = torch.complex(real_component, imag_component) 
 
-        transformed = torch.einsum("kl,...kl->...kl", self.magClass.transformation, complex_form)
-        # transformed = complex_form * self.magClass.transformation
+        transformed = torch.einsum("jkl,...jkl->...kl", self.magClass.transformation, complex_form)
         b = torch.cat((torch.real(transformed), torch.imag(transformed)), dim=-1)
 
         return  b
 
-    def calculate_loss(self, b, target, loss_weight=None):
+
+    def calculate_loss(self, b, target, loss_weight = None):
         """
         Args:
             nn_output: The output of the neural network
@@ -64,7 +70,9 @@ class UniformMxyFspace(GenericModel):
         Returns:
             loss: The loss function
         """
+
         if loss_weight is not None:
+            # b = b* loss_weight
             b = torch.einsum("...kl,kl->...kl", b, loss_weight)
             target = torch.einsum("...kl,kl->...kl", target, loss_weight)
 
@@ -81,22 +89,32 @@ class UniformMxyFspace(GenericModel):
         nn_shape = final_output.shape
         real_component =  final_output[0,0, :, 0:int(0.5*nn_shape[-1])]
         imag_component =  final_output[0,0, :, int(0.5*nn_shape[-1]):nn_shape[-1]]
-        complex_out = torch.complex(real_component, imag_component)
+        complex_jx = torch.complex(real_component, imag_component)
 
-        real_component =  final_b[0,0, :, 0:int(0.5*nn_shape[-1])]
-        imag_component =  final_b[0,0, :, int(0.5*nn_shape[-1]):nn_shape[-1]]
+        real_component =  final_output[0,1, :, 0:int(0.5*nn_shape[-1])]
+        imag_component =  final_output[0,1, :, int(0.5*nn_shape[-1]):nn_shape[-1]]
+        complex_jy = torch.complex(real_component, imag_component)
+
+        b_shape = final_b.shape
+        real_component =  final_b[0, :, 0:int(0.5*b_shape[-1])]
+        imag_component =  final_b[0, :, int(0.5*b_shape[-1]):b_shape[-1]]
         complex_b = torch.complex(real_component, imag_component)
 
 
         self.results = dict()
-        self.results["Magnetisation"] = self.ft.backward(complex_out,  dim=(-2, -1)) / self.scaling_factor
+        self.results["Jx"] = self.ft.backward(complex_jx,  dim=(-2, -1)) / self.scaling_factor
+        self.results["Jy"] = self.ft.backward(complex_jy,  dim=(-2, -1)) / self.scaling_factor
         self.results["Recon B"] = self.ft.backward(complex_b,  dim=(-2, -1)) / self.scaling_factor
         self.results["original B"] = self.original_target
+
+
+        self.results["Jx"] = self.Padder.remove_padding2d(self.results["Jx"])
+        self.results["Jy"] = self.Padder.remove_padding2d(self.results["Jy"])
+        self.results["Recon B"] = self.Padder.remove_padding2d(self.results["Recon B"])
 
         if remove_padding:
             self.remove_padding_from_results()
         return self.results
-    
 
 
 
@@ -110,44 +128,56 @@ class UniformMxyFspace(GenericModel):
             None
         """
         
-        plt.figure()
-        plt.subplot(2, 2, 1)
-        plot_data = 1e3*results["original B"]
+        fig = plt.figure()
+        fig.set_figheight(10)
+        fig.set_figwidth(10)
+
+        plt.subplot(3, 2, 1)
+        plot_data = results["original B"] * 1e3
         plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+        plt.imshow(plot_data, cmap='bwr', vmin=-plot_range, vmax=plot_range)
         plt.xticks([])
         plt.yticks([])
         cb = plt.colorbar()
-        plt.title('original magnetic field')
-        cb.set_label("Magnetic Field (mT)")
+        plt.title('original B')
+        cb.set_label("B (mT)")
 
 
-        plt.subplot(2, 2, 2)
-        plot_data = 1e3*results["Recon B"]
+        plt.subplot(3, 2, 2)
+        plot_data = results["Recon B"] * 1e3
         plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+        plt.imshow(plot_data, cmap='bwr', vmin=-plot_range, vmax=plot_range)
         plt.xticks([])
         plt.yticks([])
         cb = plt.colorbar()
-        plt.title('reconstructed magnetic field')
-        cb.set_label("Magnetic Field (mT)")
+        plt.title('reconstructed B')
+        cb.set_label("B (mT)")
 
-        plt.subplot(2, 2, 3)
-        plot_data = 1e3*results["original B"] - 1e3*results["Recon B"]
+        plt.subplot(3, 2, 3)
+        plot_data = (results["original B"] - results["Recon B"])* 1e3
         plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+        plt.imshow(plot_data, cmap='bwr', vmin=-plot_range, vmax=plot_range)
         plt.xticks([])
         plt.yticks([])
         cb = plt.colorbar()
-        plt.title('difference $\Delta B$')
-        cb.set_label("Magnetic Field (mT)")
+        plt.title('reconstructed difference')
+        cb.set_label("B (mT)")
 
-        plt.subplot(2,2,4)
-        plot_data = results["Magnetisation"]
+        plt.subplot(3, 2, 5)
+        plot_data = results["Jx"]
         plot_range = abs(plot_data).max()
         plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
         plt.xticks([])
         plt.yticks([])
         cb = plt.colorbar()
-        plt.title('reconstructed magnetisation')
-        cb.set_label("magnetisation ($\mu_b/nm^2$)")
+        cb.set_label("Jx (A/m)")
+
+        plt.subplot(3, 2, 6)
+        plot_data = results["Jy"]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        cb.set_label("Jy (A/m)")
+

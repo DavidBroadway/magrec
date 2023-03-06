@@ -136,7 +136,7 @@ class Padder(object):
         Crops the data to the region of interest (ROI).
         """
         height, width = x.shape[-2:]
-        x_crop = x[..., 0:int(width/2), 0:int(height/2)]
+        x_crop = x[..., 0:int(height/2), 0:int(width/2)]
         return x_crop
 
     def pad_2d(self, x: torch.Tensor, pad_width: int, mode: str, plot: bool = False) -> torch.Tensor:
