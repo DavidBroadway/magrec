@@ -13,6 +13,7 @@ import numpy as np
 from magrec.prop.Pipeline import (
     CurrentLayerToField,
     FourierZeroDivergenceConstraint2d,
+    FourierDivergence2d,
     Function,
     Pipe,
     Projection,
@@ -191,6 +192,7 @@ class Prototype(BaseEstimator):
                 B_pred = narrow_to_target(B_pred)
 
                 loss = self.criterion(B_pred, B_target)
+                
                 loss.backward()
                 optimizer.step()
 
@@ -526,6 +528,8 @@ class Prototype(BaseEstimator):
                 out.update((key + "__" + k, val) for k, val in deep_items)
             out[key] = value
         return out
+    
+class JJChenPrototype()
 
 
 class HistoryRecorder(Callback):

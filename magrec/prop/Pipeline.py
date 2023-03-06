@@ -229,19 +229,18 @@ class Function(Step):
 
 class FourierDivergence2d(Step):
     """Calculates divergence of a 2d fsignal in Fourier space.
-    
+
     Implements the formula:
-    
+
     .. math::
         F[∇•X] = i k_x F[X] + i k_y F[X]
-        
-    where F is Fourier transform, k_x and k_y are spatial frequencies. 
+
+    where F is Fourier transform, k_x and k_y are spatial frequencies.
     Note the sign, which is due to the defintion of the Fourier transform
     adopted here in :class:`FourierTransform2d`.
-    
+
     """
-    
-    
+
     def __init__(self, keep_dim=False):
         super().__init__()
         self.real_signal = False
@@ -261,7 +260,7 @@ class FourierDivergence2d(Step):
             )
 
         self.ft = FourierTransform2d(
-            grid_shape=X.shape, dx=1, dy=1, real_signal=self.real_signal
+            grid_shape=X.shape, dx=1, dy=1, real_signal=self.real_signal, type="linear"
         )
         return self
 
@@ -272,15 +271,26 @@ class FourierDivergence2d(Step):
             + 1j * Xf[..., 1, :, :] * self.ft.ky_vector[None, :]
         )
         Y = self.ft.backward(Yf, dim=self.dim)
+
+        # return the dimension along which the divergence was computed
+        if self.keep_dim:
+            return Y.unsqueeze(-3)
+
         return Y
 
 
 class FourierZeroDivergenceConstraint2d(Step):
-    def __init__(self):
+    """The component that enforces zero divergence in Fourier space. It takes as an input one
+    component of the divergence-less field and computes the second component such that the
+    divergence of the resultant field is everywhere zero.
+    """
+
+    def __init__(self, adjust_input=False, k00=0.0):
         super().__init__()
         # TODO: Implement real signal option, the issue occurs when X is of odd shape,
         # then ft.backward(ft.forward(X)) does not produce the same shape as X
         self.real_signal = False
+        self.k00 = k00
         pass
 
     def __repr__(self):
@@ -311,7 +321,8 @@ class FourierZeroDivergenceConstraint2d(Step):
         # Idea is to pass a function f(x) = f(x, y0) that sets a divergence-less field component at y0
         # Since k_y = 0, this function is the same for all y in the field component distribution.
         # Then calculate ft(f(x)) and set Yf[..., :, 0] = ft(f(x))
-        # Yf[..., :, 0] = 0.0
+        Yf[..., :, 0] = 0.0
+        Yf[..., 0, 0] = self.k00
         Y = self.ft.backward(Yf, dim=(-2, -1)).real
         return Y
 
@@ -389,7 +400,9 @@ class Projection(Step):
 # TODO: Implement padding with up_to argument
 # the current pad_n is more logically called mult_of
 class Padder(Step):
-    def __init__(self, mult_of=None, up_to=None, mode="center", bc=0, dims=(-2, -1)):
+    def __init__(
+        self, mult_of=None, up_to=None, position="center", bc=0, dims=(-2, -1)
+    ):
         """Pads the input so that the shape of the output is larger according to `pad_n` argument by expanding the input
         with the `bc` boundary condition rules.
 
@@ -411,7 +424,7 @@ class Padder(Step):
                 output is the same in each dimension. If tuple, then pads the input to the
                 corresponding size in each dimension separately.
 
-            mode (str, optional): Mode that determines where the original input is placed in the output.
+            position (str, optional): position that determines where the original input is placed in the output.
                 - 'center' (default) - the original input is centered in the output, or is by 1 index
                 shifted to the begginging of the dims if the input shape is odd.
                 - 'corner' - the original input is placed in the corner of the output at index 0 along
@@ -444,23 +457,9 @@ class Padder(Step):
         return f"{self.__class__.__name__}(pad_width={self.up_to})"
 
     def fit(self, X, y=None, **fit_params):
-        if self.up_to is not None:
-            pad = tuple()
-            for i, dim in enumerate(self.dims):
-                # calculate how much padding on both sides is needed to get the desired shape
-                a, reminder = divmod(self.up_to[i] - X.shape[dim], 2)
-                pad += (
-                    a,
-                    a + reminder,
-                )
-            self.pad = pad
-
-        elif self.mult_of is not None:
-            self.pad = tuple(
-                # calculate how much padding on both sides is needed to get the desired shape
-                X.shape[self.dims[torch.div(i, 2, rounding_mode="floor")]] * n
-                for i, n in enumerate(self.mult_of)
-            )
+        self.pad = self.get_pad(
+            shape=X.shape, up_to=self.up_to, mult_of=self.mult_of, dims=self.dims
+        )
 
         self.original_shape = X.shape
         self.padded_shape, self.original_slices = Padder.get_padded_shape_and_slices(
@@ -470,7 +469,45 @@ class Padder(Step):
         self.X_ = torch.zeros(self.padded_shape, dtype=X.dtype, device=X.device)
         return self
 
+    @staticmethod
+    def get_pad(shape, up_to=None, mult_of=None, dims=(-2, -1), order="physical"):
+        """Calculate the padding needed in `dims` to realize the strategy:
+        either pad until the size is `pad_to` or until the size is a `mult_of` multiple
+        of the original `shape`.
+
+        Args:
+            shape:   (tuple[int]) The shape of the array to be padded.
+            up_to:   (int, tuple[int, int]) The size of the output. If int, then the
+                     the size is the same in each dimension. If tuple, then pads the
+                     input to the corresponding size in each dimension separately.
+            mult_of: (int, tuple[int, int]) The size of the output. If int, then pads the input with that
+                     multiple of size in each dimension. If tuple, then pads the input
+                     with the corresponding multiple of size in each dimension separately.
+            dims:    (tuple[int], optional) The dimensions to pad. Defaults to (-2, -1).
+            order:   (str, "physical" or "torch") Order of the paddings in the tuple. "torch"
+                     padding follows PyTorch convention where ordering begins from the last dimension,
+                     physical ordering begins follows the ordering in the dims argument.
+
+        """
+        if up_to is not None:
+            pad = tuple()
+            for i, dim in enumerate(dims):
+                # calculate how much padding on both sides is needed to get the desired shape
+                a, reminder = divmod(up_to[i] - shape[dim], 2)
+                pad += (
+                    a,
+                    a + reminder,
+                )
+        elif mult_of is not None:
+            pad = tuple(
+                # calculate how much padding on both sides is needed to get the desired shape
+                shape[dims[torch.div(i, 2, rounding_mode="floor")]] * n
+                for i, n in enumerate(mult_of)
+            )
+        return pad
+
     def get_slice_into_original(self, shape):
+        """Construct a slice into the unpadded portion of the array, given its new shape."""
         sl = [slice(None) for _ in shape]
         for i, dim in enumerate(self.dims):
             sl[dim] = self.original_slices[i]
@@ -519,7 +556,7 @@ class Padder(Step):
         original_slice = tuple()
         padded_shape = list(original_shape)
 
-        # Iterate through the dimensions to pad and extract the amount padded and a boundaries of the original array in the padded array
+        # Iterate through the dimensions to pad and extract the amount padded and boundaries of the original array in the padded array
         for i, d in enumerate(dims):
             a = pad[2 * i]
             b = pad[2 * i + 1]
