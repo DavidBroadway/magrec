@@ -528,8 +528,6 @@ class Prototype(BaseEstimator):
                 out.update((key + "__" + k, val) for k, val in deep_items)
             out[key] = value
         return out
-    
-class JJChenPrototype()
 
 
 class HistoryRecorder(Callback):

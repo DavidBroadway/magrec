@@ -506,11 +506,35 @@ class Padder(Step):
             )
         return pad
 
-    def get_slice_into_original(self, shape):
-        """Construct a slice into the unpadded portion of the array, given its new shape."""
-        sl = [slice(None) for _ in shape]
-        for i, dim in enumerate(self.dims):
-            sl[dim] = self.original_slices[i]
+    @staticmethod
+    def get_slice_into_original(self, dims, original_slices):
+        """Construct a slice into the unpadded portion of the array by putting the original slices
+        into the corresponding positions specified in `dims`."""
+
+        if all(d < 0 for d in dims):
+            negative = True
+        elif all(d >= 0 for d in dims):
+            negative = False
+        else:
+            raise ValueError(
+                "Dimensions specification must be consistent, i.e. all negative or all positive, "
+                "to specify the index of dimensions either from the beginning, or from the end."
+            )
+
+        n_dims = max(dims) - min(dims) + 1  # expected number of dimensions
+        # e.g. if dims = (-2, -1), then n_dims = 2, if dims = (-3, -1), then n_dims = 3,
+        # meaning that there is at least 3 dimensions expected in the padded array
+
+        sl = [slice(None)] * n_dims
+        for i, dim in enumerate(dims):
+            sl[dim] = original_slices[i]
+
+        # handle not-padded dimensions at the beginning of the end of the arra
+        if negative:
+            sl = [...] + sl  # append ellipsis at the beginning
+        else:
+            sl = sl + [...]  # append ellipsis at the end
+
         return sl
 
     def transform(self, X, y=None, **params):
@@ -519,7 +543,9 @@ class Padder(Step):
         # through it twice on the .backward() call
         Y = self.X_.detach().clone()
         # use the slice to asssign the original array to the values inside the padded array
-        sl = self.get_slice_into_original(shape=X.shape)
+        sl = self.get_slice_into_original(
+            dims=self.dims, original_slices=self.original_slices
+        )
         Y[sl] = X
         return Y
 
@@ -532,7 +558,9 @@ class Padder(Step):
         dimensions. Thus we slice into `X` by taking all the same except the
         `original_slices` at self.dims.
         """
-        sl = self.get_slice_into_original(shape=X.shape)
+        sl = self.get_slice_into_original(
+            dims=self.dims, original_slices=self.original_slices
+        )
         return X[sl]
 
     def test_transform_inverse_transform():
