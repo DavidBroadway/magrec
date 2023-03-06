@@ -75,16 +75,21 @@ see :doc:`numpy/fft` and :doc:`torch/fft`.
 import torch
 from magrec.prop.constants import twopi
 
-_norm = 'backward'
+_norm = "backward"
+
+# TODO: Add cyclic and linear Fourier transform switches, the latter padding the signal
+# with zeros obligatory.
 
 
 class FourierTransform2d(object):
-
-    def __init__(self,
-                 grid_shape: tuple,
-                 dx: float,
-                 dy: float,
-                 real_signal: bool = True):
+    def __init__(
+        self,
+        grid_shape: tuple,
+        dx: float,
+        dy: float,
+        real_signal: bool = True,
+        type="cyclic",
+    ):
         """Creates conjugate grids in the physical and Fourier domains and
         calculates the Fourier transform of a 3d tensor along the first 2 spatial dimensions,
         that is does the transformation (…, x, y, z) → (…, k_x, k_y, z).
@@ -96,23 +101,38 @@ class FourierTransform2d(object):
             real_signal (bool):      whether the signal is real-valued (default True)
                                      if True, Fourier transform is computed only on positive k_y, since
                                      for real signals, FFT[f](k) is the conjugate of FFT[f](-k)
+            type (str):              type of the Fourier transform, either `cyclic` or `linear`. DFT is
+                                     inherently cyclic, meaning that the signal is considered to be periodic
+                                     with the period equal to the grid size. See Yazhdanian et al (2020), p. 3
+                                     for the discussion. If the transform is `linear`, the grid is doubled in size
+                                     before computing the DFT by padding with zeros.
+
         """
 
         self.dx = dx
         self.dy = dy
         self.real_signal = real_signal
+        self.type = type
 
-        self.kx_vector, self.ky_vector = \
-            self.define_kx_ky_vectors(
-                grid_shape=grid_shape,
-                dx=dx, dy=dy,
-                real_signal=real_signal)
+        if type == "linear":
+            # change the size of the grid by doubling it in each direction
+            grid_shape = tuple(2 * n for n in grid_shape)
+            # prepare a padder that would perform the padding the signal with zeros
+            # it is required to make the inherently cyclic DFT perform as a linear FT
+            padding = tuple()
+            for n in grid_shape[::-1]:
+                a, remainder = divmod(n, 2)
+                padding += (n, n + remainder)
+            
+            self.pad = torch.nn.ConstantPad2d(padding=padding, value=0)
 
-        self.k_matrix = \
-            self.define_k_matrix(
-                kx_vector=self.kx_vector,
-                ky_vector=self.ky_vector
-            )
+        self.kx_vector, self.ky_vector = self.define_kx_ky_vectors(
+            grid_shape=grid_shape, dx=dx, dy=dy, real_signal=real_signal
+        )
+
+        self.k_matrix = self.define_k_matrix(
+            kx_vector=self.kx_vector, ky_vector=self.ky_vector
+        )
 
     def to(self, device):
         """
@@ -125,9 +145,13 @@ class FourierTransform2d(object):
             if torch.cuda.is_available():
                 device = torch.device(device)
             else:
-                raise ValueError('Device {} was requested, which is not available.'.format(device))
+                raise ValueError(
+                    "Device {} was requested, which is not available.".format(device)
+                )
 
-        for attr, name in [(self.__getattribute__(a), a) for a in dir(self) if not a.startswith('__')]:
+        for attr, name in [
+            (self.__getattribute__(a), a) for a in dir(self) if not a.startswith("__")
+        ]:
             if isinstance(attr, torch.Tensor):
                 attr: torch.Tensor
                 attr = attr.to(device=device)
@@ -135,11 +159,10 @@ class FourierTransform2d(object):
 
         return self
 
-
-
     @staticmethod
-    def define_kx_ky_vectors(grid_shape: tuple = None, dx: float = 1.0,
-                             dy: float = 1.0, real_signal=True) -> (torch.Tensor, torch.Tensor):
+    def define_kx_ky_vectors(
+        grid_shape: tuple = None, dx: float = 1.0, dy: float = 1.0, real_signal=True
+    ) -> (torch.Tensor, torch.Tensor):
         """
         Computes the kx and ky vectors in the Fourier space for a grid with shape
         `shape` and grid spacing `dx` and `dy`, in inverse units of length.
@@ -160,7 +183,7 @@ class FourierTransform2d(object):
             Δk Δx = 2π / n.
 
         Args:
-            grid_shape:          shape of the grid in the physical domain
+            grid_shape:     shape of the grid in the physical domain
             dx:             in [mm]. The sampling length scale in x-direction.
                             The spacing between individual samples of the FFT input.
                             The default assumes unit spacing, dividing that
@@ -209,6 +232,13 @@ class FourierTransform2d(object):
         dx = self.dx
         dy = self.dy
 
+        if self.type == "linear":
+            a, reminder_a = divmod(x.shape[-1], 2)
+            b, reminder_b = divmod(x.shape[-2], 2)
+            x = torch.nn.functional.pad(
+                x, (a, a + reminder_a, b, b + reminder_b), mode="constant", value=0.0
+            )
+
         if self.real_signal:
             # multiply by dx and dy to get the correct physical units
             return torch.fft.rfft2(x, dim=dim, norm=_norm) * (dx * dy)
@@ -233,7 +263,34 @@ class FourierTransform2d(object):
 
         if self.real_signal:
             # divide by dx and dy to get the correct physical units
-            return torch.fft.irfft2(x, dim=dim, norm=_norm) / (dx * dy)
+            Y = torch.fft.irfft2(x, dim=dim, norm=_norm) / (dx * dy)
         else:
-            return torch.fft.ifft2(x, dim=dim, norm=_norm) / (dx * dy)
+            Y = torch.fft.ifft2(x, dim=dim, norm=_norm) / (dx * dy)
 
+        # if FFT is linear, then the backward transformation will be a larger space
+        # then the original input tensor, so we need to crop it
+        if self.type == "linear":
+            # guaranteed to be even if Y is obtained from a `linear` FFT
+            #                         |
+            #                     {   V            }
+            a, reminder_a = divmod(Y.shape[-2] // 2, 2)
+            b, reminder_b = divmod(Y.shape[-1] // 2, 2)
+            Y = Y[..., a : -a - reminder_a, b : -b - reminder_b]
+
+        return Y
+
+    @staticmethod
+    def test_fourier_transform2d():
+        x = torch.rand(2, 3, 4, 5)
+        ft = FourierTransform2d(
+            grid_shape=(4, 5),
+            dx=1.0,
+            dy=1.0,
+            real_signal=True,
+            type="linear",
+        )
+        xf = ft.forward(x, dim=(-2, -1))
+        if torch.allclose(x, ft.backward(xf, dim=(-2, -1))):
+            print("Cyclic Fourier transform is working correctly")
+        else:
+            raise ValueError("Cyclic Fourier transform is not working correctly")
