@@ -249,7 +249,7 @@ class BnCNN(torch.nn.Module):
         super().__init__()
 
         M = Size
-        
+
         self.n_channels_in = n_channels_in
         self.n_channels_out = n_channels_out
 
@@ -337,3 +337,40 @@ class BnCNN(torch.nn.Module):
         conv7 = self.conv7(conv6)
 
         return conv7
+
+
+class FCCNN(torch.nn.Module):
+    def __init__(self, n_channels_in, n_channels_out):
+        super().__init__()
+        self.n_channels_in = n_channels_in
+        self.n_channels_out = n_channels_out
+        self.conv1 = nn.Conv2d(
+            in_channels=n_channels_in, out_channels=32, kernel_size=3, padding=1
+        )
+        self.conv2 = nn.Conv2d(
+            in_channels=32, out_channels=64, kernel_size=3, padding=1
+        )
+        self.conv3 = nn.Conv2d(
+            in_channels=64, out_channels=64, kernel_size=3, padding=1
+        )
+        self.conv4 = nn.Conv2d(
+            in_channels=64, out_channels=64, kernel_size=3, padding=1
+        )
+        self.conv5 = nn.Conv2d(
+            in_channels=64, out_channels=n_channels_out, kernel_size=3, padding=1
+        )
+        self.conv6 = nn.Conv2d(
+            in_channels=n_channels_out,
+            out_channels=n_channels_out,
+            kernel_size=3,
+            padding=1,
+        )
+
+    def forward(self, x):
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = F.relu(self.conv4(x))
+        x = F.relu(self.conv5(x))
+        x = self.conv6(x)
+        return x
