@@ -237,7 +237,7 @@ class Data(object):
         if len(self.target.size()) > 2:
             range = torch.max(torch.abs(self.target*1e3))
             size = self.target.size()
-            extent = [0, size[0]*self.dx, 0, size[1]*self.dy]
+            extent = [0, size[1]*self.dx, 0, size[0]*self.dy]
             plt.figure()
             plt.imshow(self.target*1e3, cmap="bwr", extent = extent, vmin=-range, vmax=range)
             cb = plt.colorbar()
@@ -250,7 +250,7 @@ class Data(object):
 
             range = torch.max(torch.abs(self.target*1e3))
             size = self.target.size()
-            extent = [0, size[0]*self.dx, 0, size[1]*self.dy]
+            extent = [0, size[1]*self.dx, 0, size[0]*self.dy]
             plt.figure()
             plt.imshow(self.target*1e3, cmap="bwr", extent = extent, vmin=-range, vmax=range)
             cb = plt.colorbar()

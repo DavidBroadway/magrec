@@ -10,6 +10,7 @@ import torch
 
 from magrec.transformation.generic import GenericTranformation
 from magrec.transformation.Kernel import HarmonicFunctionComponentsKernel
+from magrec.image_processing.Padding import Padder
 
 
 class MagneticFields(GenericTranformation):
@@ -19,6 +20,7 @@ class MagneticFields(GenericTranformation):
             data:   data class
         """
         super().__init__(dataset)
+        self.Padder = Padder()
 
         # Define the kernal for the transformation
         self.kernel = HarmonicFunctionComponentsKernel.define_kernel_matrix(
@@ -38,6 +40,7 @@ class MagneticFields(GenericTranformation):
         Returns:
             sensor:     sensor, shape (3, n_sensor_theta, n_sensor_phi)
         """
+
         b_fourier = self.ft.forward(self.dataset.target, dim=(-2, -1))
         b = torch.einsum("jkl,kl-> jkl", self.kernel, b_fourier)
         self.bxyz = self.ft.backward(b, dim=(-2, -1))

@@ -10,7 +10,8 @@ import torch
 import numpy as np
 
 from magrec.transformation.generic import GenericTranformation
-from magrec.transformation.Kernel import CurrentLayerFourierKernel2d
+
+from magrec.transformation.Kernel import CurrentLayerFourierKernel2d, MagneticFieldToCurrentInversion2d
 from magrec.transformation.Fourier import FourierTransform2d
 
 
@@ -29,7 +30,7 @@ class Bxyz2Jxy(GenericTranformation):
             height:             height above the magnetization layer at which to evaluate the magnetic field, in [mm]
             layer_thickness:    thickness of the magnetization layer, in [mm]
         """
-        self.ft = FourierTransform2d(grid_shape=dataset.target.size(), dx=dataset.dx, dy=dataset.dy, real_signal=True)
+        self.ft = FourierTransform2d(grid_shape=dataset.target.size(), dx=dataset.dx, dy=dataset.dy, real_signal=False)
         self.s_theta = np.deg2rad(dataset.sensor_theta)
         self.s_phi = np.deg2rad(dataset.sensor_phi)
 
@@ -40,20 +41,25 @@ class Bxyz2Jxy(GenericTranformation):
 
         self.dataset = dataset
 
-        self.j_to_b_matrix = CurrentLayerFourierKernel2d\
-            .define_kernel_matrix(
-                self.ft.kx_vector, 
-                self.ft.ky_vector, 
-                dataset.height, 
-                dataset.layer_thickness)
-        
-        self.b_to_j_matrix = 1/self.j_to_b_matrix
+        # self.j_to_b_matrix = CurrentLayerFourierKernel2d\
+        #     .define_kernel_matrix(
+        #         self.ft.kx_vector, 
+        #         self.ft.ky_vector, 
+        #         dataset.height, 
+        #         dataset.layer_thickness)
+
+        self.b_to_j_matrix = MagneticFieldToCurrentInversion2d.define_kernel_matrix(
+            self.ft.kx_vector, 
+            self.ft.ky_vector, 
+            height=dataset.height, 
+            layer_thickness=dataset.layer_thickness
+        )
         # set the Bz term to zero as we don't need it
-        self.b_to_j_matrix[2, 0, :, :] = 0 
-        self.b_to_j_matrix[2, 1, :, :] = 0 
+        # self.b_to_j_matrix[2, 0, :, :] = 0 
+        # self.b_to_j_matrix[2, 1, :, :] = 0 
 
         # set the DC component to zero
-        self.b_to_j_matrix[0,0] = 0
+        # self.b_to_j_matrix[0,0] = 0
 
         # # If there exists any nans set them to zero
         self.b_to_j_matrix[self.b_to_j_matrix != self.b_to_j_matrix] = 0
@@ -70,10 +76,10 @@ class Bxyz2Jxy(GenericTranformation):
 
 
     def transform(self):
-        B = self.dataset.target
+        B = self.dataset.target[0:2,...]
 
         b = self.ft.forward(B, dim=(-2, -1))
         b[0,0] = 0
         j = self.get_j_from_b(b)
         J = self.ft.backward(j, dim=(-2, -1))
-        return J
+        return J.real

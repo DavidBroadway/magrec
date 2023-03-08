@@ -40,6 +40,7 @@ class FCNN(object):
         self.model.prepareTargetData()    
         training_target = self.model.training_target
 
+
         # define the device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

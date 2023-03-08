@@ -66,12 +66,12 @@ class Jxy2Bsensor(GenericTranformation):
             .define_kernel_matrix(
                 self.ft.kx_vector, 
                 self.ft.ky_vector, 
-                dataset.height, 
-                dataset.layer_thickness)
+                height= dataset.height, 
+                layer_thickness=dataset.layer_thickness)
 
 
         # remove the 0 componenet
-        self.j_to_b_matrix[0,0] = 0
+        # self.j_to_b_matrix[0,0] = 0
         # If there exists any nans set them to zero
         self.j_to_b_matrix[self.j_to_b_matrix != self.j_to_b_matrix] = 0
 
@@ -79,8 +79,7 @@ class Jxy2Bsensor(GenericTranformation):
         self.j_to_b_matrix = torch.einsum("ijkl,i->jkl", self.j_to_b_matrix, self.sensor_dir)
 
         self.transformation = self.j_to_b_matrix
-        # remove the 0 componenet
-        self.transformation[0, 0] = 0
+        # self.transformation[0,0] = 0
         # If there exists any nans set them to zero
         self.transformation[self.transformation != self.transformation] = 0
 
@@ -94,7 +93,7 @@ class Jxy2Bsensor(GenericTranformation):
         j = self.ft.forward(J, dim=(-2, -1))
         # Get the magnetic field from the current density
         b = torch.einsum("jkl,...jkl->...kl", self.j_to_b_matrix, j)
-        b[0,0] = 0 # remove DC componenet
+        # b[0,0] = 0 # remove DC componenet
         B = self.ft.backward(b, dim=(-2, -1))
 
         B = self.Padder.remove_padding2d(B)

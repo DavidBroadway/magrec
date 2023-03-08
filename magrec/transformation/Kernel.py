@@ -171,7 +171,7 @@ class UniformLayerFactor2d(object):
             layer_thickness (float):    thickness of the layer
         """
         depth_factor = (
-                torch.exp(-k_matrix * height)
+                torch.exp(-k_matrix * height) * torch.exp(-k_matrix * layer_thickness)
                 / k_matrix
                 * (torch.exp(-k_matrix * layer_thickness)-1)
         )
@@ -185,7 +185,7 @@ class UniformLayerFactor2d(object):
                  depth_factor = (
                  torch.exp(-k_matrix * height))
 
-        depth_factor[0, 0] = 0
+        depth_factor[0, 0] = layer_thickness
         return depth_factor
 
 
@@ -306,8 +306,8 @@ class MagneticFieldToCurrentInversion2d(object):
 
         M = torch.zeros((2, 2,) + k_matrix.shape, dtype=torch.complex64,)
 
-        M[0, 1, :, :] = -torch.ones_like(k_matrix)
-        M[1, 0, :, :] =  torch.ones_like(k_matrix)
+        M[0, 1, :, :] = torch.ones_like(k_matrix)
+        M[1, 0, :, :] = -torch.ones_like(k_matrix)
 
         depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
         # Temporary set to avoid division by zero
