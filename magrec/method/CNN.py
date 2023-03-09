@@ -135,9 +135,13 @@ class CNN(object):
 
                 # Compute the loss
                 loss = self.model.calculate_loss(b, self.img_comp, loss_weight = self.loss_weight)
+                loss_std = torch.std(outputs, dim=(-2, -1)).sum()
+                # a scaling
+                alpha = 0.05
+                total_loss = loss + alpha * loss_std
 
                 # Backpropagate the loss
-                loss.backward()
+                total_loss.backward()
 
                 # Update the weights and biases
                 self.optimizer.step()

@@ -31,7 +31,7 @@ class Jxy(GenericModel):
     def transform(self, nn_output):
         return self.magClass.transform(nn_output)
 
-    def calculate_loss(self, b, target, loss_weight = None):
+    def calculate_loss(self, b, target, nn_output = None, loss_weight = None):
         """
         Args:
             nn_output: The output of the neural network
@@ -45,6 +45,7 @@ class Jxy(GenericModel):
             # b = b* loss_weight
             b = torch.einsum("...kl,kl->...kl", b, loss_weight)
             target = torch.einsum("...kl,kl->...kl", target, loss_weight)
+            if nn_output:
 
         return self.loss_function(b, target)
 

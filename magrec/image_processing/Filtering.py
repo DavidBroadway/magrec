@@ -89,7 +89,7 @@ class DataFiltering(object):
         # Remove wavelengths that are shorter than the given wavelength
         filter[(self.ft.k_matrix < (2* np.pi / wavelength))] = 0
         # Apply the filter
-        new_data = data*filter
+        new_data = fourier_data*filter
         # Transform back to real space
         self.data_filtered = self.ft.backward(new_data, dim=(-2, -1))
         if plot_results:
