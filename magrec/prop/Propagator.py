@@ -424,6 +424,8 @@ class CurrentPropagator2d(object):
         j = self.ft.forward(J, dim=(-2, -1))
         b = self.get_b_from_j(j)
         B = self.ft.backward(b, dim=(-2, -1))
+        if not self.ft.real_signal:
+            B = B.real
         return B
 
 

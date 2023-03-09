@@ -169,10 +169,7 @@ class Prototype(BaseEstimator):
         optimizer = self.optimizer
 
         B = self.pipe.propagate(B, visual=False)
-
-        # cropped version of B containing only the region of interest
-        narrow_to_target = self.pipe["padded_B_NV"].inverse_transform
-        B_target = narrow_to_target(B)
+        B_target = B
 
         self.net.train(True)
 
@@ -195,20 +192,26 @@ class Prototype(BaseEstimator):
                 optimizer.zero_grad()
                 J = self.net(B)
                 B_pred = self.model.propagate(J, visual=False)
-                B_pred = narrow_to_target(B_pred)
+                # B_pred = narrow_to_target(B_pred)
 
-                loss = self.criterion(B_pred, B_target)
-                
+                field_loss = self.criterion(B_pred, B_target)
+                # div_J = FourierDivergence2d()(J)
+                # div_loss = self.criterion(div_J * 1e2, torch.zeros_like(div_J))
+
+                loss = field_loss
+
                 loss.backward()
                 optimizer.step()
 
                 step = {
                     "loss": loss,
+                    "field_loss": field_loss,
                     "y_pred": B_pred,
                     "training": True,
                 }
 
                 self.history.record_batch("train_loss", step["loss"].item())
+                # self.history.record("field_loss", step["field_loss"].item())
                 self.history.record_batch("train_batch_size", 1)
                 self.notify("on_batch_end", **step)
                 self.notify("on_epoch_end")

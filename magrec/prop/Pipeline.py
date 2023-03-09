@@ -234,12 +234,12 @@ class Function(Step):
 
 
 class FourierDivergence2d(Step):
-    """Calculates divergence of a 2d fsignal in Fourier space.
+    """Calculates divergence of a 2d signal in Fourier space.
 
     Implements the formula:
 
     .. math::
-        F[∇•X] = i k_x F[X] + i k_y F[X]
+        F[∇•J(x,y)] = i k_x F[J_x] + i k_y F[J_y]
 
     where F is Fourier transform, k_x and k_y are spatial frequencies.
     Note the sign, which is due to the defintion of the Fourier transform
@@ -276,7 +276,70 @@ class FourierDivergence2d(Step):
             1j * Xf[..., 0, :, :] * self.ft.kx_vector[:, None]
             + 1j * Xf[..., 1, :, :] * self.ft.ky_vector[None, :]
         )
-        Y = self.ft.backward(Yf, dim=self.dim)
+        Y = self.ft.backward(Yf, dim=self.dim).real
+
+        # return the dimension along which the divergence was computed
+        if self.keep_dim:
+            return Y.unsqueeze(-3)
+
+        return Y
+    
+class FourierCurl3d(Step):
+    """Calculates curl of a 3d signal in Fourier space.
+
+    Implements the formula:
+
+    .. math::
+
+                         ┌─                            ─┐    
+                         │ i k_y F[g_z] - i k_z F[g_y]  │    
+                         │                              │
+        F[∇ × g(x,y)] =  │ i k_z F[g_x] - i k_x F[g_z]  │
+                         │                              │
+                         │ i k_x F[g_y] - i k_y F[g_x]  │
+                         └─                            ─┘
+        
+    where F is Fourier transform, k_x and k_y, k_z are spatial frequencies.
+    Note the sign, which is due to the defintion of the Fourier transform
+    adopted here in :class:`FourierTransform2d`. 
+    
+    This component can be used to construct a field J such that ∇·J = 0, by
+    letting J = ∇ × g for a function g. 
+    
+    To constrain J to 2d, set the third component to zero by toggling `force_2d = True`.
+
+    """
+
+    def __init__(self, force_2d=False):
+        super().__init__()
+        self.real_signal = False
+        self.force_2d = force_2d
+        # dimensions at which divergence is computed
+        self.dim = (-3, -2, -1)
+        pass
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(real_signal={self.real_signal})"
+
+    def fit(self, X, y=None, **fit_params):
+        if len(X.shape) < 3:
+            raise ValueError(
+                "X must have number of dimensions (..., components, height, width) > 3, "
+                "got {}".format(len(X.shape))
+            )
+
+        self.ft = FourierTransform2d(
+            grid_shape=X.shape, dx=1, dy=1, real_signal=self.real_signal, type="linear"
+        )
+        return self
+
+    def transform(self, X, y=None, **fit_params):
+        Xf = self.ft.forward(X, dim=self.dim)
+        Yf = (
+            1j * Xf[..., 0, :, :] * self.ft.kx_vector[:, None]
+            + 1j * Xf[..., 1, :, :] * self.ft.ky_vector[None, :]
+        )
+        Y = self.ft.backward(Yf, dim=self.dim).real
 
         # return the dimension along which the divergence was computed
         if self.keep_dim:
