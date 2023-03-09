@@ -182,6 +182,7 @@ class Prototype(BaseEstimator):
         # 3. add an additional loss function that enforces continuity of the current density
 
         try:
+            self.notify("on_train_begin")
             for _ in range(epochs):
                 # start history for the current epoch
                 self.history.new_epoch()
