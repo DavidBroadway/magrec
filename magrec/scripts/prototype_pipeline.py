@@ -238,6 +238,11 @@ class Prototype(BaseEstimator):
         self.initialized = True
         return self
 
+    # a quick fix to make skorch happy
+    @property
+    def optimizer_(self):
+        return self.optimizer
+
     def notify(self, method_name, **cb_kwargs):
         """Call the callback method specified in `method_name` with
         parameters specified in `cb_kwargs`.
