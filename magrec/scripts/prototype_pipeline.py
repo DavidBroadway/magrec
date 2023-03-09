@@ -1,7 +1,12 @@
 from collections import OrderedDict, defaultdict
+from functools import wraps
 import inspect
 import json
+import warnings
+import weakref
 
+
+import skorch
 from skorch import History
 from skorch.utils import open_file_like
 from skorch.callbacks import PrintLog, PassthroughScoring, EpochTimer, Callback
@@ -199,6 +204,7 @@ class Prototype(BaseEstimator):
                 step = {
                     "loss": loss,
                     "y_pred": B_pred,
+                    "training": True,
                 }
 
                 self.history.record_batch("train_loss", step["loss"].item())
@@ -312,12 +318,21 @@ class Prototype(BaseEstimator):
             pass
 
         # check if callbacks have name or assign one
-        for item in (
-            # merge existing callbacks with default callbacks, use empty odict if
-            # callbacks is None
-            self.default_callbacks
-            | (self.callbacks or OrderedDict())
-        ).items():
+        if self.callbacks is None:
+            items = self.default_callbacks.items()
+        elif isinstance(self.callbacks, OrderedDict):
+            # merge existing callbacks with default callbacks
+            items = (self.default_callbacks | self.callbacks).items()
+        elif isinstance(self.callbacks, list):
+            items = list(self.default_callbacks.items()) + self.callbacks
+        elif isinstance(self.callbacks, tuple):
+            items = tuple(self.default_callbacks.items()) + self.callbacks
+        else:
+            raise ValueError(
+                "callbacks must be an instance of "
+                "OrderedDict, list, or tuple, but got {}".format(type(self.callbacks))
+            )
+        for item in items:
             if isinstance(item, (tuple, list)):
                 name, cb = item
                 names_set_by_user.add(name)
@@ -584,3 +599,164 @@ class PrintLogEvery(PrintLog):
         super().on_train_end(net, **kwargs)
         self.first_iteration_ = True
         pass
+
+
+class AdjustLROnLoss(torch.optim.lr_scheduler._LRScheduler):
+    def __init__(
+        self, optimizer, loss_vals, lr_vals, last_epoch=-1, verbose=False, **kwargs
+    ):
+        if len(loss_vals) + 1 != len(lr_vals):
+            raise ValueError(
+                "Number of loss value points + 1 and learning rates must be the same"
+            )
+        self.loss_vals = loss_vals
+        self.lr_vals = lr_vals
+        self.optimizer = optimizer
+
+        # Attach optimizer
+        if not isinstance(optimizer, torch.optim.Optimizer):
+            raise TypeError("{} is not an Optimizer".format(type(optimizer).__name__))
+        self.optimizer = optimizer
+
+        # Initialize epoch and base learning rates
+        if last_epoch == -1:
+            for group in optimizer.param_groups:
+                group.setdefault("initial_lr", group["lr"])
+        else:
+            for i, group in enumerate(optimizer.param_groups):
+                if "initial_lr" not in group:
+                    raise KeyError(
+                        "param 'initial_lr' is not specified "
+                        "in param_groups[{}] when resuming an optimizer".format(i)
+                    )
+        self.base_lrs = [group["initial_lr"] for group in optimizer.param_groups]
+        self.last_epoch = last_epoch
+
+        # Following https://github.com/pytorch/pytorch/issues/20124
+        # We would like to ensure that `lr_scheduler.step()` is called after
+        # `optimizer.step()`
+        def with_counter(method):
+            if getattr(method, "_with_counter", False):
+                # `optimizer.step()` has already been replaced, return.
+                return method
+
+            # Keep a weak reference to the optimizer instance to prevent
+            # cyclic references.
+            instance_ref = weakref.ref(method.__self__)
+            # Get the unbound method for the same purpose.
+            func = method.__func__
+            cls = instance_ref().__class__
+            del method
+
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                instance = instance_ref()
+                instance._step_count += 1
+                wrapped = func.__get__(instance, cls)
+                return wrapped(*args, **kwargs)
+
+            # Note that the returned function here is no longer a bound method,
+            # so attributes like `__func__` and `__self__` no longer exist.
+            wrapper._with_counter = True
+            return wrapper
+
+        self.optimizer.step = with_counter(self.optimizer.step)
+        self.optimizer._step_count = 0
+        self._step_count = 0
+        self.verbose = verbose
+
+    def get_last_lr(self):
+        """Return last computed learning rate by current scheduler."""
+        return self._last_lr
+
+    def step(self, epoch, metrics):
+        # Raise a warning if old pattern is detected
+        # https://github.com/pytorch/pytorch/issues/20124
+        if self._step_count == 1:
+            if not hasattr(self.optimizer.step, "_with_counter"):
+                warnings.warn(
+                    "Seems like `optimizer.step()` has been overridden after learning rate scheduler "
+                    "initialization. Please, make sure to call `optimizer.step()` before "
+                    "`lr_scheduler.step()`. See more details at "
+                    "https://pytorch.org/docs/stable/optim.html#how-to-adjust-learning-rate",
+                    UserWarning,
+                )
+
+            # Just check if there were two first lr_scheduler.step() calls before optimizer.step()
+            elif self.optimizer._step_count < 1:
+                warnings.warn(
+                    "Detected call of `lr_scheduler.step()` before `optimizer.step()`. "
+                    "In PyTorch 1.1.0 and later, you should call them in the opposite order: "
+                    "`optimizer.step()` before `lr_scheduler.step()`.  Failure to do this "
+                    "will result in PyTorch skipping the first value of the learning rate schedule. "
+                    "See more details at "
+                    "https://pytorch.org/docs/stable/optim.html#how-to-adjust-learning-rate",
+                    UserWarning,
+                )
+        self._step_count += 1
+
+        # convert `metrics` to float, in case it's a zero-dim Tensor
+        metrics = float(metrics)
+        for bound, lr in zip(self.loss_vals, self.lr_vals[:-1]):
+            if metrics > bound:
+                values = [lr] * len(self.optimizer.param_groups)
+                break
+
+        # if we didn't find a bound, use the last lr
+        if metrics <= self.loss_vals[-1]:
+            values = [lr] * len(self.optimizer.param_groups)
+
+        self.set_lr(epoch, values)
+
+    def set_lr(self, epoch, values):
+        self._last_lr = [group["lr"] for group in self.optimizer.param_groups]
+
+        for i, data in enumerate(zip(self.optimizer.param_groups, values)):
+            param_group, lr = data
+            param_group["lr"] = lr
+            if self.verbose:
+                epoch_str = ("%.2f" if isinstance(epoch, float) else "%.5d") % epoch
+                print(
+                    "Epoch {}: reducing learning rate"
+                    " of group {} to {:.4e}.".format(epoch_str, i, lr)
+                )
+
+
+class LRScheduler(skorch.callbacks.LRScheduler):
+    def on_epoch_end(self, net, **kwargs):
+        """Overwrite `on_epoch_end` to support AdjustLROnLoss scheduler."""
+        if self.step_every != "epoch":
+            return
+        if isinstance(self.lr_scheduler_, AdjustLROnLoss):
+            score = net.history[:, "train_loss"][-1]
+            epoch = net.history[-1, "epoch"]
+            self.lr_scheduler_.step(epoch, score)
+
+            if self.event_name is not None and hasattr(
+                self.lr_scheduler_, "get_last_lr"
+            ):
+                net.history.record(self.event_name, self.lr_scheduler_.get_last_lr()[0])
+                
+        # ReduceLROnPlateau does not expose the current lr so it can't be recorded
+        elif isinstance(
+            self.lr_scheduler_, skorch.callbacks.lr_scheduler.ReduceLROnPlateau
+        ):
+            if callable(self.monitor):
+                score = self.monitor(net)
+            else:
+                try:
+                    score = net.history[-1, self.monitor]
+                except KeyError as e:
+                    raise ValueError(
+                        f"'{self.monitor}' was not found in history. A "
+                        f"Scoring callback with name='{self.monitor}' "
+                        "should be placed before the LRScheduler callback"
+                    ) from e
+
+            self.lr_scheduler_.step(score)
+        else:
+            if self.event_name is not None and hasattr(
+                self.lr_scheduler_, "get_last_lr"
+            ):
+                net.history.record(self.event_name, self.lr_scheduler_.get_last_lr()[0])
+            self.lr_scheduler_.step()

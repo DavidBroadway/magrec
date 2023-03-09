@@ -457,13 +457,13 @@ class Padder(Step):
         return f"{self.__class__.__name__}(pad_width={self.up_to})"
 
     def fit(self, X, y=None, **fit_params):
-        self.pad = self.get_pad(
+        self.padding = self.get_pad(
             shape=X.shape, up_to=self.up_to, mult_of=self.mult_of, dims=self.dims
         )
 
         self.original_shape = X.shape
         self.padded_shape, self.original_slices = Padder.get_padded_shape_and_slices(
-            self.original_shape, pad=self.pad, dims=self.dims
+            self.original_shape, pad=self.padding, dims=self.dims
         )
 
         self.X_ = torch.zeros(self.padded_shape, dtype=X.dtype, device=X.device)
@@ -507,7 +507,7 @@ class Padder(Step):
         return pad
 
     @staticmethod
-    def get_slice_into_original(self, dims, original_slices):
+    def get_slice_into_original(dims, original_slices):
         """Construct a slice into the unpadded portion of the array by putting the original slices
         into the corresponding positions specified in `dims`."""
 
@@ -543,7 +543,7 @@ class Padder(Step):
         # through it twice on the .backward() call
         Y = self.X_.detach().clone()
         # use the slice to asssign the original array to the values inside the padded array
-        sl = self.get_slice_into_original(
+        sl = Padder.get_slice_into_original(
             dims=self.dims, original_slices=self.original_slices
         )
         Y[sl] = X
