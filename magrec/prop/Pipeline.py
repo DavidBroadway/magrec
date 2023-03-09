@@ -38,6 +38,9 @@ class Step(object):
 
     def fit_transform(self, X, y=None, **fit_params):
         return self.fit(X, y, **fit_params).transform(X)
+    
+    def __call__(self, X, y=None, **params):
+        return self.fit(X, y, **params).transform(X, y, **params)
 
 
 class Pipe(object):
@@ -80,6 +83,9 @@ class Pipe(object):
 
         self.fitted = True
         return self
+    
+    def __call__(self, X, y=None, **params):
+        return self.fit(X, y, **params).transform(X, y, **params)
 
     def get_step_params(self, step_name, **fit_params):
         """Get parameters for a step.
