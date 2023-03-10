@@ -64,7 +64,7 @@ class FCNN(object):
         self.train_loader = DataLoader(self.train_data_cnn)
 
         # Define the optimizer
-        self.optimizer = optim.Adam(self.Net.parameters())
+        self.optimizer = optim.Adam(self.Net.parameters(), lr=0.001, eps=1e-08, weight_decay=0, amsgrad=False)
 
 
     def fit(self, n_epochs=25, print_every_n=10, weight = None):    
@@ -121,7 +121,7 @@ class FCNN(object):
                 b = self.model.transform(outputs)
 
                 # Compute the loss
-                loss = self.model.calculate_loss(b, self.img_comp, loss_weight = self.loss_weight)
+                loss = self.model.calculate_loss(b, self.img_comp, loss_weight = self.loss_weight, nn_output=outputs)
 
                 # Backpropagate the loss
                 loss.backward()

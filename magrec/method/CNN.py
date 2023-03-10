@@ -134,11 +134,11 @@ class CNN(object):
                 b = self.model.transform(outputs)
 
                 # Compute the loss
-                loss = self.model.calculate_loss(b, self.img_comp, loss_weight = self.loss_weight)
-                loss_std = torch.std(outputs, dim=(-2, -1)).sum()
-                # a scaling
-                alpha = 0.05
-                total_loss = loss + alpha * loss_std
+                total_loss = self.model.calculate_loss(b, self.img_comp, nn_output=outputs, loss_weight = self.loss_weight)
+                # loss_std = torch.std(outputs, dim=(-2, -1)).sum()
+                # # a scaling
+                # alpha = 0.05
+                # total_loss = loss + alpha * loss_std
 
                 # Backpropagate the loss
                 total_loss.backward()
@@ -147,7 +147,7 @@ class CNN(object):
                 self.optimizer.step()
 
                 # Keep track of loss at each iteration
-                self.track_loss.append(loss.item())
+                self.track_loss.append(total_loss.item())
 
                 if epoch_n % print_every_n == 0 or epoch_n == 0:
                     print(f'epoch {epoch_n + 1:5d} | loss on last mini-batch: {self.track_loss[-1]: .2e}')
