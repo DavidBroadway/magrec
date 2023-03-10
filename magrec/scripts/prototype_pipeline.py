@@ -25,12 +25,10 @@ from magrec.prop.Pipeline import (
     Union,
 )
 
-
 # write a highly specific code for our specific task, then generalize it
 
 # how we want to use it:
 # J = recon.propagate(B)
-
 
 def params_for(prefix, kwargs):
     """Extract parameters that belong to a given sklearn module prefix from

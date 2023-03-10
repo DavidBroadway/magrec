@@ -16,16 +16,17 @@ def func(mesh: torch.Tensor) -> torch.Tensor:
 
 def model(J, mesh):
     """Prepare synthetic model that takes J and gives some result."""
-    return J
+    return torch.sum(J, dim=-3)
 
-B = func(mesh)
+with torch.no_grad():
+    B = func(mesh)
 
 # Prepare a network to train
 
 # Number of channels (dimensions) in the input image
 n_channels_in = 2
 # Number of channels (dimensions) in the output image
-n_channels_out = 2
+n_channels_out = 2  # same dimensions as J
 
 net = torch.nn.Sequential(
     torch.nn.Conv2d(n_channels_in, 20, 3, 1, 1),
@@ -37,9 +38,6 @@ net = torch.nn.Sequential(
     torch.nn.Conv2d(20, n_channels_out, 3, 1, 1)
     )
 
-print(mesh.shape)
-
-J = net(mesh)
 mse = torch.nn.MSELoss()
 
 def div(J, mesh):
@@ -63,9 +61,10 @@ def loss_fn(J, alpha=1.0):
 # Create a simple optimization loop
 optimizer = torch.optim.Adam(net.parameters(), lr=0.1)
 
-for _ in range(100):
+for i in range(100):
     optimizer.zero_grad()
     J = net(mesh)
     loss = loss_fn(J)
+    print("Loss at step {}: {:.5f}".format(i, loss.item()))
     loss.backward()
     optimizer.step()
