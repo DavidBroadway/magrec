@@ -1,7 +1,7 @@
 import torch
 
-from magrec.prop.Fourier import FourierTransform2d
-from magrec.prop.constants import MU0, twopi
+from magrec.transformation.Fourier import FourierTransform2d
+from magrec.misc.constants import MU0, twopi
 
 
 class CurrentFourierKernel2d(object):
@@ -172,7 +172,7 @@ class UniformLayerFactor2d(object):
             layer_thickness (float):    thickness of the layer
         """
         depth_factor = (
-                torch.exp(-k_matrix * height)
+                torch.exp(-k_matrix * height) * torch.exp(-k_matrix * layer_thickness)
                 / k_matrix
                 * (torch.exp(-k_matrix * layer_thickness)-1)
         )
@@ -186,7 +186,7 @@ class UniformLayerFactor2d(object):
                  depth_factor = (
                  torch.exp(-k_matrix * height))
 
-        depth_factor[0, 0] = 0
+        depth_factor[0, 0] = layer_thickness
         return depth_factor
 
 
