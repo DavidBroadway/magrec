@@ -58,7 +58,7 @@ def load_matlab_simulation(datapath):
     return datadict
 
 
-def load_matlab_data(datapath):
+def load_matlab_data(datapath) -> dict:
     """
     Load a general data set from a .mat file produced by matlab.
     """

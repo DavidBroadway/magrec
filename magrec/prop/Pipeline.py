@@ -1,8 +1,11 @@
+from collections import OrderedDict
 import torch
 
 # anticipate the change of the API in scikit-learn which moves Pipeline and FeatureUnion to sklearn.compose
 from sklearn.utils import Bunch
 import skorch
+
+from sklearn.pipeline import Pipeline
 
 import numpy as np
 
@@ -45,13 +48,22 @@ class Step(object):
 
 class Pipe(object):
     def __init__(self, steps, *, memory=None, verbose=False):
-        # to allow for unnamed steps, see _name_estimators from sklearn.pipeline, for now
-        # we require names for each step
-        self.steps = steps
+        # to allow for unnamed steps, see _name_estimators from sklearn.pipeline, 
+        # for now we require names for each step
+        self.steps: OrderedDict = OrderedDict(steps)
         self.memory = memory
         self.verbose = verbose
         self.fitted = False
 
+    def add_step(self, step_name, step, after=None, before=None):
+        """Add a named step `step` to the pipeline"""
+        if after is not None or before is not None:
+            raise NotImplementedError("Step position specification is not implemented yet. "
+                                      "Use `add_step` method consequentially in order steps need "
+                                      "to be executed.")
+        self.steps.update((step_name, step))
+        return self
+    
     def _iter(self, filter=()):
         """
         Generate (idx, name, trans) tuples from self.steps. Omit those in filter tuple.
@@ -150,6 +162,9 @@ class Pipe(object):
             # Not an int, try get step by name
             return self.named_steps[ind]
         return est
+    
+    def __setitem__(self, ind, value):
+        self.steps[ind] = value
 
     @property
     def named_steps(self):

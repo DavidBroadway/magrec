@@ -5,6 +5,10 @@ import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 from magrec.models.generic_model import GenericModel
+from magrec.prop.Pipeline import FourierDivergence2d
+import torchvision.transforms as T
+
+
 from magrec.transformation.Jxy2Bsensor import Jxy2Bsensor 
 from magrec.image_processing.Padding import Padder
 
@@ -42,6 +46,7 @@ class Jxy(GenericModel):
         """
         # a scaling
         alpha = 0
+        beta = 2
 
         if loss_weight is not None:
             # b = b* loss_weight
@@ -51,6 +56,9 @@ class Jxy(GenericModel):
                 # use the std of the outputs as an additional loss function
                 loss_std = alpha * torch.std(
                     torch.einsum("...kl,kl->...kl", nn_output, loss_weight), dim=(-2, -1)).sum()
+                
+                div = T.CenterCrop((50, 50))(FourierDivergence2d()(nn_output))
+                loss_div = torch.sum(div ** 2)
             else:
                 loss_std = 0
         else:
@@ -59,7 +67,7 @@ class Jxy(GenericModel):
             else:
                 loss_std = 0
 
-        return self.loss_function(b, target) + loss_std
+        return self.loss_function(b, target) + alpha * loss_std + beta * loss_div
 
     def extract_results(self, final_output, final_b, remove_padding = True):
         """
