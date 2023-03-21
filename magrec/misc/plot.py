@@ -74,7 +74,14 @@ def plot_n_components(
     elif isinstance(data, (list, tuple)):
         n_rows = len(data)
         # assume every row has the same number of components
-        n_components = len(data[0])
+        if isinstance(data[0], (list, tuple)):
+            n_components = len(data[0])
+        else:
+            # deal with the case when components are passed as a list of tensors
+            n_components = len(data)
+            n_rows = 1
+            data = torch.stack(data, dim=0).unsqueeze(0)
+            
         # when list of tuple is passed, it is ([nx, ny], [nx, ny],…) maps, or at least we cannot say better for now
         # it could happen that a list with shape length 4 is passed: n_maps, n_components, n_x, n_y, but we will not handle it here
     else:
@@ -108,6 +115,8 @@ def plot_n_components(
         else:
             raise ValueError('If `labels` is a string, it must be "no_labels", got {}'.format(labels))
 
+    ## 
+    # Create axes or create a figure here
     if axes is not None:
         assert len(axes) == n_components * n_rows, \
             "There should be enough axes to plot {} components, " \

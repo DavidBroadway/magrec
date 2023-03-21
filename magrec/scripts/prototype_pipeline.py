@@ -4,6 +4,7 @@ import inspect
 import json
 import warnings
 import weakref
+from matplotlib import pyplot as plt
 
 
 import skorch
@@ -29,6 +30,7 @@ from magrec.prop.Pipeline import (
 
 # how we want to use it:
 # J = recon.propagate(B)
+
 
 def params_for(prefix, kwargs):
     """Extract parameters that belong to a given sklearn module prefix from
@@ -551,6 +553,39 @@ class Prototype(BaseEstimator):
             out[key] = value
         return out
 
+    def plot_loss(self, epochs: int | slice=None):
+        fig = plt.figure(clear=True)
+        ax = fig.subplots()
+        
+        if isinstance(epochs, int):
+            epochs = slice(epochs)
+        elif isinstance(epochs, tuple):
+            if len(epochs) == 2:
+                epochs = slice(min(epochs), max(epochs))
+        elif epochs is None:
+            epochs = slice(None)
+
+        # Get loss statistics from self.history
+
+        # First determine what loss is tracked
+        # Assume all loss types are indicated at step 0
+        loss_keys = []  # list of loss keys to extract
+        for key in self.history[-2].keys():  # -2 is a dirty hack b/c I haven't 
+            if key.endswith("_loss"):        # figured out structure of history yet
+                loss_keys.append(key)        # -1 can be empty sometimes, 0 as well
+                                             # -2 should work if number of epochs > 2
+        for loss_key in loss_keys:
+            loss = self.history[:, loss_key][epochs]
+            ax.plot(loss, label=loss_key)
+
+        # Set y-axis of the ax to be log scale
+        ax.set_yscale("log", base=10)
+
+        ax.set_ylabel("Loss")
+        ax.set_xlabel("Epoch")
+        ax.legend(loc="best")
+        ax.set_title("Error function evolution")
+
 
 class HistoryRecorder(Callback):
     # Note: history recorder can be a callback when the issue with the order is solved,
@@ -743,7 +778,7 @@ class LRScheduler(skorch.callbacks.LRScheduler):
                 self.lr_scheduler_, "get_last_lr"
             ):
                 net.history.record(self.event_name, self.lr_scheduler_.get_last_lr()[0])
-                
+
         # ReduceLROnPlateau does not expose the current lr so it can't be recorded
         elif isinstance(
             self.lr_scheduler_, skorch.callbacks.lr_scheduler.ReduceLROnPlateau
@@ -767,3 +802,101 @@ class LRScheduler(skorch.callbacks.LRScheduler):
             ):
                 net.history.record(self.event_name, self.lr_scheduler_.get_last_lr()[0])
             self.lr_scheduler_.step()
+
+
+class PrototypeWithDivergence(Prototype):
+    def propagate(self, B, epochs=None, **params):
+        """Propagate X along the reconstruction pipeline.
+
+        For example, if X is a magnetic field B, then the current density J is
+
+        J = self.propagate(B)
+        """
+
+        if params:
+            params = replace_keys_with_aliases(params, self.param_name_aliases)
+            self.initialize(**params)
+
+        epochs = epochs if epochs is not None else self.max_epochs
+        optimizer = self.optimizer
+
+        B = self.pipe.propagate(B, visual=False)
+        B_target = B
+
+        self.net.train(True)
+
+        div = FourierDivergence2d()
+        alpha = 1  # weight for the divergence loss
+        beta = 1   # weight for the field loss
+        threshold = 1e-2  # threshold below which divergence is taken into account
+
+        try:
+            self.notify("on_train_begin")
+            for _ in range(epochs):
+                # start history for the current epoch
+                self.history.new_epoch()
+                self.notify("on_epoch_begin")
+
+                self.history.record("epoch", len(self.history))
+                self.history.new_batch()
+                self.notify("on_batch_begin")
+
+                optimizer.zero_grad()
+                J = self.net(B)
+                B_pred = self.model.propagate(J, visual=False)
+
+                field_loss = beta * self.criterion(B_pred, B_target)
+                div_J = div(J)
+                div_J_target = torch.zeros_like(div_J)
+                div_J_target[20:-20, 0] = 100
+                div_J_target[20:-20, -1] = -100
+                div_loss = alpha * self.criterion(div_J, torch.zeros_like(div_J))
+
+                if field_loss < threshold:
+                    loss = field_loss + div_loss
+                else:
+                    loss = field_loss
+
+                loss.backward()
+                optimizer.step()
+
+                step = {
+                    "loss": loss,
+                    "field_loss": field_loss,
+                    "div_loss": div_loss,
+                    "y_pred": B_pred,
+                    "training": True,
+                }
+                
+                if loss is torch.nan:
+                    raise RuntimeWarning("Loss is NaN at epoch {}".format(len(self.history)))
+                    break
+
+                self.history.record_batch("train_loss", step["loss"].item())
+                self.history.record("field_loss", step["field_loss"].item())
+                self.history.record("div_loss", step["div_loss"].item())
+                self.history.record_batch("train_batch_size", 1)
+                self.notify("on_batch_end", **step)
+                self.notify("on_epoch_end")
+        except KeyboardInterrupt:
+            pass
+
+        self.net.train(False)
+        # obtain J again in non-train mode, useful when epochs == 0
+        # when you'd like to obtain the reconstructed J
+        J = self.net(B)
+        self.notify("on_train_end")
+
+        res = self.model.propagate(J, visual=True)
+        return res
+
+
+# Take B_NV → J in Fourier space
+# J is manipulated to obtain a larger field-of-view, maybe expand it
+# Take J → B back but of a larger field-of-view
+# Reconstruct B_NV and B_x, B_y, B_z from B and compare with original B_NV
+
+# Another PINN to reconstruct B_x, B_y, B_z
+# Good datastructure 
+# Try removing artifacts by reconstructing B_z, and then from extended B_z, reconstruct
+# B_x, B_y and obtain and compare B_NV in the original field of view. 

@@ -104,7 +104,7 @@ class CNN(object):
 
         # Set the network to training mode
         self.Net.train()
-
+        
         # Iterate for each epoch
         for epoch_n in range(n_epochs):
             # Note that the training data is shuffled every epoch by the DataLoader

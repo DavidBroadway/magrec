@@ -75,11 +75,11 @@ class Pipe(object):
             f if callable(f) else partial(fnmatch.fnmatch, pat=f) for f in filter
         )
 
-        for idx, (name, step) in enumerate(self.steps):
+        for idx, (name, step) in enumerate(self.steps.items()):
 
             # skip if any of the filters is matched
             skip = any(
-                filter_fn(name) or filter_fn(step.__class__.__name__.lower())
+                filter_fn(name) or filter_fn(step.__class__.__name__.lower()) or filter_fn(str(step))
                 for filter_fn in filter_fns
             )
 
@@ -157,7 +157,7 @@ class Pipe(object):
                 self.steps[ind], memory=self.memory, verbose=self.verbose
             )
         try:
-            name, est = self.steps[ind]
+            est = self.steps[ind]
         except TypeError:
             # Not an int, try get step by name
             return self.named_steps[ind]
@@ -483,6 +483,8 @@ class Projection(Step):
 
 # TODO: Implement padding with up_to argument
 # the current pad_n is more logically called mult_of
+# TODO: torch.tensor_split seems very suitable for the task, it returns
+# a view of the original tensor split along indices or in n parts.
 class Padder(Step):
     def __init__(
         self, mult_of=None, up_to=None, position="center", bc=0, dims=(-2, -1)
