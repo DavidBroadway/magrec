@@ -76,7 +76,7 @@ class Bsensor2Mxy(GenericTranformation):
         b[0,0] = 0
         m = self.get_m_from_b(b)
         M = self.ft.backward(m, dim=(-2, -1))
-        # convert from A/M to uB/nm^2
+        # convert from A/m to uB/nm^2
         unit_conversion = 1e-18 / 9.27e-24
         return M * unit_conversion
     

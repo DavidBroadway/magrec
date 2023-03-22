@@ -60,7 +60,6 @@ class Padder(object):
             end_col = col_offset
 
         original_roi = [start_row, new_size - end_row, start_col, new_size - end_col]
-        print(original_roi)
         # pad the array with zeros
         padded_x = np.pad(x, ((start_row,end_row),(start_col, end_col)), mode='constant')
     

@@ -25,7 +25,8 @@ class CNN(object):
                     kernel=5, 
                     stride=2, 
                     padding=2 , 
-                    loss_weight = None
+                    loss_weight = None,
+                    learning_rate = 0.001
                     ):
         # Prepare the method for fitting.
        
@@ -78,7 +79,8 @@ class CNN(object):
         self.train_loader = DataLoader(self.train_data_cnn)
 
         # Define the optimizer
-        self.optimizer = optim.Adam(self.Net.parameters())
+        self.optimizer = optim.Adam(self.Net.parameters(), lr=learning_rate, eps=1e-08, weight_decay=0, amsgrad=False)
+
 
 
     def fit(self, n_epochs=25, print_every_n=10, weight = None):    
