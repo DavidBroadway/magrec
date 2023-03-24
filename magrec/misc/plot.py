@@ -22,6 +22,7 @@ def plot_n_components(
         norm_type: str = 'row',
         alignment: str = 'horizontal',
         show_coordinate_system: bool = True,
+        title: str = '',
 ) -> plt.Figure | list[plt.Figure]:
     """
     Plots n_components of a field in the provided axes or creates a new figure with axes.
@@ -43,6 +44,7 @@ def plot_n_components(
         alignment (str):                    alignment of the same quantity components, either 'horizontal' or 'vertical'
                                             if 'horizontal', then components will be plotted in the same row, if 'vertical', then in the same column
         show_coordinate_system (bool):      whether to show the coordinate system in the plot, default: True
+        title (list(str) or str):           if str, then it is the title of the plot, if list, then it is a list of titles for each row
 
     Returns:
         fig (plt.Figure, list[plt.Figure]): figure or a list of figures with n_components
@@ -240,6 +242,15 @@ def plot_n_components(
         ax_inset.text(0, 1.7, r'$y$', fontsize=12, color='k')
 
     fig.subplots_adjust(hspace=None)
+    
+    if title:
+        if isinstance(title, str):
+            # Use .annotate() method to add the title text at the top of the figure
+            axes[0].annotate(title, xy=(0.5, 1.1), xycoords='axes fraction',
+                             xytext=(0, 0), textcoords='offset points',
+                             ha='center', va='baseline')
+        elif isinstance(title, (list)):
+            raise NotImplementedError('Not implemented yet')
 
     if not show:
         plt.close()
