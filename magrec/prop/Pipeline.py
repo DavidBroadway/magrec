@@ -27,6 +27,9 @@ def identity(X):
     return X
 
 
+# ReviewTS
+# You could use Python's ABC library here to declare Step as an abstract base class. Then users implementing their own
+# steps would get immediate feedback when they forget to implement a required method. See https://docs.python.org/3/library/abc.html
 class Step(object):
     def __init__(self):
         self.enabled = True
@@ -41,14 +44,46 @@ class Step(object):
 
     def fit_transform(self, X, y=None, **fit_params):
         return self.fit(X, y, **fit_params).transform(X)
-    
+
     def __call__(self, X, y=None, **params):
         return self.fit(X, y, **params).transform(X, y, **params)
 
 
+# ReviewTS
+# From my understanding, the functionality of `sklearn.Pipeline` is is very much suited for your usecase, so I like that you are using it as
+# inspiration. However, I have a hard time understanding the benefit of this bespoke Pipe implementation compared to using `sklearn.Pipeline`
+# directly (which you already import at the top of this file, but I guess decided against using later?).
+#
+# The way I see it, the main difference of this implementation to sklearn's variant is that you have special handling for visualization steps.
+# As discussed earlier, I see a few potential issues with this design:
+# * Semantically, you have different instances of the same entity (a step) do different things. Most steps are transformators for data,
+#   but those that are called Plot* are not transforming anything but just creating plots. I think this makes it harder for users to reason
+#   about the usage contract of this library. It would be better if this code would use the same semantics for a Step as sklean itself.
+# * There is no easy way to extract plots. Instead, they are always immediately displayed. Ideally, it should be just as easy to
+#   create and save a plot without displaying it in a notebook
+# * The special handling is tied to the classname of the specific step, which will confuse users. Controlling logic via the name of some
+#   element is not a common pattern and would need to be explicitly documented somewhere.
+#
+# Also, you manually reimplement a partial variant of `sklearn.Pipeline` here, which bears the risk of introducing subtle bugs, if one of the copied methods
+# required some missing functionality of the original implementation in some cases. This implementation also misses some convencience
+# features of sklearn's original variant.
+#
+# As an alternative, I would suggest:
+# * Subclass sklearn.Pipeline to benefit from it's more mature implementation. Only override/add the functionalities that are not
+#   provided by sklearn
+# * Instead of adding plotting as steps, have a different interface for specifying which steps to plot during transformation. This could also be used for
+#   other side-effects to be performed during transformation. Somehing like
+#
+#   ```
+#   class Pipe(sklearn.Pipeline):
+#       def add_transform_side_effect(step_name: str, effect: Callable)
+#   ```
+#
+#   and then add a hook inside the transform() method where all added side effects are executed after the respective step. A side-effect
+#   could then be everything from plotting data directly to saving it to disk or even triggering a different execution thread.
 class Pipe(object):
     def __init__(self, steps, *, memory=None, verbose=False):
-        # to allow for unnamed steps, see _name_estimators from sklearn.pipeline, 
+        # to allow for unnamed steps, see _name_estimators from sklearn.pipeline,
         # for now we require names for each step
         self.steps: OrderedDict = OrderedDict(steps)
         self.memory = memory
@@ -57,13 +92,23 @@ class Pipe(object):
 
     def add_step(self, step_name, step, after=None, before=None):
         """Add a named step `step` to the pipeline"""
+        # ReviewTS
+        # This function is not really required I think (the user can just create a new Pipe object with the steps they need instead
+        # of modifying an existing one). Therefore, I would suggest simply removing it to reduce the code's surface area.
+
+        # ReviewTS
+        # If `after` and `before` always have to be None, you could just remove these parameters alltogether to clean up the
+        # user interface.
         if after is not None or before is not None:
             raise NotImplementedError("Step position specification is not implemented yet. "
                                       "Use `add_step` method consequentially in order steps need "
                                       "to be executed.")
         self.steps.update((step_name, step))
+        # ReviewTS
+        # If we were to subclass `sklearn.Pipeline`, we could call `self._validate_steps()` here to make sure that the
+        # newly added step implements the required methods
         return self
-    
+
     def _iter(self, filter=()):
         """
         Generate (idx, name, trans) tuples from self.steps. Omit those in filter tuple.
@@ -89,13 +134,19 @@ class Pipe(object):
                 yield idx, name, step
 
     def fit(self, X, y=None, **fit_params):
+        # ReviewTS
+        # `sklearn`'s implementation checks if the fit_params are valid beforehand, which reduces the probability of a
+        # user encountering weird errors down the line they might not know how to fix easily
         for idx, step_name, step in self._iter(filter=("passthrough", "plot*")):
             params = self.get_step_params(step_name, **fit_params)
             X = step.fit(X, y, **params).transform(X, visual=False)
 
         self.fitted = True
         return self
-    
+
+    # ReviewTS
+    # I suggest having this functionality in an explicitly named method instead to make it immediately clear to users
+    # what happens if they call it.
     def __call__(self, X, y=None, **params):
         return self.fit(X, y, **params).transform(X, y, **params)
 
@@ -123,6 +174,11 @@ class Pipe(object):
 
     def transform(self, X, y=None, **transform_params):
         filters = ("passthrough",)
+        # ReviewTS:
+        # Like mentioned above, I would argue for reworking the way visualization is done in this pipeline.
+        # As an aside, the `visual` parameter applies to the transform() function of the whole Pipeline (if it is set to false, disable
+        # _all_ plot* steps). Therefore, it should rather be a named parameter to this function instead of a part of `transform_params` (which
+        # are the parameters forwarded to the step transform() methods)
         visual = transform_params.get("visual", True)
         if not visual:
             filters += ("plot*",)
@@ -132,6 +188,9 @@ class Pipe(object):
         return X
 
     def fit_transform(self, X, y=None, **fit_params):
+        # ReviewTS
+        # Different to the tranform() method, here the plot* steps are always disabled, which is a little weird. As a user, I would
+        # expect the interface of `transform` and `fit_transform` to be basically identical.
         for idx, step_name, step in self._iter(filter=("passthrough*", "plot*")):
             X = step.fit_transform(X, y, **fit_params)
         return X
@@ -162,7 +221,7 @@ class Pipe(object):
             # Not an int, try get step by name
             return self.named_steps[ind]
         return est
-    
+
     def __setitem__(self, ind, value):
         self.steps[ind] = value
 
@@ -176,6 +235,9 @@ class Pipe(object):
         return Bunch(**dict(self.steps))
 
 
+# ReviewTS
+# As mentioned for `Pipe`, I think it would be greatly advantageous if you could leverage the existing `sklearn.FeatureUnion`
+# implementation, either by subclassing or having it as a member of this class, for most of the same reasons as above.
 class Union(Pipe):
     def __init__(self, transformer_list, dim, *, n_jobs=None, verbose=False):
         super().__init__(transformer_list)
@@ -200,6 +262,9 @@ class Union(Pipe):
         return X
 
     def fit(self, X, y=None, **fit_params):
+        # ReviewTS
+        # The filter argument should be "plot*" to catch all classes starting with Plot*. This is a good example of how
+        # easy it is to introduce subtle bugs when relying on string matching for code branching.
         for idx, step_name, step in self._iter(filter=("plot", "passthrough")):
             X = step.fit_transform(X, y)
         return self
@@ -298,7 +363,7 @@ class FourierDivergence2d(Step):
             return Y.unsqueeze(-3)
 
         return Y
-    
+
 class FourierCurl3d(Step):
     """Calculates curl of a 3d signal in Fourier space.
 
@@ -306,21 +371,21 @@ class FourierCurl3d(Step):
 
     .. math::
 
-                         ┌─                            ─┐    
-                         │ i k_y F[g_z] - i k_z F[g_y]  │    
+                         ┌─                            ─┐
+                         │ i k_y F[g_z] - i k_z F[g_y]  │
                          │                              │
         F[∇ × g(x,y)] =  │ i k_z F[g_x] - i k_x F[g_z]  │
                          │                              │
                          │ i k_x F[g_y] - i k_y F[g_x]  │
                          └─                            ─┘
-        
+
     where F is Fourier transform, k_x and k_y, k_z are spatial frequencies.
     Note the sign, which is due to the defintion of the Fourier transform
-    adopted here in :class:`FourierTransform2d`. 
-    
+    adopted here in :class:`FourierTransform2d`.
+
     This component can be used to construct a field J such that ∇·J = 0, by
-    letting J = ∇ × g for a function g. 
-    
+    letting J = ∇ × g for a function g.
+
     To constrain J to 2d, set the third component to zero by toggling `force_2d = True`.
 
     """
