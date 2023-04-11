@@ -69,7 +69,11 @@ class CNN(object):
         self.img = torch.Tensor(training_target)
         self.mask = np.where(self.img.numpy() == 0,0,1)  
         
-        self.img_comp = torch.FloatTensor(self.img[np.newaxis, np.newaxis])
+        if n_channels_in > 1:
+            self.img_comp = torch.FloatTensor(self.img[np.newaxis])
+        else:
+            self.img_comp = torch.FloatTensor(self.img[np.newaxis, np.newaxis])
+
         self.img_input = torch.FloatTensor(self.img[np.newaxis, np.newaxis])
         self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
 

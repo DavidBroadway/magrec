@@ -1,74 +1,75 @@
 import torch
 
 from magrec.transformation.Fourier import FourierTransform2d
-from magrec.misc.constants import MU0, twopi
+from magrec.misc.constants import MU0, twopi, convert_AperM2_to_ubpernm2
+from magrec.image_processing.Filtering import DataFiltering
 
 
-class CurrentFourierKernel2d(object):
+# class CurrentFourierKernel2d(object):
 
-    @staticmethod
-    def define_kernel_matrix(kx_vector, ky_vector, k_matrix):
-        """
-        Defines matrix M that transforms the current field at z' to the magnetic field contribution
-        exp(-k [z - z']) M j such that the total magnetic field at z is::
+#     @staticmethod
+#     def define_kernel_matrix(kx_vector, ky_vector, k_matrix):
+#         """
+#         Defines matrix M that transforms the current field at z' to the magnetic field contribution
+#         exp(-k [z - z']) M j such that the total magnetic field at z is::
 
-        ..math::
-            b(k_x, k_y, z) = ∫ exp(-k [z - z']) M j dz' (z > z')
+#         ..math::
+#             b(k_x, k_y, z) = ∫ exp(-k [z - z']) M j dz' (z > z')
 
-        in the Fourier space.
+#         in the Fourier space.
 
-        Args:
-            kx_vector:  vector with spacial frequencies in x direction, shape (n_kx,)
-            ky_vector:  vector with spacial frequencies in y direction, shape (n_ky,)
-            k_matrix:   matrix with all possible k = sqrt(k_x ** 2 + k_y ** 2), shape (n_kx, n_ky)
+#         Args:
+#             kx_vector:  vector with spacial frequencies in x direction, shape (n_kx,)
+#             ky_vector:  vector with spacial frequencies in y direction, shape (n_ky,)
+#             k_matrix:   matrix with all possible k = sqrt(k_x ** 2 + k_y ** 2), shape (n_kx, n_ky)
 
-        Returns:
-            M matrix, shape (3, 3, n_kx, n_ky). Contracting with j of shape (3, n_kx, n_ky) in the first dimension
-            gives b of shape (3, n_kx, n_ky): b = M j, or more specifically [b_x b_y b_z] = M [j_x j_y j_z]
-            Units: mT / (mm * A)
+#         Returns:
+#             M matrix, shape (3, 3, n_kx, n_ky). Contracting with j of shape (3, n_kx, n_ky) in the first dimension
+#             gives b of shape (3, n_kx, n_ky): b = M j, or more specifically [b_x b_y b_z] = M [j_x j_y j_z]
+#             Units: mT / (mm * A)
 
-        Matrix definition
-        -----------------
-        If Tetienne et al. definition of the transform (and of the
-        matrix) is used, the b_z component ends up with a wrong sign in
-        the inverse Fourier transform, that is, in the real B(x, y, z) space::
-
-
-                                                       ┌─                            ─┐ ┌─   ─┐
-                                                       │     0        1      ik_y / k │ │ j_x │
-                               ┌─                ─┐ μ0 │                              │ │     │
-           b(k_x, k_y, z) =  ∫ │ exp(-k [z - z']) │ -- │    -1        0     -ik_x / k │ │ j_y │ dz'
-                               └─                ─┘  2 │                              │ │     │
-                               └── [k_x, k_y, z] ─┘    │-ik_y / k  ik_x / k      0    │ │ j_z │
-                                    `exp_matrix`       └─                            ─┘ └─   ─┘
-                                                   └───────── M[:, :, k_x, k_y] ──────┘ └──┬──┘
-                                                                                            j[k_x, k_y, z']
+#         Matrix definition
+#         -----------------
+#         If Tetienne et al. definition of the transform (and of the
+#         matrix) is used, the b_z component ends up with a wrong sign in
+#         the inverse Fourier transform, that is, in the real B(x, y, z) space::
 
 
-        """
-        _M = torch.zeros((3, 3, len(kx_vector), len(ky_vector)), dtype=torch.complex64)
+#                                                        ┌─                            ─┐ ┌─   ─┐
+#                                                        │     0        1      ik_y / k │ │ j_x │
+#                                ┌─                ─┐ μ0 │                              │ │     │
+#            b(k_x, k_y, z) =  ∫ │ exp(-k [z - z']) │ -- │    -1        0     -ik_x / k │ │ j_y │ dz'
+#                                └─                ─┘  2 │                              │ │     │
+#                                └── [k_x, k_y, z] ─┘    │-ik_y / k  ik_x / k      0    │ │ j_z │
+#                                     `exp_matrix`       └─                            ─┘ └─   ─┘
+#                                                    └───────── M[:, :, k_x, k_y] ──────┘ └──┬──┘
+#                                                                                             j[k_x, k_y, z']
 
-        _M[0, 1, :, :] = torch.full_like(
-            k_matrix, fill_value=1.0, dtype=torch.complex64
-        )
-        _M[0, 2, :, :] = 1j * ky_vector[None, :] / k_matrix
-        _M[1, 2, :, :] = -1j * kx_vector[:, None] / k_matrix
 
-        # Deal with the case where k = 0 by setting the corresponding elements to 0
-        # _M[[0, 1], [2, 2], [0, 0], [0, 0]] = 0
+#         """
+#         _M = torch.zeros((3, 3, len(kx_vector), len(ky_vector)), dtype=torch.complex64)
 
-        # M has a nice property that is it antisymmetric, when viewed for specific values of k_x and k_y
-        # above we defined its upper triangle, below we add the parts of the antisymmetric parts together.
-        # Transpose to change dimensions pertaining to the components _x, _y, _z of the field
-        M = _M - _M.transpose(0, 1)
-        M = (MU0 / 2) * M  # scale by mu0 to get [mT * mm / A] units
-        return M
+#         _M[0, 1, :, :] = torch.full_like(
+#             k_matrix, fill_value=1.0, dtype=torch.complex64
+#         )
+#         _M[0, 2, :, :] = 1j * ky_vector[None, :] / k_matrix
+#         _M[1, 2, :, :] = -1j * kx_vector[:, None] / k_matrix
+
+#         # Deal with the case where k = 0 by setting the corresponding elements to 0
+#         # _M[[0, 1], [2, 2], [0, 0], [0, 0]] = 0
+
+#         # M has a nice property that is it antisymmetric, when viewed for specific values of k_x and k_y
+#         # above we defined its upper triangle, below we add the parts of the antisymmetric parts together.
+#         # Transpose to change dimensions pertaining to the components _x, _y, _z of the field
+#         M = _M - _M.transpose(0, 1)
+#         M = (MU0 / 2) * M  # scale by mu0 to get [mT * mm / A] units
+#         return M 
 
 
 class CurrentLayerFourierKernel2d(object):
 
     @staticmethod
-    def define_kernel_matrix(kx_vector, ky_vector, height, layer_thickness):
+    def define_kernel_matrix(kx_vector, ky_vector, height, layer_thickness, dx, dy):
         """Defines a transformation matrix that connects a 2d current distribution that has 2 components of
         the current density to the magnetic field it creates, that has 3 components.
         ```
@@ -112,16 +113,17 @@ class CurrentLayerFourierKernel2d(object):
         # Deal with the case where k = 0 by setting the corresponding elements to 0
         # M[[2, 2], [0, 1], [0, 0], [0, 0]] = 0
 
-        depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
+        depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness, dx, dy, add_filter=False)
 
-        M = (MU0 / 2) * depth_factor * M
-        return M
+        M = (MU0 / 2) / depth_factor * M
+        
+        return M 
 
 
 class MagnetizationFourierKernel2d(object):
 
     @staticmethod
-    def define_kernel_matrix(kx_vector, ky_vector, height, layer_thickness):
+    def define_kernel_matrix(kx_vector, ky_vector, height, layer_thickness, dx, dy):
         """Defines a transformation matrix that connects a 2d magnetization distribution that has 3 components of
         the magnetization to the magnetic field it creates.
         """
@@ -141,7 +143,7 @@ class MagnetizationFourierKernel2d(object):
         # Deal with the case where k = 0 by setting the corresponding elements to 0
         # _M[[0, 1, 1], [0, 0, 1], [0, 0, 0], [0, 0, 0]] = 0
 
-        depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
+        depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness, dx, dy)
         # Use the property of the M matrix that it is symmetric (that's why we divide by 1/2 above, to get the proper diagonal terms)
         M = _M + _M.transpose(0, 1)
 
@@ -161,7 +163,7 @@ class UniformLayerFactor2d(object):
     """
 
     @staticmethod
-    def define_depth_factor(k_matrix: torch.Tensor, height: float, layer_thickness: float):
+    def define_depth_factor(k_matrix: torch.Tensor, height: float, layer_thickness: float, dx: float, dy: float, add_filter: bool = True):
         """
         Returns a matrix that scales each k-vector by the factor that appears after integration of a uniform source distribution.
 
@@ -170,22 +172,39 @@ class UniformLayerFactor2d(object):
             height (float):             height above the layer at which to evaluate the factor
             layer_thickness (float):    thickness of the layer
         """
-        depth_factor = (
-                torch.exp(-k_matrix * height) * torch.exp(-k_matrix * layer_thickness)
-                / k_matrix
-                * (torch.exp(-k_matrix * layer_thickness)-1)
+        # Older version
+        # depth_factor = (
+        #         torch.exp(-k_matrix * height) * torch.exp(-k_matrix * layer_thickness)
+        #         / k_matrix
+        #         * (torch.exp(-k_matrix * layer_thickness)-1)
+        # )
+        
+
+        depth_factor = -(
+                torch.exp(k_matrix * height) 
+                * (torch.exp(k_matrix * layer_thickness) - 1)
         )
+        depth_factor[0, 0] = layer_thickness
         # TODO: Check when this condition is satisfied, currently layer_thickness = 0 case gives proper field, but the
         # expression below seems wrong.
         #
         # `layer_thickness` parameters does not play role and can be set to 0 in the limit of k * thickness ≫ 1,
         # in which case the factor is just -exp(-k * height) / k. Since that must be true for the smallest k which
         # is of order 1/L, the neccessary and satisfactory condition is that the L ≫ thickness, where L is the window size
-        if layer_thickness == 0:
-                 depth_factor = (
-                 torch.exp(-k_matrix * height))
+        # if layer_thickness == 0:
+        #          depth_factor = (
+        #          torch.exp(k_matrix * height))
+        #          depth_factor[0, 0] = 0
+        depth_factor = (
+                 torch.exp(k_matrix * height))
+        depth_factor[0, 0] = 1
+        
+        if add_filter:
+            Filtering = DataFiltering(depth_factor, dx, dy)
+            # add a hanning filter to the depth factor
+            depth_factor = Filtering.apply_hanning_filter(height, data=depth_factor, plot_results=False, in_fourier_space=True)
+            depth_factor = Filtering.apply_short_wavelength_filter(height, data=depth_factor, plot_results=False,  in_fourier_space=True) 
 
-        depth_factor[0, 0] = layer_thickness
         return depth_factor
 
 
@@ -282,6 +301,8 @@ class HarmonicFunctionComponentsKernel(object):
         # Set the components of the kernel matrix to zero for k = 0, where the denominator is zero
         M[:, 0, 0] = 0
 
+
+
         return M
 
 
@@ -301,7 +322,7 @@ class MagneticFieldToCurrentInversion2d(object):
     """
 
     @staticmethod
-    def define_kernel_matrix(kx_vector, ky_vector, height, layer_thickness):
+    def define_kernel_matrix(kx_vector, ky_vector, height, layer_thickness,  dx, dy):
         k_matrix = FourierTransform2d.define_k_matrix(kx_vector, ky_vector)
 
         M = torch.zeros((2, 2,) + k_matrix.shape, dtype=torch.complex64,)
@@ -309,14 +330,15 @@ class MagneticFieldToCurrentInversion2d(object):
         M[0, 1, :, :] = torch.ones_like(k_matrix)
         M[1, 0, :, :] = -torch.ones_like(k_matrix)
 
-        depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
+        depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness, dx, dy)
         # Temporary set to avoid division by zero
-        depth_factor[0, 0] = 1
+        # depth_factor[0, 0] = 1
 
-        M = (2 / MU0) / depth_factor * M
+        M = (2 / MU0) * depth_factor * M
         # Deal with the case where k = 0 by setting the corresponding elements to 0
-        M[0, 0] = 0
-        return M
+        # M[0, 0] = 0
+
+        return M 
 
 
 class SphericalUnitVectorKernel(object):

@@ -11,7 +11,7 @@ import numpy as np
 
 from magrec.transformation.generic import GenericTranformation
 from magrec.transformation.Kernel import CurrentLayerFourierKernel2d
-
+from magrec.transformation.Fourier import FourierTransform2d
 
 class Bsensor2Jxy(GenericTranformation):
 

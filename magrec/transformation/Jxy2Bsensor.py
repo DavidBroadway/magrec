@@ -61,13 +61,14 @@ class Jxy2Bsensor(GenericTranformation):
             np.cos(self.s_theta)], dtype=torch.complex64)
 
         
-
         self.j_to_b_matrix = CurrentLayerFourierKernel2d\
             .define_kernel_matrix(
                 self.ft.kx_vector, 
                 self.ft.ky_vector, 
                 height= dataset.height, 
-                layer_thickness=dataset.layer_thickness)
+                layer_thickness=dataset.layer_thickness, 
+                dx=dataset.dx,
+                dy=dataset.dy)
 
 
         # remove the 0 componenet
@@ -85,16 +86,18 @@ class Jxy2Bsensor(GenericTranformation):
 
     
 
-    def transform(self, J):
-
+    def transform(self, J = None):
+        if J is None:
+            J = self.dataset.target
         J = self.Padder.pad_zeros2d(J)
-
+        
         # Get the current density from the magnetization
         j = self.ft.forward(J, dim=(-2, -1))
         # Get the magnetic field from the current density
-        b = torch.einsum("jkl,...jkl->...kl", self.j_to_b_matrix, j)
+        b = torch.einsum("...jkl,...jkl->...kl", self.j_to_b_matrix, j)
         # b[0,0] = 0 # remove DC componenet
         B = self.ft.backward(b, dim=(-2, -1))
-
         B = self.Padder.remove_padding2d(B)
+
+
         return B

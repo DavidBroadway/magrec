@@ -139,7 +139,7 @@ class FourierTransform2d(object):
 
     @staticmethod
     def define_kx_ky_vectors(grid_shape: tuple = None, dx: float = 1.0,
-                             dy: float = 1.0, real_signal=True) -> (torch.Tensor, torch.Tensor):
+                             dy: float = 1.0, real_signal=True):
         """
         Computes the kx and ky vectors in the Fourier space for a grid with shape
         `shape` and grid spacing `dx` and `dy`, in inverse units of length.

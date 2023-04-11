@@ -14,6 +14,8 @@ from magrec.transformation.generic import GenericTranformation
 from magrec.transformation.Kernel import CurrentLayerFourierKernel2d, MagneticFieldToCurrentInversion2d
 from magrec.transformation.Fourier import FourierTransform2d
 
+from magrec.image_processing.Padding import Padder
+
 
 class Bxyz2Jxy(GenericTranformation):
     def __init__(self, dataset):
@@ -33,6 +35,7 @@ class Bxyz2Jxy(GenericTranformation):
         self.ft = FourierTransform2d(grid_shape=dataset.target.size(), dx=dataset.dx, dy=dataset.dy, real_signal=False)
         self.s_theta = np.deg2rad(dataset.sensor_theta)
         self.s_phi = np.deg2rad(dataset.sensor_phi)
+        self.Padder = Padder()
 
         self.sensor_dir = torch.tensor([ \
             np.cos(self.s_phi)*np.sin(self.s_theta), \
@@ -52,7 +55,9 @@ class Bxyz2Jxy(GenericTranformation):
             self.ft.kx_vector, 
             self.ft.ky_vector, 
             height=dataset.height, 
-            layer_thickness=dataset.layer_thickness
+            layer_thickness=dataset.layer_thickness,
+            dx=dataset.dx,
+            dy=dataset.dy
         )
         # set the Bz term to zero as we don't need it
         # self.b_to_j_matrix[2, 0, :, :] = 0 
@@ -76,10 +81,12 @@ class Bxyz2Jxy(GenericTranformation):
 
 
     def transform(self):
+        # B = self.Padder.pad_zeros2d(self.dataset.target[0:2,...])
         B = self.dataset.target[0:2,...]
 
         b = self.ft.forward(B, dim=(-2, -1))
-        b[0,0] = 0
+        # b[0,0] = 0
         j = self.get_j_from_b(b)
         J = self.ft.backward(j, dim=(-2, -1))
+        # J = self.Padder.remove_padding2d(J)
         return J.real

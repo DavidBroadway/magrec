@@ -9,7 +9,7 @@ from magrec.transformation.Fourier import FourierTransform2d
 class GenericModel(object):
     # Super class that other models can be based off.
 
-    def __init__(self, dataset, loss_type):
+    def __init__(self, dataset, loss_type, scaling_factor=None):
         """
         Args:
             data:   class object that contains the data and the parameters of the data.
@@ -19,7 +19,10 @@ class GenericModel(object):
         self.define_loss_function(loss_type)
 
         # define the scaling factor to help the network learn
-        self.scaling_factor = 1e6
+        if scaling_factor is not None:
+            self.scaling_factor = scaling_factor
+        else:
+            self.scaling_factor = 1
         
         # Add addtional requirements of the model here.
         self.requirements()

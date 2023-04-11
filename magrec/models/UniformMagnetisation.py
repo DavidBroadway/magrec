@@ -8,11 +8,12 @@ from magrec.models.generic_model import GenericModel
 from magrec.transformation.Mxy2Bsensor import Mxy2Bsensor
 
 class UniformMagnetisation(GenericModel):
-    def __init__(self, dataset, loss_type,  m_theta, m_phi):
+    def __init__(self, dataset, loss_type,  m_theta, m_phi, std_loss_scaling : float = 0.01):
         super().__init__(dataset, loss_type)
 
         # Define the propagator so that this isn't performed during a loop.
         self.magClass = Mxy2Bsensor(dataset, m_theta = m_theta, m_phi = m_phi)
+        self.std_loss_scaling = std_loss_scaling
 
         # define the requirements for the model that may change the fitting method
         self.requirements()
@@ -31,7 +32,7 @@ class UniformMagnetisation(GenericModel):
     def transform(self, nn_output):
         return self.magClass.transform(nn_output)
 
-    def calculate_loss(self, b, target, loss_weight=None):
+    def calculate_loss(self, b, target,  nn_output = None,  loss_weight=None):
         """
         Args:
             nn_output: The output of the neural network
@@ -40,11 +41,26 @@ class UniformMagnetisation(GenericModel):
         Returns:
             loss: The loss function
         """
+
+        # a scaling
+        alpha = self.std_loss_scaling
+
         if loss_weight is not None:
             b = torch.einsum("...kl,kl->...kl", b, loss_weight)
             target = torch.einsum("...kl,kl->...kl", target, loss_weight)
-    
-        return self.loss_function(b, target)
+        #     if nn_output is not None:
+        #         # use the std of the outputs as an additional loss function
+        #         loss_std = alpha * torch.std(
+        #             torch.einsum("...kl,kl->...kl", nn_output, loss_weight), dim=(-2, -1)).sum()
+        #     else:
+        #         loss_std = 0
+        # else:
+        #     if nn_output is not None:
+        #         loss_std = alpha * torch.std(nn_output, dim=(-2, -1)).sum()
+        #     else:
+        #         loss_std = 0
+        return self.loss_function(b, target) #+ loss_std
+
 
     def extract_results(self, final_output, final_b, remove_padding = True):
         """

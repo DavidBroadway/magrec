@@ -9,8 +9,8 @@ from magrec.transformation.Jxy2Bsensor import Jxy2Bsensor
 from magrec.image_processing.Padding import Padder
 
 class Jxy(GenericModel):
-    def __init__(self, data, loss_type : str, std_loss_scaling : float = 0.01):
-        super().__init__(data, loss_type)
+    def __init__(self, data, loss_type : str, std_loss_scaling : float = 0.01, scaling_factor=None):
+        super().__init__(data, loss_type, scaling_factor)
 
         # Define the transformation so that this isn't performed during a loop.
         self.magClass = Jxy2Bsensor(data)

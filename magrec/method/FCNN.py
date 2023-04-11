@@ -9,13 +9,19 @@ import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
 from torch.utils.data import TensorDataset, DataLoader
+from magrec.image_processing.Filtering import DataFiltering
+from magrec.transformation.Fourier import FourierTransform2d
+from magrec.image_processing.Padding import Padder
 
 class FCNN(object):
 
-    def __init__(self, model, dataset):
+    def __init__(self, model, dataset, learning_rate = 0.001, fourier_model = False):
         self.model = model
         self.dataset = dataset
-
+        self.learning_rate = learning_rate
+        self.fourier_model = fourier_model
+        self.ft = FourierTransform2d(grid_shape=dataset.target.size(), dx=dataset.dx, dy=dataset.dy, real_signal=True)
+        self.Padder = Padder()
 
     def prepare_fit(self, 
                     n_channels_in=1, 
@@ -54,20 +60,32 @@ class FCNN(object):
         self.img_input = torch.Tensor(torch.flatten(training_target))
         self.mask =np.where(self.img_input.numpy()  == 0,0,1) 
 
-        self.img_comp = torch.FloatTensor(self.img_comp[np.newaxis, np.newaxis])
+        if n_channels_in > 1:
+            self.img_comp = torch.FloatTensor(self.img_comp[np.newaxis])
+        else:
+            self.img_comp = torch.FloatTensor(self.img_comp[np.newaxis, np.newaxis])
+        # self.img_comp = torch.FloatTensor(self.img_comp[np.newaxis, np.newaxis])
+
         self.img_input = torch.FloatTensor(self.img_input[np.newaxis, np.newaxis])
         self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
 
-        self.loss_weight = loss_weight
+        # Define the wieght matrix for the loss function, if it is in Fourier space transform it. 
+        if loss_weight is not None:
+            if self.fourier_model:
+                self.loss_weight = self.ft.forward(loss_weight, dim=(-2, -1) )
+            else:
+                self.loss_weight = loss_weight
+        else:
+             self.loss_weight = loss_weight
 
         self.train_data_cnn = TensorDataset(self.img_input, self.mask_t)
         self.train_loader = DataLoader(self.train_data_cnn)
 
         # Define the optimizer
-        self.optimizer = optim.Adam(self.Net.parameters(), lr=0.001, eps=1e-08, weight_decay=0, amsgrad=False)
+        self.optimizer = optim.Adam(self.Net.parameters(), self.learning_rate, eps=1e-08, weight_decay=0, amsgrad=False)
 
 
-    def fit(self, n_epochs=25, print_every_n=10, weight = None):    
+    def fit(self, n_epochs=25, print_every_n=10, weight = None, add_filter = False):    
         """
         Run gradient descent on the network to optimize the weights and biases.
 
@@ -90,6 +108,18 @@ class FCNN(object):
 
         # Set the network to training mode
         self.Net.train()
+
+
+        # # Define the wieght matrix for the output, if it is in Fourier space transform it. 
+        weight = self.Padder.pad_zeros2d(weight)
+        # if weight is not None:
+        #     if self.fourier_model:
+
+        #         weight = self.Padder.pad_zeros2d(weight)
+        #         weight = self.ft.forward(weight, dim=(-2, -1))
+        #         # weight = torch.cat((weight, weight), 0)
+        #         print('Converting weight matrix to Fourier space')
+
 
         # Iterate for each epoch
         for epoch_n in range(n_epochs):
@@ -114,8 +144,40 @@ class FCNN(object):
                 # See also: https://stackoverflow.com/questions/55338756/why-there-are-different-output-between-model-forwardinput-and-modelinput
                 outputs = self.Net(data)
 
-                if weight is not None:
-                    outputs = torch.einsum("...kl,kl->...kl", outputs, weight)
+                # Add restrictions to the output of the NN 
+                if self.fourier_model:
+                    
+                    # add a hanning filter for the Fourier method
+                    nn_shape = outputs.shape
+                    real_component =  outputs[..., 0:int(0.5*nn_shape[-1])]
+                    imag_component =  outputs[..., int(0.5*nn_shape[-1]):nn_shape[-1]]
+                    if add_filter:
+                        filter_size = 1*self.dataset.height
+
+                        Filtering = DataFiltering(real_component, self.dataset.dx, self.dataset.dy)
+                        real_component = Filtering.apply_hanning_filter(filter_size, data=real_component, in_fourier_space=True)
+                        real_component = Filtering.apply_short_wavelength_filter(filter_size, data=real_component, in_fourier_space=True,  print_action=False) 
+                        
+                        imag_component = Filtering.apply_hanning_filter(filter_size, data=imag_component, in_fourier_space=True)
+                        imag_component = Filtering.apply_short_wavelength_filter(filter_size, data=imag_component, in_fourier_space=True,  print_action=False) 
+                        
+                    if weight is not None:
+                        
+                        Real_space_component =  self.ft.backward(real_component, dim=(-2, -1))
+                        Real_space_component = Real_space_component * weight
+                        real_component = self.ft.forward(Real_space_component, dim=(-2, -1))
+
+                        Real_space_I_component =  self.ft.backward(imag_component, dim=(-2, -1))
+                        Real_space_I_component = Real_space_I_component * weight
+                        imag_component = self.ft.forward(Real_space_I_component, dim=(-2, -1))
+                        # real_component = torch.einsum("...kl,kl->...kl", real_component, weight)
+                        # imag_component = torch.einsum("...kl,kl->...kl", imag_component, weight)
+
+                    outputs[..., 0:int(0.5*nn_shape[-1])] = real_component
+                    outputs[..., int(0.5*nn_shape[-1]):nn_shape[-1]] = imag_component
+                else:
+                    if weight is not None:
+                        outputs = torch.einsum("...kl,kl->...kl", outputs, weight)
 
                 # Convert to magnetic field
                 b = self.model.transform(outputs)
@@ -177,6 +239,7 @@ class Net(nn.Module):
         self.output_size = dataset.shape
         self.input_size = len(torch.flatten(dataset))
 
+        # Larger network
         # self.enc1 = nn.Linear(in_features=self.input_size, out_features=1024)
         # self.enc2 = nn.Linear(in_features=1024, out_features=512)
         # self.enc3 = nn.Linear(in_features=512, out_features=256)
@@ -190,18 +253,35 @@ class Net(nn.Module):
         # self.dec4 = nn.Linear(in_features=512, out_features=1024)
         # self.dec5 = nn.Linear(in_features=1024, out_features= self.n_channels_out * self.input_size)
 
-        self.enc1 = nn.Linear(in_features=self.input_size, out_features=256)
-        self.enc2 = nn.Linear(in_features=256, out_features=128)
-        self.enc3 = nn.Linear(in_features=128, out_features=64)
-        self.enc4 = nn.Linear(in_features=64, out_features=32)
-        self.enc5 = nn.Linear(in_features=32, out_features=16)
+        # Middle network
+        # self.enc1 = nn.Linear(in_features=self.input_size, out_features=256)
+        # self.enc2 = nn.Linear(in_features=256, out_features=128)
+        # self.enc3 = nn.Linear(in_features=128, out_features=64)
+        # self.enc4 = nn.Linear(in_features=64, out_features=32)
+        # self.enc5 = nn.Linear(in_features=32, out_features=16)
 
 
-        self.dec1 = nn.Linear(in_features=16, out_features=32)
-        self.dec2 = nn.Linear(in_features=32, out_features=64)
-        self.dec3 = nn.Linear(in_features=64, out_features=128)
-        self.dec4 = nn.Linear(in_features=128, out_features=256)
-        self.dec5 = nn.Linear(in_features=256, out_features= self.n_channels_out * self.input_size)
+        # self.dec1 = nn.Linear(in_features=16, out_features=32)
+        # self.dec2 = nn.Linear(in_features=32, out_features=64)
+        # self.dec3 = nn.Linear(in_features=64, out_features=128)
+        # self.dec4 = nn.Linear(in_features=128, out_features=256)
+        # self.dec5 = nn.Linear(in_features=256, out_features= self.n_channels_out * self.input_size)
+
+        # Smaller network
+        self.enc1 = nn.Linear(in_features=self.input_size, out_features=128)
+        self.enc2 = nn.Linear(in_features=128, out_features=64)
+        self.enc3 = nn.Linear(in_features=64, out_features=32)
+        self.enc4 = nn.Linear(in_features=32, out_features=16)
+        self.enc5 = nn.Linear(in_features=16, out_features=8)
+
+        self.dec1 = nn.Linear(in_features=8, out_features=16)
+        self.dec2 = nn.Linear(in_features=16, out_features=32)
+        self.dec3 = nn.Linear(in_features=32, out_features=64)
+        self.dec4 = nn.Linear(in_features=64, out_features=128)
+        self.dec5 = nn.Linear(in_features=128, out_features= self.n_channels_out * self.input_size)
+
+        # tiny network
+        # self.m = nn.Linear(in_features=self.input_size, out_features= self.n_channels_out * self.input_size)
 
     def forward(self,input):
 
@@ -216,5 +296,8 @@ class Net(nn.Module):
         dec3 = F.relu(self.dec3(dec2))
         dec4 = F.relu(self.dec4(dec3))
         out = self.dec5(dec4)
+
+        # out = self.enc1(input)
+
 
         return torch.reshape(out, (1, self.n_channels_out, self.output_size[-2], self.output_size[-1]))

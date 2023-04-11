@@ -44,8 +44,8 @@ class Padder(object):
         new_size = max(new_rows, new_cols)
 
         # make the image in the center of the padded array and round the array indices accordingly
-        row_offset = np.int(np.floor( (new_size - rows) // 2))
-        col_offset = np.int(np.floor( (new_size - cols) // 2))
+        row_offset = np.intc(np.floor( (new_size - rows) // 2))
+        col_offset = np.intc(np.floor( (new_size - cols) // 2))
         if row_offset*2 + rows < new_size:
             start_row = row_offset
             end_row = row_offset + 1

@@ -211,7 +211,7 @@ class Data(object):
         """ Set the transformation class. """
         self.Transformer = transform_class(self, **kwargs)
 
-    def transform_data(self):
+    def transform_data(self, data_to_transform=None):
         """ Transform the data. """
         self.transformed_target = self.Transformer.transform()
 
