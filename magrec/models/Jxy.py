@@ -9,7 +9,7 @@ from magrec.transformation.Jxy2Bsensor import Jxy2Bsensor
 from magrec.image_processing.Padding import Padder
 
 class Jxy(GenericModel):
-    def __init__(self, data, loss_type : str, std_loss_scaling : float = 0.01, scaling_factor=None):
+    def __init__(self, data, loss_type : str, std_loss_scaling : float = 0, scaling_factor=None):
         super().__init__(data, loss_type, scaling_factor)
 
         # Define the transformation so that this isn't performed during a loop.
@@ -73,6 +73,11 @@ class Jxy(GenericModel):
         self.results = dict()
         self.results["Jx"] = final_output[0,0,::] / self.scaling_factor
         self.results["Jy"] = final_output[0,1,::] / self.scaling_factor
+        self.results["J"] = np.sqrt(self.results["Jx"]**2 + self.results["Jy"]**2)
+        sp = [self.dataset.dx, self.dataset.dy]
+        div_j = self.divergence(self.results["Jx"], self.results["Jy"], sp)
+        self.results["divJ"] = div_j
+
         self.results["Recon B"] = final_b[0,::] / self.scaling_factor
         self.results["original B"] = self.original_target
 
@@ -145,3 +150,46 @@ class Jxy(GenericModel):
         cb = plt.colorbar()
         cb.set_label("Jy (A/m)")
 
+
+    def plot_current_profiles(self, results):
+
+
+
+
+        plt.subplot(1, 4, 1)
+        plot_data = results["Jx"]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        cb.set_label("Jx (A/m)")
+
+        plt.subplot(1, 4, 2)
+        plot_data = results["Jy"]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        cb.set_label("Jy (A/m)")
+
+        
+        plt.subplot(1, 4, 2)
+        plot_data = results["Jy"]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        cb.set_label("Jy (A/m)")
+
+
+
+
+    def divergence(self, fx, fy,sp):
+        """ Computes divergence of vector field 
+        f: array -> vector field components [Fx,Fy,Fz,...]
+        sp: array -> spacing between points in respecitve directions [spx, spy,spz,...]
+        """
+        return torch.gradient(fx, spacing = sp[0], dim = 0)[0] + torch.gradient(fy, spacing = sp[1], dim = 1)[0]

@@ -108,7 +108,7 @@ class CurrentLayerFourierKernel2d(object):
         M[1, 0, :, :] = -torch.ones_like(k_matrix)
 
         M[2, 0, :, :] = -1j * ky_vector[None, :] / k_matrix
-        M[2, 1, :, :] =  1j * kx_vector[:, None] / k_matrix
+        M[2, 1, :, :] = 1j * kx_vector[:, None] / k_matrix
 
         # Deal with the case where k = 0 by setting the corresponding elements to 0
         # M[[2, 2], [0, 1], [0, 0], [0, 0]] = 0

@@ -87,6 +87,8 @@ class Bxyz2Jxy(GenericTranformation):
         b = self.ft.forward(B, dim=(-2, -1))
         # b[0,0] = 0
         j = self.get_j_from_b(b)
-        J = self.ft.backward(j, dim=(-2, -1))
+        Jxy = self.ft.backward(j, dim=(-2, -1))
+        Jxy = Jxy.real
         # J = self.Padder.remove_padding2d(J)
-        return J.real
+        # J = np.sqrt(Jxy[0,::]**2 + Jxy[1,::]**2)
+        return Jxy

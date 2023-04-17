@@ -138,7 +138,7 @@ class Padder(object):
         x_crop = x[..., 0:int(height/2), 0:int(width/2)]
         return x_crop
 
-    def pad_2d(self, x: torch.Tensor, pad_width: int, mode: str, plot: bool = False) -> torch.Tensor:
+    def numpy_pad_2d(self, x: torch.Tensor, pad_width: int, mode: str, plot: bool = False) -> torch.Tensor:
         """
         Pads using numpy. Converts the torch tensor to a numpy array, performs the padding, and then converts back.
 
@@ -149,9 +149,12 @@ class Padder(object):
             torch.Tensor:          padded tensor
 
         """
-        print(x)
-        npArray = x.numpy()
-        paddedArray = np.pad(npArray, pad_width, mode=mode)
+
+        
+        x = x.numpy()
+        rows, cols = x.shape
+        paddedArray = np.pad(x, pad_width, mode=mode)
+        original_roi = [pad_width, rows + pad_width, pad_width, cols + pad_width]
         x = torch.from_numpy(paddedArray)
 
         if plot:
@@ -159,6 +162,6 @@ class Padder(object):
             plt.imshow(paddedArray, cmap='bwr')
             plt.title('Padded array')
             plt.colorbar()
-        return x
+        return x, original_roi
 
 

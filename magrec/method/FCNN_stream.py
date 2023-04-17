@@ -19,6 +19,8 @@ from scipy import signal
 
 class FCNN(object):
 
+    # This class contains the methods for fitting the model using a fully connected neural network.
+
     def __init__(self, 
                  model: object, 
                  dataset: object, 
@@ -46,18 +48,22 @@ class FCNN(object):
         self.source_weight = source_weight
         self.spatial_filter = spatial_filter
         self.spatial_filter_width = spatial_filter_width
-        
 
         self.ft = FourierTransform2d(grid_shape=dataset.target.size(), dx=dataset.dx, dy=dataset.dy, real_signal=True)
         self.Padder = Padder()
+        self.prepare_fit()
 
     def prepare_fit(self, 
-                    n_channels_in=1, 
-                    n_channels_out=1, 
+                    n_channels_in: int =1, 
+                    n_channels_out: int =1, 
                     ):
-        # Prepare the method for fitting.
-       
-        # Check the size of the data and pad it if necessary.
+        """
+        Args:
+            n_channels_in: The number of input channels.
+            n_channels_out: The number of output channels.
+        
+        Note that the number of channels is overridden if the model has a requirements that dictate the number of channels.
+        """    
 
         # check model requirements
         self.model.requirements()
@@ -126,14 +132,14 @@ class FCNN(object):
         # Set the network to training mode
         self.Net.train()
 
-        if self.spatial_filter is not None:
+
+        if self.spatial_filter:
             # Blur the output of the NN based off the standoff distance compared to the pixel size
             # From Nyquists theorem the minimum frequency that can be resolved is 1/2 the pixel size 
             # or in our case 1/2 the standoff distance. Therefore FWHM = 1/2 the standoff distance 
             # relative to the pixel size 
             sigma = [self.spatial_filter_width, self.spatial_filter_width]
             blurrer = T.GaussianBlur(kernel_size=(51, 51), sigma=(sigma))
-
 
         # Iterate for each epoch
         for epoch_n in range(n_epochs):
@@ -159,10 +165,15 @@ class FCNN(object):
                 # Apply the weight matrix to the output of the NN
                 if self.source_weight is not None:
                     outputs = outputs*self.source_weight
-                    
-                # Apply the spatial filter to the output of the NN
-                if self.spatial_filter is not None:
+
+                # Apply a spatial filter to the output of the NN
+                if self.spatial_filter:
                     outputs = blurrer(outputs)
+
+                # Calculate the diveregence of the output of the NN
+                sp = [self.dataset.dx, self.dataset.dy]
+                outputs[0,1,::] = torch.gradient(outputs[0,0,::], spacing = sp[0], dim = 0)[0]
+                outputs[0,0,::] = -torch.gradient(outputs[0,0,::], spacing = sp[1], dim = 1)[0]
 
                 # Convert to magnetic field
                 b = self.model.transform(outputs)
@@ -188,19 +199,12 @@ class FCNN(object):
         # Return the loss and accuracy
         return 
 
-    # def divergence(self, f,sp):
-    #     """ Computes divergence of vector field 
-    #     f: array -> vector field components [Fx,Fy,Fz,...]
-    #     sp: array -> spacing between points in respecitve directions [spx, spy,spz,...]
-    #     """
-    #     return torch.gradient(f, spacing = sp[1], dim = 1)[0] 
 
-
-    def extract_results(self, remove_padding = True):
+    def extract_results(self, remove_padding: bool = True):
         # Extract the results from the model and return them.
         self.results = self.model.extract_results(self.final_output, self.final_b, remove_padding = remove_padding)
 
-    def plot_results(self, remove_padding = True):
+    def plot_results(self, remove_padding: bool = True):
         # Plot the results from the model.
 
         # check is results have been unpacked

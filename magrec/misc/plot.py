@@ -108,7 +108,7 @@ def plot_n_components(
         # Assume that axes already have the associated color axis, as in case when it was created by ImageGrid
         cax = axes[0].cax
     else:
-        fig = plt.figure()
+        fig = plt.figure(figsize=(20, 4.))
         if alignment == "horizontal":
             grid = ImageGrid(fig, rect=(0, 0, 1, 1),
                             nrows_ncols=(n_rows, n_components),

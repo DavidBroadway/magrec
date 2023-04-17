@@ -19,33 +19,16 @@ from scipy import signal
 
 class FCNN(object):
 
-    def __init__(self, 
-                 model: object, 
-                 dataset: object, 
-                 learning_rate: float = 0.001, 
-                 loss_weight: torch.Tensor = None, 
-                 source_weight: torch.Tensor = None,
-                 spatial_filter: bool = False,
-                 spatial_filter_width: float = None,):
-        """
-        Args:
-            model: The model to be fitted.
-            dataset: The dataset to be fitted.
-            learning_rate: The learning rate for the optimizer.
-            loss_weight: The weight of the loss function.
-            source_weight: The weight of the sources.
-            spatial_filter: Whether to apply a spatial filter to the output of the network.
-            spatial_filter_width: The width of the spatial filter.
-        """
-
-        # Defining all of the parameters.
+    def __init__(self, model, dataset, 
+                 learning_rate = 0.001, 
+                 gaussian_smooth=False, 
+                 gaussian_width = 0):
+        
         self.model = model
         self.dataset = dataset
         self.learning_rate = learning_rate
-        self.loss_weight = loss_weight
-        self.source_weight = source_weight
-        self.spatial_filter = spatial_filter
-        self.spatial_filter_width = spatial_filter_width
+        self.gaussian_smooth = gaussian_smooth
+        self.gaussian_width = gaussian_width
         
 
         self.ft = FourierTransform2d(grid_shape=dataset.target.size(), dx=dataset.dx, dy=dataset.dy, real_signal=True)
@@ -54,6 +37,7 @@ class FCNN(object):
     def prepare_fit(self, 
                     n_channels_in=1, 
                     n_channels_out=1, 
+                    loss_weight = None
                     ):
         # Prepare the method for fitting.
        
@@ -96,6 +80,12 @@ class FCNN(object):
         self.img_input = torch.FloatTensor(self.img_input[np.newaxis, np.newaxis])
         self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
 
+        # Define the wieght matrix for the loss function, if it is in Fourier space transform it. 
+        if self.fourier_model:
+            self.loss_weight = self.ft.forward(loss_weight, dim=(-2, -1) )
+        else:
+            self.loss_weight = loss_weight
+
         self.train_data_cnn = TensorDataset(self.img_input, self.mask_t)
         self.train_loader = DataLoader(self.train_data_cnn)
 
@@ -103,7 +93,7 @@ class FCNN(object):
         self.optimizer = optim.Adam(self.Net.parameters(), self.learning_rate, eps=1e-08, weight_decay=0, amsgrad=False)
 
 
-    def fit(self, n_epochs=25, print_every_n=25):    
+    def fit(self, n_epochs=25, print_every_n=10, weight = None, add_filter = False):    
         """
         Run gradient descent on the network to optimize the weights and biases.
 
@@ -123,16 +113,14 @@ class FCNN(object):
 
         # Create a train_loader to load the training data in batches
         self.track_loss = []
+
         # Set the network to training mode
         self.Net.train()
 
-        if self.spatial_filter is not None:
-            # Blur the output of the NN based off the standoff distance compared to the pixel size
-            # From Nyquists theorem the minimum frequency that can be resolved is 1/2 the pixel size 
-            # or in our case 1/2 the standoff distance. Therefore FWHM = 1/2 the standoff distance 
-            # relative to the pixel size 
-            sigma = [self.spatial_filter_width, self.spatial_filter_width]
-            blurrer = T.GaussianBlur(kernel_size=(51, 51), sigma=(sigma))
+
+        # # Define the wieght matrix for the output, if it is in Fourier space transform it. 
+        if self.fourier_model:
+            weight = self.Padder.pad_zeros2d(weight)
 
 
         # Iterate for each epoch
@@ -143,6 +131,8 @@ class FCNN(object):
             # for batch_idx, data in enumerate(self.train_loader):
             for batch_idx, (data,mask_t) in enumerate(self.train_loader):
                 # Get the batch data and labels
+                # inputs = batch
+                # print(inputs[0].size() )
                 data, mask_t= (data).to(self.device), (mask_t).to(self.device)
                 data=data*1
 
@@ -156,13 +146,36 @@ class FCNN(object):
                 # See also: https://stackoverflow.com/questions/55338756/why-there-are-different-output-between-model-forwardinput-and-modelinput
                 outputs = self.Net(data)
 
-                # Apply the weight matrix to the output of the NN
-                if self.source_weight is not None:
-                    outputs = outputs*self.source_weight
                     
-                # Apply the spatial filter to the output of the NN
-                if self.spatial_filter is not None:
-                    outputs = blurrer(outputs)
+                # add a hanning filter for the Fourier method
+                nn_shape = outputs.shape
+                real_component =  outputs[..., 0:int(0.5*nn_shape[-1])]
+                imag_component =  outputs[..., int(0.5*nn_shape[-1]):nn_shape[-1]]
+                if add_filter:
+                    filter_size = 1*self.dataset.height
+
+                    Filtering = DataFiltering(real_component, self.dataset.dx, self.dataset.dy)
+                    real_component = Filtering.apply_hanning_filter(filter_size, data=real_component, in_fourier_space=True)
+                    real_component = Filtering.apply_short_wavelength_filter(filter_size, data=real_component, in_fourier_space=True,  print_action=False) 
+                    
+                    imag_component = Filtering.apply_hanning_filter(filter_size, data=imag_component, in_fourier_space=True)
+                    imag_component = Filtering.apply_short_wavelength_filter(filter_size, data=imag_component, in_fourier_space=True,  print_action=False) 
+                    
+                if weight is not None:
+                    
+                    Real_space_component =  self.ft.backward(real_component, dim=(-2, -1))
+                    Real_space_component = Real_space_component * weight
+                    real_component = self.ft.forward(Real_space_component, dim=(-2, -1))
+
+                    Real_space_I_component =  self.ft.backward(imag_component, dim=(-2, -1))
+                    Real_space_I_component = Real_space_I_component * weight
+                    imag_component = self.ft.forward(Real_space_I_component, dim=(-2, -1))
+                    # real_component = torch.einsum("...kl,kl->...kl", real_component, weight)
+                    # imag_component = torch.einsum("...kl,kl->...kl", imag_component, weight)
+
+                outputs[..., 0:int(0.5*nn_shape[-1])] = real_component
+                outputs[..., int(0.5*nn_shape[-1]):nn_shape[-1]] = imag_component
+
 
                 # Convert to magnetic field
                 b = self.model.transform(outputs)
@@ -187,13 +200,6 @@ class FCNN(object):
 
         # Return the loss and accuracy
         return 
-
-    # def divergence(self, f,sp):
-    #     """ Computes divergence of vector field 
-    #     f: array -> vector field components [Fx,Fy,Fz,...]
-    #     sp: array -> spacing between points in respecitve directions [spx, spy,spz,...]
-    #     """
-    #     return torch.gradient(f, spacing = sp[1], dim = 1)[0] 
 
 
     def extract_results(self, remove_padding = True):

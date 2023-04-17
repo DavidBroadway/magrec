@@ -138,6 +138,15 @@ class Data(object):
         """ Pad the data with zeros. """
         self.target = self.Padder.pad_data(padding)
         self.track_actions('pad_data')
+
+    def numpy_pad_data(self, pad_width: int, mode: str, plot: bool = False):
+        """ Pad the data with zeros. """
+        self.target, original_roi = self.Padder.numpy_pad_2d(self.target, pad_width, mode, plot)
+        self.pad_action(
+            'pad_data',
+            "Padded the data with numpy pad function",
+            None,
+            original_roi)
     
     def crop_data(self, roi, image=None):
         """ Crop the data by removing the padding. """
@@ -203,6 +212,26 @@ class Data(object):
         }, index=[0])
         self.track_actions(action)
         return
+    
+
+    def remove_padding_from_results(self, array):
+        # Remove the padding from the results.
+        padding = Padder()
+        print('Removed the padding that was applied to the data')
+
+        for idx in range(len(self.actions)):
+            if self.actions.loc[len(self.actions) - 1-idx].reverseable:
+                    roi = self.reverse_parameters[-1-idx]
+                    if len(array.shape) > 2: 
+                        old_array = array
+                        array = torch.zeros((array.shape[0], roi[1] - roi[0], roi[3] - roi[2]))
+                        for idx in range(len(array.shape)):
+                            array[idx,::] = padding.crop_data(old_array[idx,::], roi)
+                    else:
+                        array = padding.crop_data(array, roi)
+        return array
+
+                        
 
 
     # ------------------------- Data Transformation Functions ------------------------- #
