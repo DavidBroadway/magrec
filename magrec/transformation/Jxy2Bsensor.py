@@ -39,6 +39,7 @@ class Jxy2Bsensor(GenericTranformation):
                 grid = self.Padder.pad_zeros2d(dataset.target)
             else:
                 grid = self.Padder.pad_zeros2d(target)
+            grid = self.Padder.pad_zeros2d(grid)
         else:
             if target is None:
                 grid= dataset.target
@@ -90,6 +91,7 @@ class Jxy2Bsensor(GenericTranformation):
         if J is None:
             J = self.dataset.target
         J = self.Padder.pad_zeros2d(J)
+        J = self.Padder.pad_zeros2d(J)
         
         # Get the current density from the magnetization
         j = self.ft.forward(J, dim=(-2, -1))
@@ -98,6 +100,6 @@ class Jxy2Bsensor(GenericTranformation):
         # b[0,0] = 0 # remove DC componenet
         B = self.ft.backward(b, dim=(-2, -1))
         B = self.Padder.remove_padding2d(B)
-
+        B = self.Padder.remove_padding2d(B)
 
         return B

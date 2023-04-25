@@ -4,60 +4,36 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-
+from torch.nn.functional import conv2d, conv3d
+from torch.distributions import Normal, Cauchy
 
 import numpy as np
 import matplotlib.pyplot as plt
 from torch.utils.data import TensorDataset, DataLoader
-from magrec.image_processing.Filtering import DataFiltering
-from magrec.transformation.Fourier import FourierTransform2d
-from magrec.image_processing.Padding import Padder
-import torchvision.transforms as T
-
-from scipy import signal
 
 
 class FCNN(object):
 
     def __init__(self, 
                  model: object, 
-                 dataset: object, 
-                 learning_rate: float = 0.001, 
-                 loss_weight: torch.Tensor = None, 
-                 source_weight: torch.Tensor = None,
-                 spatial_filter: bool = False,
-                 spatial_filter_width: float = None,):
+                 learning_rate: float = 0.001):
         """
         Args:
             model: The model to be fitted.
-            dataset: The dataset to be fitted.
             learning_rate: The learning rate for the optimizer.
-            loss_weight: The weight of the loss function.
-            source_weight: The weight of the sources.
-            spatial_filter: Whether to apply a spatial filter to the output of the network.
-            spatial_filter_width: The width of the spatial filter.
         """
 
         # Defining all of the parameters.
         self.model = model
-        self.dataset = dataset
         self.learning_rate = learning_rate
-        self.loss_weight = loss_weight
-        self.source_weight = source_weight
-        self.spatial_filter = spatial_filter
-        self.spatial_filter_width = spatial_filter_width
-        
+        torch.autograd.set_detect_anomaly(True)
 
-        self.ft = FourierTransform2d(grid_shape=dataset.target.size(), dx=dataset.dx, dy=dataset.dy, real_signal=True)
-        self.Padder = Padder()
+        self.prepare_fit()
 
     def prepare_fit(self, 
                     n_channels_in=1, 
                     n_channels_out=1, 
                     ):
-        # Prepare the method for fitting.
-       
-        # Check the size of the data and pad it if necessary.
 
         # check model requirements
         self.model.requirements()
@@ -68,11 +44,9 @@ class FCNN(object):
             n_channels_in = self.model.require["num_targets"]
             print("Number of targets: {}".format(n_channels_in))
 
-
         # check if the dataset meets the requirements of the model
         self.model.prepareTargetData()    
         training_target = self.model.training_target
-
 
         # define the device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -88,11 +62,16 @@ class FCNN(object):
         self.img_input = torch.Tensor(torch.flatten(training_target))
         self.mask =np.where(self.img_input.numpy()  == 0,0,1) 
 
-        if n_channels_out > 1:
-            self.img_comp = torch.FloatTensor(self.img_comp[np.newaxis])
-        else:
-            self.img_comp = torch.FloatTensor(self.img_comp[np.newaxis, np.newaxis])
+        # self.Jxy = torch.FloatTensor(self.img_comp)
+        self.Jxy = torch.FloatTensor(torch.zeros((1, 2, self.img_comp.shape[-2], self.img_comp.shape[-1])))
 
+        # if n_channels_out > 1:
+        #     self.img_comp = torch.FloatTensor(torch.zeros((1, self.img_comp.shape[-2], self.img_comp.shape[-1])))
+        # else:
+        self.img_comp = torch.FloatTensor(self.img_comp[np.newaxis, np.newaxis])
+
+
+    
         self.img_input = torch.FloatTensor(self.img_input[np.newaxis, np.newaxis])
         self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
 
@@ -126,15 +105,6 @@ class FCNN(object):
         # Set the network to training mode
         self.Net.train()
 
-        if self.spatial_filter is not None:
-            # Blur the output of the NN based off the standoff distance compared to the pixel size
-            # From Nyquists theorem the minimum frequency that can be resolved is 1/2 the pixel size 
-            # or in our case 1/2 the standoff distance. Therefore FWHM = 1/2 the standoff distance 
-            # relative to the pixel size 
-            sigma = [self.spatial_filter_width, self.spatial_filter_width]
-            blurrer = T.GaussianBlur(kernel_size=(51, 51), sigma=(sigma))
-
-
         # Iterate for each epoch
         for epoch_n in range(n_epochs):
             # Note that the training data is shuffled every epoch by the DataLoader
@@ -156,19 +126,11 @@ class FCNN(object):
                 # See also: https://stackoverflow.com/questions/55338756/why-there-are-different-output-between-model-forwardinput-and-modelinput
                 outputs = self.Net(data)
 
-                # Apply the weight matrix to the output of the NN
-                if self.source_weight is not None:
-                    outputs = outputs*self.source_weight
-                    
-                # Apply the spatial filter to the output of the NN
-                if self.spatial_filter is not None:
-                    outputs = blurrer(outputs)
-
                 # Convert to magnetic field
-                b = self.model.transform(outputs)
+                b, outputs = self.model.transform(outputs)
 
                 # Compute the loss
-                loss = self.model.calculate_loss(b, self.img_comp, loss_weight = self.loss_weight, nn_output=outputs)
+                loss = self.model.calculate_loss(b, self.img_comp, nn_output=outputs)
 
                 # Backpropagate the loss
                 loss.backward()
@@ -183,22 +145,17 @@ class FCNN(object):
                     print(f'epoch {epoch_n + 1:5d} | loss on last mini-batch: {self.track_loss[-1]: .2e}')
 
         self.final_output = outputs.detach()
+        self.final_Jxy = outputs.detach()
+        # self.final_Jxy = self.Jxy.detach()
         self.final_b = b.detach()
 
         # Return the loss and accuracy
         return 
 
-    # def divergence(self, f,sp):
-    #     """ Computes divergence of vector field 
-    #     f: array -> vector field components [Fx,Fy,Fz,...]
-    #     sp: array -> spacing between points in respecitve directions [spx, spy,spz,...]
-    #     """
-    #     return torch.gradient(f, spacing = sp[1], dim = 1)[0] 
-
 
     def extract_results(self, remove_padding = True):
         # Extract the results from the model and return them.
-        self.results = self.model.extract_results(self.final_output, self.final_b, remove_padding = remove_padding)
+        self.results = self.model.extract_results(self.final_output, self.final_Jxy, self.final_b, remove_padding = remove_padding)
 
     def plot_results(self, remove_padding = True):
         # Plot the results from the model.
@@ -222,7 +179,7 @@ class FCNN(object):
 # Subclass for the architecture of the NN
 class Net(nn.Module):
     # class to create a fully connected neural network for magnetisation reconstruction
-    def __init__(self, dataset, 
+    def __init__(self, target, 
                  n_channels_in=1, 
                  n_channels_out=1):
         super(Net, self).__init__()
@@ -230,36 +187,8 @@ class Net(nn.Module):
         self.n_channels_in = n_channels_in
         self.n_channels_out = n_channels_out
 
-        self.output_size = dataset.shape
-        self.input_size = len(torch.flatten(dataset))
-
-        # Larger network
-        # self.enc1 = nn.Linear(in_features=self.input_size, out_features=1024)
-        # self.enc2 = nn.Linear(in_features=1024, out_features=512)
-        # self.enc3 = nn.Linear(in_features=512, out_features=256)
-        # self.enc4 = nn.Linear(in_features=256, out_features=128)
-        # self.enc5 = nn.Linear(in_features=128, out_features=64)
-        # self.enc6 = nn.Linear(in_features=64, out_features=1)
-
-        # self.dec1 = nn.Linear(in_features=64, out_features=128)
-        # self.dec2 = nn.Linear(in_features=128, out_features=256)
-        # self.dec3 = nn.Linear(in_features=256, out_features=512)
-        # self.dec4 = nn.Linear(in_features=512, out_features=1024)
-        # self.dec5 = nn.Linear(in_features=1024, out_features= self.n_channels_out * self.input_size)
-
-        # Middle network
-        # self.enc1 = nn.Linear(in_features=self.input_size, out_features=256)
-        # self.enc2 = nn.Linear(in_features=256, out_features=128)
-        # self.enc3 = nn.Linear(in_features=128, out_features=64)
-        # self.enc4 = nn.Linear(in_features=64, out_features=32)
-        # self.enc5 = nn.Linear(in_features=32, out_features=16)
-
-
-        # self.dec1 = nn.Linear(in_features=16, out_features=32)
-        # self.dec2 = nn.Linear(in_features=32, out_features=64)
-        # self.dec3 = nn.Linear(in_features=64, out_features=128)
-        # self.dec4 = nn.Linear(in_features=128, out_features=256)
-        # self.dec5 = nn.Linear(in_features=256, out_features= self.n_channels_out * self.input_size)
+        self.output_size = target.shape
+        self.input_size = len(torch.flatten(target))
 
         # Smaller network
         self.enc1 = nn.Linear(in_features=self.input_size, out_features=128)
@@ -274,6 +203,7 @@ class Net(nn.Module):
         self.dec4 = nn.Linear(in_features=64, out_features=128)
         self.dec5 = nn.Linear(in_features=128, out_features= self.n_channels_out * self.input_size)
 
+  
     def forward(self,input):
 
         enc1 = F.relu(self.enc1(input))
@@ -288,4 +218,30 @@ class Net(nn.Module):
         dec4 = F.relu(self.dec4(dec3))
         out = self.dec5(dec4)
 
-        return torch.reshape(out, (1, self.n_channels_out, self.output_size[-2], self.output_size[-1]))
+        final_output =  torch.reshape(out, (1, self.n_channels_out, self.output_size[-2], self.output_size[-1]))
+        
+        # final_output[0,0,::] = self.lorentzian_filter_2d(final_output[0,0,::],3,3)
+
+        return final_output
+    
+    
+
+
+    def lorentzian_kernel_1d(self, sigma: float, num_sigmas: float = 3.) -> torch.Tensor:
+        radius = np.ceil(num_sigmas * sigma)
+        support = torch.arange(-radius, radius + 1, dtype=torch.float)
+        kernel = Cauchy(loc=0, scale=sigma).log_prob(support).exp_()
+        # Ensure kernel weights sum to 1, so that image brightness is not altered
+        return kernel.mul_(1 / kernel.sum())
+    
+
+    def lorentzian_filter_2d(self, img: torch.Tensor, sigma_x: float, sigma_y: float) -> torch.Tensor:   
+        kernel_1d_x = self.lorentzian_kernel_1d(sigma_x)  # Create 1D Lorentzian kernel
+        kernel_1d_y = self.lorentzian_kernel_1d(sigma_y)  # Create 1D Lorentzian kernel
+        
+        img = img.unsqueeze(0).unsqueeze_(0)  # Need 4D data for ``conv2d()``
+        # Convolve along columns and rows
+        img = conv2d(img, weight=kernel_1d_x.view(1, 1, -1, 1), padding="same")
+        img = conv2d(img, weight=kernel_1d_y.view(1, 1, 1, -1),   padding="same")
+        return img.squeeze_(0).squeeze_(0)  # Make 2D again
+    

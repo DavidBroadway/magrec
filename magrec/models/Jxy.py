@@ -4,18 +4,57 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
+import torchvision.transforms as T
+
 from magrec.models.generic_model import GenericModel
 from magrec.transformation.Jxy2Bsensor import Jxy2Bsensor 
 from magrec.image_processing.Padding import Padder
 
+
+
 class Jxy(GenericModel):
-    def __init__(self, data, loss_type : str, std_loss_scaling : float = 0, scaling_factor=None):
-        super().__init__(data, loss_type, scaling_factor)
+    def __init__(self, 
+                 dataset : object, 
+                 loss_type : str = "MSE", 
+                 scaling_factor: float = 1, 
+                 std_loss_scaling : float = 0, 
+                 loss_weight: torch.Tensor = None,
+                 source_weight: torch.Tensor = None,
+                 spatial_filter: bool = False,
+                 spatial_filter_width: float = 0.5):
+        super().__init__(dataset, loss_type, scaling_factor)
+
+        """
+        Args:
+            dataset: The dataset to be fitted.
+            loss_type: The type of loss function to be used.
+            scaling_factor: The scaling factor to be applied to the target data to obtain better 
+                gradients. This is automatically removed from the results. 
+            std_loss_scaling: The scaling factor to be applied to the standard deviation loss function. 
+                If this is set to 0 then the standard deviation loss function is not used.
+            loss_weight: The weight of the loss function.
+            source_weight: The weight of the sources.
+            spatial_filter: Whether to apply a spatial filter to the output of the network.
+            spatial_filter_width: The width of the spatial filter.
+        """
+
 
         # Define the transformation so that this isn't performed during a loop.
-        self.magClass = Jxy2Bsensor(data)
+        self.magClass = Jxy2Bsensor(dataset)
         self.std_loss_scaling = std_loss_scaling
+        self.loss_weight = loss_weight
+        self.source_weight = source_weight
+        self.spatial_filter = spatial_filter
+        self.spatial_filter_width = spatial_filter_width
         self.requirements()
+
+        if self.spatial_filter:
+            # Blur the output of the NN based off the standoff distance compared to the pixel size
+            # From Nyquists theorem the minimum frequency that can be resolved is 1/2 the pixel size 
+            # or in our case 1/2 the standoff distance. Therefore FWHM = 1/2 the standoff distance 
+            # relative to the pixel size 
+            sigma = [self.spatial_filter_width, self.spatial_filter_width]
+            self.blurrer = T.GaussianBlur(kernel_size=(51, 51), sigma=(sigma))
 
     def requirements(self):
         """
@@ -29,6 +68,14 @@ class Jxy(GenericModel):
         self.require["num_sources"] = 2
         
     def transform(self, nn_output):
+        # Apply the weight matrix to the output of the NN
+        if self.source_weight is not None:
+            nn_output = nn_output*self.source_weight
+        
+        # Apply a spatial filter to the output of the NN
+        if self.spatial_filter:
+            nn_output = self.blurrer(nn_output)
+
         return self.magClass.transform(nn_output)
 
     def calculate_loss(self, b, target, nn_output = None, loss_weight = None):
@@ -149,42 +196,6 @@ class Jxy(GenericModel):
         plt.yticks([])
         cb = plt.colorbar()
         cb.set_label("Jy (A/m)")
-
-
-    def plot_current_profiles(self, results):
-
-
-
-
-        plt.subplot(1, 4, 1)
-        plot_data = results["Jx"]
-        plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
-        plt.xticks([])
-        plt.yticks([])
-        cb = plt.colorbar()
-        cb.set_label("Jx (A/m)")
-
-        plt.subplot(1, 4, 2)
-        plot_data = results["Jy"]
-        plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
-        plt.xticks([])
-        plt.yticks([])
-        cb = plt.colorbar()
-        cb.set_label("Jy (A/m)")
-
-        
-        plt.subplot(1, 4, 2)
-        plot_data = results["Jy"]
-        plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
-        plt.xticks([])
-        plt.yticks([])
-        cb = plt.colorbar()
-        cb.set_label("Jy (A/m)")
-
-
 
 
     def divergence(self, fx, fy,sp):

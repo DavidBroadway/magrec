@@ -3,13 +3,17 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import matplotlib.pyplot as plt
 from magrec.image_processing.Padding import Padder
 from magrec.transformation.Fourier import FourierTransform2d
 
 class GenericModel(object):
     # Super class that other models can be based off.
 
-    def __init__(self, dataset, loss_type, scaling_factor=None):
+    def __init__(self, 
+                 dataset: object, 
+                 loss_type: str = "MSE", 
+                 scaling_factor: float = 1):
         """
         Args:
             data:   class object that contains the data and the parameters of the data.
@@ -19,10 +23,7 @@ class GenericModel(object):
         self.define_loss_function(loss_type)
 
         # define the scaling factor to help the network learn
-        if scaling_factor is not None:
-            self.scaling_factor = scaling_factor
-        else:
-            self.scaling_factor = 1
+        self.scaling_factor = scaling_factor
         
         # Add addtional requirements of the model here.
         self.requirements()
@@ -111,3 +112,58 @@ class GenericModel(object):
             None
         """
         raise NotImplementedError("plot_results must be overridden in a child class.")
+
+
+    def plot_weights(self):
+        """
+        Args:
+            None
+
+        Returns:
+            None
+        """
+        if self.loss_weight is not None and self.source_weight is not None:
+
+            plt.figure()
+            plt.subplot(2,2,1)
+            plt.imshow((self.dataset.target* self.source_weight), cmap='PuOr')
+            plt.title("Source weight region")
+            plt.colorbar()
+
+            plt.subplot(2,2,2)
+            plt.imshow(self.source_weight)
+            plt.colorbar()
+            plt.title("Source weight")
+
+            plt.subplot(2,2,3)
+            plt.imshow((self.dataset.target* self.loss_weight), cmap='PuOr')
+            plt.title("Loss weight region")
+            plt.colorbar()
+
+            plt.subplot(2,2,4)
+            plt.imshow(self.loss_weight)
+            plt.title("Loss weight")
+            plt.colorbar()
+
+        elif self.loss_weight is not None:
+            plt.subplot(1,2,1)
+            plt.imshow((self.dataset.target* self.loss_weight), cmap='PuOr')
+            plt.title("Loss weight region")
+            plt.colorbar()
+
+            plt.subplot(1,2,2)
+            plt.imshow(self.loss_weight)
+            plt.title("Loss weight")
+            plt.colorbar()
+        
+        elif self.source_weight is not None:
+            plt.subplot(1,2,1)
+            plt.imshow((self.dataset.target* self.source_weight), cmap='PuOr')
+            plt.title("Source weight region")
+            plt.colorbar()
+
+            plt.subplot(1,2,2)
+            plt.imshow(self.source_weight)
+            plt.colorbar()
+            plt.title("Source weight")
+

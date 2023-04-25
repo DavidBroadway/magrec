@@ -133,13 +133,13 @@ class FCNN(object):
         self.Net.train()
 
 
-        if self.spatial_filter:
-            # Blur the output of the NN based off the standoff distance compared to the pixel size
-            # From Nyquists theorem the minimum frequency that can be resolved is 1/2 the pixel size 
-            # or in our case 1/2 the standoff distance. Therefore FWHM = 1/2 the standoff distance 
-            # relative to the pixel size 
-            sigma = [self.spatial_filter_width, self.spatial_filter_width]
-            blurrer = T.GaussianBlur(kernel_size=(51, 51), sigma=(sigma))
+        # if self.spatial_filter:
+        #     # Blur the output of the NN based off the standoff distance compared to the pixel size
+        #     # From Nyquists theorem the minimum frequency that can be resolved is 1/2 the pixel size 
+        #     # or in our case 1/2 the standoff distance. Therefore FWHM = 1/2 the standoff distance 
+        #     # relative to the pixel size 
+        #     sigma = [self.spatial_filter_width, self.spatial_filter_width]
+        #     blurrer = T.GaussianBlur(kernel_size=(51, 51), sigma=(sigma))
 
         # Iterate for each epoch
         for epoch_n in range(n_epochs):
@@ -162,18 +162,18 @@ class FCNN(object):
                 # See also: https://stackoverflow.com/questions/55338756/why-there-are-different-output-between-model-forwardinput-and-modelinput
                 outputs = self.Net(data)
 
-                # Apply the weight matrix to the output of the NN
-                if self.source_weight is not None:
-                    outputs = outputs*self.source_weight
+                # # Apply the weight matrix to the output of the NN
+                # if self.source_weight is not None:
+                #     outputs = outputs*self.source_weight
 
                 # Apply a spatial filter to the output of the NN
-                if self.spatial_filter:
-                    outputs = blurrer(outputs)
+                # if self.spatial_filter:
+                #     outputs = blurrer(outputs)
 
-                # Calculate the diveregence of the output of the NN
-                sp = [self.dataset.dx, self.dataset.dy]
-                outputs[0,1,::] = torch.gradient(outputs[0,0,::], spacing = sp[0], dim = 0)[0]
-                outputs[0,0,::] = -torch.gradient(outputs[0,0,::], spacing = sp[1], dim = 1)[0]
+                # # Calculate the diveregence of the output of the NN
+                # sp = [self.dataset.dx, self.dataset.dy]
+                # outputs[0,1,::] = torch.gradient(outputs[0,0,::], spacing = sp[0], dim = 0)[0]
+                # outputs[0,0,::] = -torch.gradient(outputs[0,0,::], spacing = sp[1], dim = 1)[0]
 
                 # Convert to magnetic field
                 b = self.model.transform(outputs)

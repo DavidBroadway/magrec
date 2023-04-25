@@ -1,22 +1,43 @@
 
 
 import torch
-import torch.nn as nn
-import numpy as np
 import matplotlib.pyplot as plt
+import torchvision.transforms as T
 from magrec.models.generic_model import GenericModel
 from magrec.transformation.Mxy2Bsensor import Mxy2Bsensor
 
 class UniformMagnetisation(GenericModel):
-    def __init__(self, dataset, loss_type,  m_theta, m_phi, std_loss_scaling : float = 0.01):
-        super().__init__(dataset, loss_type)
+    def __init__(self,  
+                dataset : object, 
+                loss_type : str = "MSE", 
+                m_theta : float = 0, 
+                m_phi: float = 0,
+                scaling_factor: float = 1, 
+                std_loss_scaling : float = 0, 
+                loss_weight: torch.Tensor = None,
+                source_weight: torch.Tensor = None,
+                spatial_filter: bool = False,
+                spatial_filter_width: float = 0.5):
+        super().__init__(dataset, loss_type, scaling_factor)
 
         # Define the propagator so that this isn't performed during a loop.
         self.magClass = Mxy2Bsensor(dataset, m_theta = m_theta, m_phi = m_phi)
         self.std_loss_scaling = std_loss_scaling
+        self.loss_weight = loss_weight
+        self.source_weight = source_weight
+        self.spatial_filter = spatial_filter
+        self.spatial_filter_width = spatial_filter_width
 
         # define the requirements for the model that may change the fitting method
         self.requirements()
+
+        if self.spatial_filter:
+            # Blur the output of the NN based off the standoff distance compared to the pixel size
+            # From Nyquists theorem the minimum frequency that can be resolved is 1/2 the pixel size 
+            # or in our case 1/2 the standoff distance. Therefore FWHM = 1/2 the standoff distance 
+            # relative to the pixel size 
+            sigma = [self.spatial_filter_width, self.spatial_filter_width]
+            self.blurrer = T.GaussianBlur(kernel_size=(51, 51), sigma=(sigma))
 
     def requirements(self):
         """
@@ -30,9 +51,16 @@ class UniformMagnetisation(GenericModel):
         self.require["num_sources"] = 1
 
     def transform(self, nn_output):
+        # Apply the weight matrix to the output of the NN
+        if self.source_weight is not None:
+            nn_output = nn_output*self.source_weight
+        
+        # Apply a spatial filter to the output of the NN
+        if self.spatial_filter:
+            nn_output = self.blurrer(nn_output)
         return self.magClass.transform(nn_output)
 
-    def calculate_loss(self, b, target,  nn_output = None,  loss_weight=None):
+    def calculate_loss(self, b, target,  nn_output = None):
         """
         Args:
             nn_output: The output of the neural network
@@ -45,21 +73,23 @@ class UniformMagnetisation(GenericModel):
         # a scaling
         alpha = self.std_loss_scaling
 
-        if loss_weight is not None:
-            b = torch.einsum("...kl,kl->...kl", b, loss_weight)
-            target = torch.einsum("...kl,kl->...kl", target, loss_weight)
-        #     if nn_output is not None:
-        #         # use the std of the outputs as an additional loss function
-        #         loss_std = alpha * torch.std(
-        #             torch.einsum("...kl,kl->...kl", nn_output, loss_weight), dim=(-2, -1)).sum()
-        #     else:
-        #         loss_std = 0
-        # else:
-        #     if nn_output is not None:
-        #         loss_std = alpha * torch.std(nn_output, dim=(-2, -1)).sum()
-        #     else:
-        #         loss_std = 0
-        return self.loss_function(b, target) #+ loss_std
+        if self.loss_weight is not None:
+            # b = b* loss_weight
+            b = torch.einsum("...kl,kl->...kl", b, self.loss_weight)
+            target = torch.einsum("...kl,kl->...kl", target, self.loss_weight)
+            if nn_output is not None:
+                # use the std of the outputs as an additional loss function
+                loss_std = alpha * torch.std(
+                    torch.einsum("...kl,kl->...kl", nn_output, self.loss_weight), dim=(-2, -1)).sum()
+            else:
+                loss_std = 0
+        else:
+            if nn_output is not None:
+                loss_std = alpha * torch.std(nn_output, dim=(-2, -1)).sum()
+            else:
+                loss_std = 0
+
+        return self.loss_function(b, target) + loss_std
 
 
     def extract_results(self, final_output, final_b, remove_padding = True):
