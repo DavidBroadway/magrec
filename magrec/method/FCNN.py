@@ -43,6 +43,12 @@ class FCNN(object):
         if "num_targets" in self.model.require:
             n_channels_in = self.model.require["num_targets"]
             print("Number of targets: {}".format(n_channels_in))
+        
+        if "source_angles" in self.model.require:
+            self.source_angles = self.model.require["source_angles"]
+            print("Including source angles in the neural network: {}".format(self.source_angles))
+        else:
+            self.source_angles = False
 
         # check if the dataset meets the requirements of the model
         self.model.prepareTargetData()    
@@ -55,7 +61,7 @@ class FCNN(object):
         self.Net = Net(training_target, 
                        n_channels_in=n_channels_in, 
                        n_channels_out=n_channels_out,
-                       ).to(self.device)
+                       source_angles=self.source_angles).to(self.device)
 
         # Define the data for loading into the network.
         self.img_comp = torch.Tensor(training_target)
@@ -124,10 +130,15 @@ class FCNN(object):
                 # Calling .forward(inputs) skips any PyTorch hooks before the call, and should avoided:
                 # Source: https://pytorch.org/docs/stable/_modules/torch/nn/modules/module.html#Module
                 # See also: https://stackoverflow.com/questions/55338756/why-there-are-different-output-between-model-forwardinput-and-modelinput
-                outputs = self.Net(data)
+                if self.source_angles:
+                    outputs, self.source_theta, self.source_phi = self.Net(data)
+                    # Convert to magnetic field
+                    b, outputs = self.model.transform(outputs, self.source_theta, self.source_phi)
 
-                # Convert to magnetic field
-                b, outputs = self.model.transform(outputs)
+                else:
+                    outputs = self.Net(data)
+                    # Convert to magnetic field
+                    b, outputs = self.model.transform(outputs)
 
                 # Compute the loss
                 loss = self.model.calculate_loss(b, self.img_comp, nn_output=outputs)
@@ -148,6 +159,10 @@ class FCNN(object):
         self.final_Jxy = outputs.detach()
         # self.final_Jxy = self.Jxy.detach()
         self.final_b = b.detach()
+
+        if self.source_angles:
+            self.final_theta = self.source_theta.detach()
+            self.final_phi = self.source_phi.detach()
 
         # Return the loss and accuracy
         return 
@@ -181,8 +196,11 @@ class Net(nn.Module):
     # class to create a fully connected neural network for magnetisation reconstruction
     def __init__(self, target, 
                  n_channels_in=1, 
-                 n_channels_out=1):
+                 n_channels_out=1,
+                 source_angles = False):
         super(Net, self).__init__()
+
+        self.source_angles = source_angles
 
         self.n_channels_in = n_channels_in
         self.n_channels_out = n_channels_out
@@ -203,7 +221,10 @@ class Net(nn.Module):
         self.dec4 = nn.Linear(in_features=64, out_features=128)
         self.dec5 = nn.Linear(in_features=128, out_features= self.n_channels_out * self.input_size)
 
-  
+        self.theta = nn.Linear(in_features=128, out_features=1)  # output layer for theta
+        self.phi = nn.Linear(in_features=128, out_features=1)  # output layer for phi
+
+
     def forward(self,input):
 
         enc1 = F.relu(self.enc1(input))
@@ -219,29 +240,14 @@ class Net(nn.Module):
         out = self.dec5(dec4)
 
         final_output =  torch.reshape(out, (1, self.n_channels_out, self.output_size[-2], self.output_size[-1]))
-        
-        # final_output[0,0,::] = self.lorentzian_filter_2d(final_output[0,0,::],3,3)
 
-        return final_output
+        if self.source_angles:
+            theta = self.theta(dec4)  # output of the theta layer
+            phi = self.phi(dec4)  # output of the phi layer
+            return final_output, theta, phi
+        else:
+            return final_output
     
     
 
-
-    def lorentzian_kernel_1d(self, sigma: float, num_sigmas: float = 3.) -> torch.Tensor:
-        radius = np.ceil(num_sigmas * sigma)
-        support = torch.arange(-radius, radius + 1, dtype=torch.float)
-        kernel = Cauchy(loc=0, scale=sigma).log_prob(support).exp_()
-        # Ensure kernel weights sum to 1, so that image brightness is not altered
-        return kernel.mul_(1 / kernel.sum())
-    
-
-    def lorentzian_filter_2d(self, img: torch.Tensor, sigma_x: float, sigma_y: float) -> torch.Tensor:   
-        kernel_1d_x = self.lorentzian_kernel_1d(sigma_x)  # Create 1D Lorentzian kernel
-        kernel_1d_y = self.lorentzian_kernel_1d(sigma_y)  # Create 1D Lorentzian kernel
-        
-        img = img.unsqueeze(0).unsqueeze_(0)  # Need 4D data for ``conv2d()``
-        # Convolve along columns and rows
-        img = conv2d(img, weight=kernel_1d_x.view(1, 1, -1, 1), padding="same")
-        img = conv2d(img, weight=kernel_1d_y.view(1, 1, 1, -1),   padding="same")
-        return img.squeeze_(0).squeeze_(0)  # Make 2D again
     

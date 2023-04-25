@@ -168,16 +168,18 @@ class Jxy(GenericModel):
     def plot_results(self, results):  
         """
         Args:
-            nn_output: The output of the neural network
-            target: The target magnetic field
+            results: A dictionary containing the following keys:
+                "original B": The original magnetic field
+                "Recon B": The reconstructed magnetic field
+                "Jx": The x-component of the current density
+                "Jy": The y-component of the current density
+                "J": The magnitude of the current density
+                "divJ": The divergence of the current density
 
         Returns:
             None
         """
-        
-        fig = plt.figure()
-        fig.set_figheight(8)
-        fig.set_figwidth(10)
+        fig = plt.figure(figsize=(10, 8))
 
         plt.subplot(3, 3, 1)
         plot_data = results["original B"] * 1e6
@@ -236,15 +238,6 @@ class Jxy(GenericModel):
         cb = plt.colorbar()
         cb.set_label("J (A/m)")
 
-        # plt.subplot(3, 3, 7)
-        # plot_data = results["g stream"]
-        # plot_range = abs(plot_data).max()
-        # plt.imshow(plot_data, cmap="PiYG", vmin=-plot_range, vmax=plot_range)
-        # plt.xticks([])
-        # plt.yticks([])
-        # cb = plt.colorbar()
-        # cb.set_label("stream function")
-
         plt.subplot(3, 3, 8)
         plot_data = results["divJ"]
         plot_range = abs(plot_data).max()
@@ -253,6 +246,8 @@ class Jxy(GenericModel):
         plt.yticks([])
         cb = plt.colorbar()
         cb.set_label("div(J)")
+
+        plt.show()
 
     def divergence(self, fx, fy,sp):
         """ Computes divergence of vector field 
@@ -265,11 +260,25 @@ class Jxy(GenericModel):
 class LorentzianBlur(torch.nn.Module):
     def __init__(self, kernel_size, sigma_x: float, sigma_y: float):
         super(LorentzianBlur, self).__init__()
-
+        """
+        Class for applying a Lorentzian blur to a 2D image. The kernel is generated using the formula for a 2D Lorentzian
+        function and then applied using a convolution.
+        Args:
+            kernel_size (int): The size of the kernel to use
+            sigma_x (float): The standard deviation of the kernel in the x direction
+            sigma_y (float): The standard deviation of the kernel in the y direction
+        """
         self.kernel_size = kernel_size
         self.kernel = self.get_2d_lorentzian_kernel(kernel_size, sigma_x=sigma_x, sigma_y=sigma_y)
 
     def forward(self, input_tensor):
+        """
+        Applies the Lorentzian blur to the input tensor.
+        Args:
+            input_tensor (torch.Tensor): The input tensor to apply the blur to
+        Returns:
+            torch.Tensor: The tensor after the Lorentzian blur has been applied
+        """
         batch_size, channels, height, width = input_tensor.size()
         kernel = self.kernel.unsqueeze(0).repeat(channels, 1, 1, 1).to(input_tensor.device)
         return torch.nn.functional.conv2d(input_tensor, weight=kernel, groups=channels, stride=1, padding="same")
@@ -303,11 +312,25 @@ class LorentzianBlur(torch.nn.Module):
 class GuassianBlur(torch.nn.Module):
     def __init__(self, kernel_size, sigma_x: float, sigma_y: float):
         super(GuassianBlur, self).__init__()
-
+        """
+        Class for applying a Lorentzian blur to a 2D image. The kernel is generated using the formula for a 2D Gaussian
+        function and then applied using a convolution.
+        Args:
+            kernel_size (int): The size of the kernel to use
+            sigma_x (float): The standard deviation of the kernel in the x direction
+            sigma_y (float): The standard deviation of the kernel in the y direction
+        """
         self.kernel_size = kernel_size
         self.kernel = self.get_2d_gaussian_kernel(kernel_size, sigma_x=sigma_x, sigma_y=sigma_y)
 
     def forward(self, input_tensor):
+        """
+        Applies the Lorentzian blur to the input tensor.
+        Args:
+            input_tensor (torch.Tensor): The input tensor to apply the blur to
+        Returns:
+            torch.Tensor: The tensor after the Lorentzian blur has been applied
+        """
         batch_size, channels, height, width = input_tensor.size()
         kernel = self.kernel.unsqueeze(0).repeat(channels, 1, 1, 1).to(input_tensor.device)
         return torch.nn.functional.conv2d(input_tensor, weight=kernel, groups=channels, stride=1, padding="same")

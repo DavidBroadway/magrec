@@ -10,8 +10,10 @@ class UniformMagnetisation(GenericModel):
     def __init__(self,  
                 dataset : object, 
                 loss_type : str = "MSE", 
-                m_theta : float = 0, 
+                m_theta : float = 0,
+                fit_m_theta: bool = False, 
                 m_phi: float = 0,
+                fit_m_phi: bool = False,
                 scaling_factor: float = 1, 
                 std_loss_scaling : float = 0, 
                 loss_weight: torch.Tensor = None,
@@ -27,6 +29,11 @@ class UniformMagnetisation(GenericModel):
         self.source_weight = source_weight
         self.spatial_filter = spatial_filter
         self.spatial_filter_width = spatial_filter_width
+
+        self.m_theta = m_theta
+        self.m_phi = m_phi
+        self.fit_m_theta = fit_m_theta
+        self.fit_m_phi = fit_m_phi
 
         # define the requirements for the model that may change the fitting method
         self.requirements()
@@ -49,8 +56,17 @@ class UniformMagnetisation(GenericModel):
         self.require = dict()
         self.require["num_targets"] = 1
         self.require["num_sources"] = 1
+        self.require["source_angles"] = True
 
-    def transform(self, nn_output):
+    def transform(self, nn_output, m_theta = None, m_phi = None):
+        if self.fit_m_theta:
+            self.m_theta = m_theta
+        if self.fit_m_phi:
+            self.m_phi = m_phi
+
+        if self.m_theta or self.m_phi:
+            self.magClass = Mxy2Bsensor(self.dataset, m_theta = self.m_theta, m_phi = self.m_phi)
+
         # Apply the weight matrix to the output of the NN
         if self.source_weight is not None:
             nn_output = nn_output*self.source_weight
