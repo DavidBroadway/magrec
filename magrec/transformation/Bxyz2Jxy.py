@@ -44,13 +44,6 @@ class Bxyz2Jxy(GenericTranformation):
 
         self.dataset = dataset
 
-        # self.j_to_b_matrix = CurrentLayerFourierKernel2d\
-        #     .define_kernel_matrix(
-        #         self.ft.kx_vector, 
-        #         self.ft.ky_vector, 
-        #         dataset.height, 
-        #         dataset.layer_thickness)
-
         self.b_to_j_matrix = MagneticFieldToCurrentInversion2d.define_kernel_matrix(
             self.ft.kx_vector, 
             self.ft.ky_vector, 
@@ -59,12 +52,6 @@ class Bxyz2Jxy(GenericTranformation):
             dx=dataset.dx,
             dy=dataset.dy
         )
-        # set the Bz term to zero as we don't need it
-        # self.b_to_j_matrix[2, 0, :, :] = 0 
-        # self.b_to_j_matrix[2, 1, :, :] = 0 
-
-        # set the DC component to zero
-        # self.b_to_j_matrix[0,0] = 0
 
         # # If there exists any nans set them to zero
         self.b_to_j_matrix[self.b_to_j_matrix != self.b_to_j_matrix] = 0

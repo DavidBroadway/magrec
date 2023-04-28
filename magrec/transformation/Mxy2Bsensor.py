@@ -42,7 +42,8 @@ class Mxy2Bsensor(GenericTranformation):
         unit_conversion = 1e-18 / 9.27e-24
 
         self.m_to_b_matrix = (1/unit_conversion) * MagnetizationFourierKernel2d\
-            .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, dataset.height, dataset.layer_thickness)
+            .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, dataset.height, dataset.layer_thickness, 
+                                  dataset.dx, dataset.dy)
         
         # sum over the magnetisation direction
         self.m_to_b_matrix = torch.einsum("...ijkl,i->...jkl", self.m_to_b_matrix, self.mag_dir)

@@ -84,6 +84,7 @@ class Data(object):
 
     def add_hanning_filter(self, wavelength):
         """ Add a hanning filter to the data. """
+        self.load_filter_Class()
         self.target = self.Filtering.apply_hanning_filter(wavelength, data=self.target, plot_results=False)
         # Track the action on the dataset
         self.filter_action(
@@ -94,6 +95,7 @@ class Data(object):
 
     def remove_DC_background(self):
         """ Remove the DC background from the data. """
+        self.load_filter_Class()
         self.target = self.Filtering.remove_DC_background(data=self.target)
         # Track the action on the dataset
         self.filter_action(
@@ -104,6 +106,7 @@ class Data(object):
 
     def add_short_wavelength_filter(self, wavelength):
         """ Add a short wavelength filter to the data. """
+        self.load_filter_Class()
         self.target = self.Filtering.apply_short_wavelength_filter(wavelength, data=self.target, plot_results=False)
         # Track the action on the dataset
         self.filter_action(
@@ -113,6 +116,7 @@ class Data(object):
 
     def add_long_wavelength_filter(self, wavelength):
         """ Add a long wavelength filter to the data. """
+        self.load_filter_Class()
         self.target = self.Filtering.apply_long_wavelength_filter(wavelength, data=self.target, plot_results=False)
         # Track the action on the dataset
         self.filter_action(

@@ -49,7 +49,7 @@ class GenericModel(object):
         else:
             raise ValueError("ERROR: Loss type not recognised. Options are: L1 and MSE (L2)")
 
-    def remove_padding_from_results(self):
+    def remove_padding_from_results(self, additional_roi=None):
         # Remove the padding from the results.
         
         padding = Padder()
@@ -60,6 +60,10 @@ class GenericModel(object):
                     roi = self.dataset.reverse_parameters[-1-idx]
                     for key in self.results.keys():
                         self.results[key] = padding.crop_data(self.results[key], roi)
+        
+        if additional_roi is not None:
+            for key in self.results.keys():
+                        self.results[key] = padding.crop_data(self.results[key], additional_roi)
 
     def requirements(self):
         """

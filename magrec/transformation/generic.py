@@ -25,6 +25,7 @@ class GenericTranformation(object):
             grid_shape=self.dataset.target.size(),
             dx=self.dataset.dx,
             dy=self.dataset.dy,
+            real_signal=False
         )
 
 

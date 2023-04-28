@@ -15,7 +15,7 @@ from magrec.transformation.Fourier import FourierTransform2d
 from magrec.image_processing.Padding import Padder
 
 
-class Jxy2Bsensor(GenericTranformation):
+class Jxy2Bxyz(GenericTranformation):
 
     def __init__(self, dataset, target = None, pad = True, fourier_target = False):
         """
@@ -78,9 +78,6 @@ class Jxy2Bsensor(GenericTranformation):
         # If there exists any nans set them to zero
         self.j_to_b_matrix[self.j_to_b_matrix != self.j_to_b_matrix] = 0
 
-        # Multiply the kernel matrix by the sensor direction
-        self.j_to_b_matrix = torch.einsum("ijkl,i->jkl", self.j_to_b_matrix, self.sensor_dir)
-
         self.transformation = self.j_to_b_matrix
         # self.transformation[0,0] = 0
         # If there exists any nans set them to zero
@@ -97,7 +94,7 @@ class Jxy2Bsensor(GenericTranformation):
         # Get the current density from the magnetization
         j = self.ft.forward(J, dim=(-2, -1))
         # Get the magnetic field from the current density
-        b = torch.einsum("...jkl,...jkl->...kl", self.j_to_b_matrix, j)
+        b = torch.einsum("...ijkl,...jkl->...ikl", self.j_to_b_matrix, j)
         # b[0,0] = 0 # remove DC componenet
         B = self.ft.backward(b, dim=(-2, -1))
         B = self.Padder.remove_padding2d(B)

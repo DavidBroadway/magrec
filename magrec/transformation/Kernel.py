@@ -111,7 +111,7 @@ class CurrentLayerFourierKernel2d(object):
         M[2, 1, :, :] = 1j * kx_vector[:, None] / k_matrix
 
         # Deal with the case where k = 0 by setting the corresponding elements to 0
-        # M[[2, 2], [0, 1], [0, 0], [0, 0]] = 0
+        M[[2, 2], [0, 1], [0, 0], [0, 0]] = 0
 
         depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness, dx, dy, add_filter=False)
 
@@ -191,19 +191,18 @@ class UniformLayerFactor2d(object):
         # `layer_thickness` parameters does not play role and can be set to 0 in the limit of k * thickness ≫ 1,
         # in which case the factor is just -exp(-k * height) / k. Since that must be true for the smallest k which
         # is of order 1/L, the neccessary and satisfactory condition is that the L ≫ thickness, where L is the window size
-        # if layer_thickness == 0:
-        #          depth_factor = (
-        #          torch.exp(k_matrix * height))
-        #          depth_factor[0, 0] = 0
-        depth_factor = (
-                 torch.exp(k_matrix * height))
-        depth_factor[0, 0] = 1
+        if layer_thickness == 0:
+            depth_factor = (
+                    torch.exp(k_matrix * height))
+            depth_factor[0, 0] = 0
         
         if add_filter:
             Filtering = DataFiltering(depth_factor, dx, dy)
+            
+            wavelength = height + layer_thickness
             # add a hanning filter to the depth factor
-            depth_factor = Filtering.apply_hanning_filter(height, data=depth_factor, plot_results=False, in_fourier_space=True)
-            depth_factor = Filtering.apply_short_wavelength_filter(height, data=depth_factor, plot_results=False,  in_fourier_space=True) 
+            depth_factor = Filtering.apply_hanning_filter(wavelength, data=depth_factor, plot_results=False, in_fourier_space=True)
+            depth_factor = Filtering.apply_short_wavelength_filter(wavelength, data=depth_factor, plot_results=False,  in_fourier_space=True) 
 
         return depth_factor
 
@@ -330,13 +329,13 @@ class MagneticFieldToCurrentInversion2d(object):
         M[0, 1, :, :] = torch.ones_like(k_matrix)
         M[1, 0, :, :] = -torch.ones_like(k_matrix)
 
-        depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness, dx, dy)
+        depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness, dx, dy, add_filter=True)
         # Temporary set to avoid division by zero
         # depth_factor[0, 0] = 1
 
         M = (2 / MU0) * depth_factor * M
         # Deal with the case where k = 0 by setting the corresponding elements to 0
-        # M[0, 0] = 0
+        M[0, 0] = 0
 
         return M 
 

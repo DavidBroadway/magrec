@@ -69,7 +69,7 @@ class FCNN(object):
         self.mask =np.where(self.img_input.numpy()  == 0,0,1) 
 
         # self.Jxy = torch.FloatTensor(self.img_comp)
-        self.Jxy = torch.FloatTensor(torch.zeros((1, 2, self.img_comp.shape[-2], self.img_comp.shape[-1])))
+        # self.Jxy = torch.FloatTensor(torch.zeros((1, 2, self.img_comp.shape[-2], self.img_comp.shape[-1])))
 
         # if n_channels_out > 1:
         #     self.img_comp = torch.FloatTensor(torch.zeros((1, self.img_comp.shape[-2], self.img_comp.shape[-1])))
@@ -140,6 +140,7 @@ class FCNN(object):
                     # Convert to magnetic field
                     b, outputs = self.model.transform(outputs)
 
+
                 # Compute the loss
                 loss = self.model.calculate_loss(b, self.img_comp, nn_output=outputs)
 
@@ -163,14 +164,17 @@ class FCNN(object):
         if self.source_angles:
             self.final_theta = self.source_theta.detach()
             self.final_phi = self.source_phi.detach()
-
         # Return the loss and accuracy
         return 
 
 
-    def extract_results(self, remove_padding = True):
+    def extract_results(self, remove_padding = True, additional_roi=None):
         # Extract the results from the model and return them.
-        self.results = self.model.extract_results(self.final_output, self.final_Jxy, self.final_b, remove_padding = remove_padding)
+        self.results = self.model.extract_results(self.final_output, 
+                                                  self.final_Jxy, 
+                                                  self.final_b, 
+                                                  remove_padding = remove_padding,
+                                                  additional_roi=additional_roi)
 
     def plot_results(self, remove_padding = True):
         # Plot the results from the model.

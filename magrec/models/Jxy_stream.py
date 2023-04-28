@@ -23,6 +23,7 @@ class Jxy(GenericModel):
                  source_weight: torch.Tensor = None,
                  spatial_filter: bool = False,
                  spatial_filter_type: str = "Gaussian",
+                 spatial_filter_kernal_size: int = 3,
                  spatial_filter_width: list = [0.5, 0.5]):
         super().__init__(dataset, loss_type, scaling_factor)
 
@@ -36,6 +37,7 @@ class Jxy(GenericModel):
                 If this is set to 0 then the standard deviation loss function is not used.
             loss_weight: The weight of the loss function.
             source_weight: The weight of the sources.
+            spatial_filter_kernal_size: The multiplication factor that defines the size of the spatial filter kernal 
             spatial_filter: Whether to apply a spatial filter to the output of the network.
             spatial_filter_width: The width of the spatial filter.
         """
@@ -49,30 +51,39 @@ class Jxy(GenericModel):
         self.spatial_filter = spatial_filter
         self.spatial_filter_type = spatial_filter_type
         self.spatial_filter_width = spatial_filter_width
+        self.spatial_filter_kernal_size = spatial_filter_kernal_size
         self.requirements()
 
-        if self.spatial_filter:
-            # Blur the output of the NN based off the standoff distance compared to the pixel size
-            # From Nyquists theorem the minimum frequency that can be resolved is 1/2 the pixel size 
-            # or in our case 1/2 the standoff distance. Therefore FWHM = 1/2 the standoff distance 
-            # relative to the pixel size 
-            # sigma = [self.spatial_filter_width, self.spatial_filter_width]
-            # self.blurrer = T.GaussianBlur(kernel_size=(30, 30), sigma=self.spatial_filter_width)
+        self.Filtering = DataFiltering(dataset.target, dataset.dx, dataset.dy)
 
-            # define the kernal size based off the spatial filter width
-            kernal_size = max(self.spatial_filter_width[0], self.spatial_filter_width[1])*5
+
+
+        if self.spatial_filter:
+            '''
+            Define the spatial filter to be used.
+            Currently there are three options:
+                - Gaussian
+                - Lorentzian
+                - Hanning
+            The Hanning filter is a simple windowing function that is applied to the output of the network, 
+            this does not require a kernal and is not implemented through the self.blurrer class..
+            '''
+
+            # define the sigma values for the spatial filter
+            sigma_x = self.spatial_filter_width[0]/ self.dataset.dy
+            sigma_y = self.spatial_filter_width[1]/ self.dataset.dx
+            # define the kernal size based off the spatial filter width, 
+            # The default value of 3 is a good approximation and doesn't add significant computational time. 
+            # This value can be increased if you see artifacts in the output of the network.
+            kernal_size = max(sigma_x, sigma_y)*self.spatial_filter_kernal_size
             # make the kernal size odd
             if kernal_size % 2 == 0:
                 kernal_size += 1
             if spatial_filter_type == "Gaussian":
-                self.blurrer = GuassianBlur(kernel_size=kernal_size, 
-                                             sigma_x=self.spatial_filter_width[0], 
-                                             sigma_y=self.spatial_filter_width[1])
+                self.blurrer = GuassianBlur(kernel_size=kernal_size, sigma_x=sigma_x, sigma_y=sigma_y)
                 print("Using a Gaussian filter")
             elif spatial_filter_type == "Lorentzian":
-                self.blurrer = LorentzianBlur(kernel_size=kernal_size, 
-                                                sigma_x=self.spatial_filter_width[0], 
-                                                sigma_y=self.spatial_filter_width[1])
+                self.blurrer = LorentzianBlur(kernel_size=kernal_size, sigma_x=sigma_x, sigma_y=sigma_y)
                 print("Using a Lorentzian filter")
             
 
@@ -99,7 +110,12 @@ class Jxy(GenericModel):
 
         # Apply a spatial filter to the output of the NN
         if self.spatial_filter:
-            nn_output = self.blurrer(nn_output)
+            if self.spatial_filter_type == "Hanning":                
+                nn_output = self.Filtering.apply_hanning_filter(self.spatial_filter_width[0], data=nn_output, plot_results=False)
+                nn_output = self.Filtering.apply_short_wavelength_filter(self.spatial_filter_width[0], data=nn_output, plot_results=False, print_action=False)
+            else: 
+                nn_output = self.blurrer(nn_output)
+
 
         # Calculate the diveregence of the output of the NN
         sp = [self.dataset.dx, self.dataset.dy]
@@ -139,7 +155,7 @@ class Jxy(GenericModel):
 
         return self.loss_function(b, target) + loss_std
 
-    def extract_results(self, final_output,  final_Jxy, final_b, remove_padding = True):
+    def extract_results(self, final_output,  final_Jxy, final_b, remove_padding = True,  additional_roi=None):
         """
         Args:
             nn_output: The output of the neural network
@@ -161,11 +177,11 @@ class Jxy(GenericModel):
         self.results["original B"] = self.original_target
 
         if remove_padding:
-            self.remove_padding_from_results()
+            self.remove_padding_from_results(additional_roi= additional_roi)
 
         return self.results
 
-    def plot_results(self, results):  
+    def plot_results(self, results, x_positions = None, y_positions = None,):  
         """
         Args:
             results: A dictionary containing the following keys:
@@ -179,32 +195,43 @@ class Jxy(GenericModel):
         Returns:
             None
         """
+
+        dx = self.dataset.dx
+        dy = self.dataset.dy
+        x_size = results["original B"].shape[0]
+        y_size = results["original B"].shape[1]
+        real_x = np.linspace(-dx*x_size/2, dx*x_size/2, x_size)
+        real_y = np.linspace(-dy*y_size/2, dy*y_size/2, y_size)
+        extent = [real_x[0]-dx, real_x[-1]+dx, real_y[0]-dy, real_y[-1]+dy]
+
         fig = plt.figure(figsize=(10, 8))
 
         plt.subplot(3, 3, 1)
-        plot_data = results["original B"] * 1e6
+        plot_data = results["original B"].T * 1e6
         plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap='bwr', vmin=-plot_range, vmax=plot_range)
-        plt.xticks([])
-        plt.yticks([])
-        cb = plt.colorbar()
+        plt.imshow(plot_data, cmap='bwr', vmin=-plot_range, vmax=plot_range, extent=extent)
+        # plt.xticks([])
+        # plt.yticks([])
         plt.title('original B')
+        plt.ylabel("y ($\mu$m)")
+        plt.xlabel("x ($\mu$m)")
+        cb = plt.colorbar()
         cb.set_label("B ($\mu$T)")
 
         plt.subplot(3, 3, 2)
-        plot_data = results["Recon B"] * 1e6
+        plot_data = results["Recon B"].T * 1e6
         plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap='bwr', vmin=-plot_range, vmax=plot_range)
-        plt.xticks([])
-        plt.yticks([])
+        plt.imshow(plot_data, cmap='bwr', vmin=-plot_range, vmax=plot_range, extent=extent)
+        # plt.xticks([])
+        # plt.yticks([])
         cb = plt.colorbar()
         plt.title('reconstructed B')
         cb.set_label("B ($\mu$T)")
 
         plt.subplot(3, 3, 3)
-        plot_data = (results["original B"] - results["Recon B"])* 1e6
+        plot_data = (results["original B"] - results["Recon B"]).T* 1e6
         plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap='bwr', vmin=-plot_range, vmax=plot_range)
+        plt.imshow(plot_data, cmap='bwr', vmin=-plot_range, vmax=plot_range, extent=extent)
         plt.xticks([])
         plt.yticks([])
         cb = plt.colorbar()
@@ -212,36 +239,36 @@ class Jxy(GenericModel):
         cb.set_label("B ($\mu$T)")
 
         plt.subplot(3, 3, 4)
-        plot_data = results["Jx"]
+        plot_data = results["Jx"].T
         plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
+        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range, extent=extent)
         plt.xticks([])
         plt.yticks([])
         cb = plt.colorbar()
         cb.set_label("Jx (A/m)")
 
         plt.subplot(3, 3, 5)
-        plot_data = results["Jy"]
+        plot_data = results["Jy"].T
         plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
+        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range, extent=extent)
         plt.xticks([])
         plt.yticks([])
         cb = plt.colorbar()
         cb.set_label("Jy (A/m)")
 
         plt.subplot(3, 3, 6)
-        plot_data = results["J"]
+        plot_data = results["J"].T
         plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap="viridis", vmin=0, vmax=plot_range)
+        plt.imshow(plot_data, cmap="viridis", vmin=0, vmax=plot_range, extent=extent)
         plt.xticks([])
         plt.yticks([])
         cb = plt.colorbar()
         cb.set_label("J (A/m)")
 
         plt.subplot(3, 3, 8)
-        plot_data = results["divJ"]
+        plot_data = results["divJ"].T
         plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
+        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range, extent=extent)
         plt.xticks([])
         plt.yticks([])
         cb = plt.colorbar()

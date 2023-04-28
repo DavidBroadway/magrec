@@ -29,7 +29,7 @@ class Bsensor2Jxy(GenericTranformation):
             height:             height above the magnetization layer at which to evaluate the magnetic field, in [mm]
             layer_thickness:    thickness of the magnetization layer, in [mm]
         """
-        self.ft = FourierTransform2d(grid_shape=dataset.target.size(), dx=dataset.dx, dy=dataset.dy, real_signal=True)
+        self.ft = FourierTransform2d(grid_shape=dataset.target.size(), dx=dataset.dx, dy=dataset.dy, real_signal=False)
         self.s_theta = np.deg2rad(dataset.sensor_theta)
         self.s_phi = np.deg2rad(dataset.sensor_phi)
 
