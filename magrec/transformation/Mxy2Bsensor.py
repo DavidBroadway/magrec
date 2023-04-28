@@ -11,6 +11,7 @@ import numpy as np
 
 from magrec.transformation.generic import GenericTranformation
 from magrec.transformation.Kernel import MagnetizationFourierKernel2d
+from magrec.transformation.Fourier import FourierTransform2d
 
 
 class Mxy2Bsensor(GenericTranformation):
@@ -40,6 +41,10 @@ class Mxy2Bsensor(GenericTranformation):
         # Define the kernal for the transformation
         # convert from A/M to uB/nm^2
         unit_conversion = 1e-18 / 9.27e-24
+
+        grid= dataset.target 
+        grid_shape = grid.size()
+        self.ft = FourierTransform2d(grid_shape=grid_shape, dx=dataset.dx, dy=dataset.dy, real_signal=False)
 
         self.m_to_b_matrix = (1/unit_conversion) * MagnetizationFourierKernel2d\
             .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, dataset.height, dataset.layer_thickness, 
@@ -75,7 +80,7 @@ class Mxy2Bsensor(GenericTranformation):
         # remove the CD component
         # b[0,0] = 0 
         # Transform back into real space
-        B = self.ft.backward(b, dim=(-2, -1))
+        B = self.ft.backward(b, dim=(-2, -1)).real
 
         return B
     
