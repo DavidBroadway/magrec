@@ -432,11 +432,15 @@ class CurrentPropagator2d(object):
 
 class AxisProjectionPropagator(object):
 
-    def __init__(self, theta, phi):
+    def __init__(self, theta, phi, keepdims=False):
         self.n = SphericalUnitVectorKernel.define_unit_vector(theta, phi)
+        self.keepdims = keepdims
 
     def project(self, x):
-        return torch.einsum('...cij,c->...ij', x, self.n.type(x.type()))
+        res = torch.einsum('...cij,c->...ij', x, self.n.type(x.type()))
+        if self.keepdims:
+            res = res.unsqueeze(-3)
+        return res
 
     def __call__(self, x):
         return self.project(x)

@@ -5,7 +5,6 @@ from magrec.prop.constants import MU0, twopi
 
 
 class CurrentFourierKernel2d(object):
-
     @staticmethod
     def define_kernel_matrix(kx_vector, ky_vector, k_matrix):
         """
@@ -66,7 +65,6 @@ class CurrentFourierKernel2d(object):
 
 
 class CurrentLayerFourierKernel2d(object):
-
     @staticmethod
     def define_kernel_matrix(kx_vector, ky_vector, height, layer_thickness):
         """Defines a transformation matrix that connects a 2d current distribution that has 2 components of
@@ -103,24 +101,25 @@ class CurrentLayerFourierKernel2d(object):
         #                V  V
         M = torch.zeros((3, 2,) + k_matrix.shape, dtype=torch.complex64,)
 
-        M[0, 1, :, :] =  torch.ones_like(k_matrix)
+        M[0, 1, :, :] = torch.ones_like(k_matrix)
         M[1, 0, :, :] = -torch.ones_like(k_matrix)
 
         M[2, 0, :, :] = -1j * ky_vector[None, :] / k_matrix
-        M[2, 1, :, :] =  1j * kx_vector[:, None] / k_matrix
+        M[2, 1, :, :] = 1j * kx_vector[:, None] / k_matrix
 
         # Deal with the case where k = 0 by setting the corresponding elements to 0
         # The elements in question are M[2, 0, 0, 0] and M[2, 1, 0, 0]
         M[[2, 2], [0, 1], [0, 0], [0, 0]] = 0
 
-        depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
+        depth_factor = UniformLayerFactor2d.define_depth_factor(
+            k_matrix, height, layer_thickness
+        )
 
         M = (MU0 / 2) * depth_factor * M
         return M
 
 
 class MagnetizationFourierKernel2d(object):
-
     @staticmethod
     def define_kernel_matrix(kx_vector, ky_vector, height, layer_thickness):
         """Defines a transformation matrix that connects a 2d magnetization distribution that has 3 components of
@@ -132,8 +131,8 @@ class MagnetizationFourierKernel2d(object):
 
         # divide by 2 to get the proper quantity when _M + _M.T
         _M[0, 1, :, :] = kx_vector[:, None] * ky_vector[None, :] / k_matrix / 2
-        _M[0, 2, :, :] = - 1j * kx_vector[:, None] / k_matrix / 2
-        _M[1, 2, :, :] = - 1j * ky_vector[None, :] / k_matrix / 2
+        _M[0, 2, :, :] = -1j * kx_vector[:, None] / k_matrix / 2
+        _M[1, 2, :, :] = -1j * ky_vector[None, :] / k_matrix / 2
 
         _M[0, 0, :, :] = kx_vector[:, None] ** 2 / k_matrix / 2
         _M[1, 1, :, :] = ky_vector[None, :] ** 2 / k_matrix / 2
@@ -142,7 +141,9 @@ class MagnetizationFourierKernel2d(object):
         # Deal with the case where k = 0 by setting the corresponding elements to 0
         _M[[0, 1, 1], [0, 0, 1], [0, 0, 0], [0, 0, 0]] = 0
 
-        depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
+        depth_factor = UniformLayerFactor2d.define_depth_factor(
+            k_matrix, height, layer_thickness
+        )
         # Use the property of the M matrix that it is symmetric (that's why we divide by 1/2 above, to get the proper diagonal terms)
         M = _M + _M.transpose(0, 1)
 
@@ -162,7 +163,9 @@ class UniformLayerFactor2d(object):
     """
 
     @staticmethod
-    def define_depth_factor(k_matrix: torch.Tensor, height: float, layer_thickness: float):
+    def define_depth_factor(
+        k_matrix: torch.Tensor, height: float, layer_thickness: float
+    ):
         """
         Returns a matrix that scales each k-vector by the factor that appears after integration of a uniform source distribution.
 
@@ -171,10 +174,10 @@ class UniformLayerFactor2d(object):
             height (float):             height above the layer at which to evaluate the factor
             layer_thickness (float):    thickness of the layer
         """
-        depth_factor = (
-                torch.exp(-k_matrix * height)
-                / k_matrix
-                * (torch.exp(-k_matrix * layer_thickness)-1)
+        depth_factor = - (
+            torch.exp(-k_matrix * height)
+            / k_matrix
+            * (torch.exp(-k_matrix * layer_thickness) - 1)
         )
         # TODO: Check when this condition is satisfied, currently layer_thickness = 0 case gives proper field, but the
         # expression below seems wrong.
@@ -183,10 +186,10 @@ class UniformLayerFactor2d(object):
         # in which case the factor is just -exp(-k * height) / k. Since that must be true for the smallest k which
         # is of order 1/L, the neccessary and satisfactory condition is that the L ≫ thickness, where L is the window size
         if layer_thickness == 0:
-                 depth_factor = (
-                 torch.exp(-k_matrix * height))
+            depth_factor = torch.exp(-k_matrix * height)
 
-        depth_factor[0, 0] = 0
+        depth_factor[0, 0] = layer_thickness
+
         return depth_factor
 
 
@@ -262,17 +265,23 @@ class HarmonicFunctionComponentsKernel(object):
 
         # Define the unit vector along the NV axis
         n = torch.tensor(
-            [torch.sin(theta) * torch.cos(phi),
-             torch.sin(theta) * torch.sin(phi),
-             torch.cos(theta)],
-            dtype=torch.complex64)
+            [
+                torch.sin(theta) * torch.cos(phi),
+                torch.sin(theta) * torch.sin(phi),
+                torch.cos(theta),
+            ],
+            dtype=torch.complex64,
+        )
 
         # Define the vector in 2d Fourier space that represent the Hamilton operator ∇
-        u = torch.empty((3,) + k_matrix.shape, dtype=torch.complex64,)
+        u = torch.empty(
+            (3,) + k_matrix.shape,
+            dtype=torch.complex64,
+        )
         u[0, :, :] = kx_vector[:, None]
         u[1, :, :] = ky_vector[None, :]
         u[2, :, :] = 1j * k_matrix
-        _denominator = torch.einsum('cjk,c->jk', u, n)
+        _denominator = torch.einsum("cjk,c->jk", u, n)
 
         # denominator is zero for k = 0, where u = (k_x, k_y, ik) = 0. We set it to 1 to avoid division by zero, and later
         # set the corresponding elements of the kernel matrix to zero to null those components.
@@ -308,9 +317,11 @@ class MagneticFieldToCurrentInversion2d(object):
         M = torch.zeros((2, 2,) + k_matrix.shape, dtype=torch.complex64,)
 
         M[0, 1, :, :] = -torch.ones_like(k_matrix)
-        M[1, 0, :, :] =  torch.ones_like(k_matrix)
+        M[1, 0, :, :] = torch.ones_like(k_matrix)
 
-        depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness)
+        depth_factor = UniformLayerFactor2d.define_depth_factor(
+            k_matrix, height, layer_thickness
+        )
         # Temporary set to avoid division by zero
         depth_factor[0, 0] = 1
 
@@ -321,7 +332,6 @@ class MagneticFieldToCurrentInversion2d(object):
 
 
 class SphericalUnitVectorKernel(object):
-
     @staticmethod
     def define_unit_vector(theta, phi):
         """
@@ -340,8 +350,11 @@ class SphericalUnitVectorKernel(object):
 
         # Define the unit vector along the NV axis
         n = torch.tensor(
-            [torch.sin(theta) * torch.cos(phi),
-             torch.sin(theta) * torch.sin(phi),
-             torch.cos(theta)],)
+            [
+                torch.sin(theta) * torch.cos(phi),
+                torch.sin(theta) * torch.sin(phi),
+                torch.cos(theta),
+            ],
+        )
 
         return n
