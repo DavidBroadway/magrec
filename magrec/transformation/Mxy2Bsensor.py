@@ -40,15 +40,15 @@ class Mxy2Bsensor(GenericTranformation):
 
         # Define the kernal for the transformation
         # convert from A/M to uB/nm^2
-        unit_conversion = 1e-18 / 9.27e-24
+        unit_conversion = (1e-18 / 9.27e-24) * 1e-6
 
         grid= dataset.target 
         grid_shape = grid.size()
-        self.ft = FourierTransform2d(grid_shape=grid_shape, dx=dataset.dx, dy=dataset.dy, real_signal=False)
 
+        # Define the kernal for the transformation
         self.m_to_b_matrix = (1/unit_conversion) * MagnetizationFourierKernel2d\
             .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, dataset.height, dataset.layer_thickness, 
-                                  dataset.dx, dataset.dy)
+                                  dataset.dx, dataset.dy, add_filter = False)
         
         # sum over the magnetisation direction
         self.m_to_b_matrix = torch.einsum("...ijkl,i->...jkl", self.m_to_b_matrix, self.mag_dir)
@@ -67,20 +67,18 @@ class Mxy2Bsensor(GenericTranformation):
 
     def transform(self, M = None):
 
-        if input is None:
+        if M is None:
             print("no input provided, using the dataset target")
             M = self.dataset.target
         
         # Transform into Fourier space
         m = self.ft.forward(M, dim=(-2, -1))
-        # remove the CD component
-        # m[0,0] = 0 
+
         # Transform the magnetization to the magnetic field
         b = m * self.transformation 
-        # remove the CD component
-        # b[0,0] = 0 
-        # Transform back into real space
-        B = self.ft.backward(b, dim=(-2, -1)).real
 
-        return B
+        # Transform back into real space
+        B = self.ft.backward(b, dim=(-2, -1))
+
+        return B.real
     

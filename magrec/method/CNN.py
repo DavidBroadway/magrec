@@ -13,10 +13,19 @@ from magrec.method.generic_method import GenericMethod
 
 class CNN(object):
 
-    def __init__(self, model, dataset):
-        # super().__init__(model, dataset)
+    def __init__(self,                  
+                 model: object, 
+                 learning_rate: float = 0.1):
+        """
+        Args:
+            model: The model to be fitted.
+            learning_rate: The learning rate for the optimizer.
+        """
         self.model = model
-        self.dataset = dataset
+        self.learning_rate = learning_rate
+        torch.autograd.set_detect_anomaly(True)
+
+        self.prepare_fit()
 
     def prepare_fit(self, 
                     n_channels_in=1, 
@@ -24,9 +33,7 @@ class CNN(object):
                     size=2, 
                     kernel=5, 
                     stride=2, 
-                    padding=2 , 
-                    loss_weight = None,
-                    learning_rate = 0.001
+                    padding=2,
                     ):
         # Prepare the method for fitting.
        
@@ -47,43 +54,35 @@ class CNN(object):
         self.model.prepareTargetData()    
         training_target = self.model.training_target
     
-
         # define the device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         # Define the network.
-        # self.Net = Net(n_channels_in=n_channels_in, 
-        #     n_channels_out=n_channels_out, 
-        #     ImageSize = training_target.size()[-1], 
-        #     kernel=kernel, 
-        #     stride=stride, 
-        #     padding=padding).to(self.device)
-        self.Net = Net(n_channels_in=n_channels_in, 
+        self.Net = Net(
+            n_channels_in=n_channels_in, 
             n_channels_out=n_channels_out, 
             kernel=kernel, 
             stride=stride, 
             padding=padding).to(self.device)
 
         # Define the data for loading into the network.
-
         self.img = torch.Tensor(training_target)
         self.mask = np.where(self.img.numpy() == 0,0,1)  
-        
+
+        # Expand the size of the tensors to include the batch size and channel size
         if n_channels_in > 1:
-            self.img_comp = torch.FloatTensor(self.img[np.newaxis])
+            self.img_comp = torch.tensor(self.img[np.newaxis])
         else:
             self.img_comp = torch.FloatTensor(self.img[np.newaxis, np.newaxis])
 
         self.img_input = torch.FloatTensor(self.img[np.newaxis, np.newaxis])
         self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
 
-        self.loss_weight = loss_weight
-
         self.train_data_cnn = TensorDataset(self.img_input, self.mask_t)
         self.train_loader = DataLoader(self.train_data_cnn)
 
         # Define the optimizer
-        self.optimizer = optim.Adam(self.Net.parameters(), lr=learning_rate, eps=1e-08, weight_decay=0, amsgrad=False)
+        self.optimizer = optim.Adam(self.Net.parameters(), lr=self.learning_rate, eps=1e-08, weight_decay=0, amsgrad=False)
 
 
 
@@ -131,20 +130,14 @@ class CNN(object):
                 # Calling .forward(inputs) skips any PyTorch hooks before the call, and should avoided:
                 # Source: https://pytorch.org/docs/stable/_modules/torch/nn/modules/module.html#Module
                 # See also: https://stackoverflow.com/questions/55338756/why-there-are-different-output-between-model-forwardinput-and-modelinput
-                outputs = self.Net(data) * self.model.scaling_factor
-
-                if weight is not None:
-                    outputs = torch.einsum("...kl,kl->...kl", outputs, weight)
+                
+                outputs = self.Net(data) 
 
                 # Convert to magnetic field
-                b = self.model.transform(outputs)
+                b, outputs = self.model.transform(outputs)
 
                 # Compute the loss
-                total_loss = self.model.calculate_loss(b, self.img_comp, nn_output=outputs, loss_weight = self.loss_weight)
-                # loss_std = torch.std(outputs, dim=(-2, -1)).sum()
-                # # a scaling
-                # alpha = 0.05
-                # total_loss = loss + alpha * loss_std
+                total_loss = self.model.calculate_loss(b, self.img_comp, nn_output=outputs)
 
                 # Backpropagate the loss
                 total_loss.backward()

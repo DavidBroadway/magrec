@@ -134,26 +134,13 @@ class Jxy(GenericModel):
         Returns:
             loss: The loss function
         """
-        # a scaling
-        alpha = self.std_loss_scaling
 
         if self.loss_weight is not None:
-            # b = b* loss_weight
             b = torch.einsum("...kl,kl->...kl", b, self.loss_weight)
             target = torch.einsum("...kl,kl->...kl", target, self.loss_weight)
-            if nn_output is not None:
-                # use the std of the outputs as an additional loss function
-                loss_std = alpha * torch.std(
-                    torch.einsum("...kl,kl->...kl", nn_output, self.loss_weight), dim=(-2, -1)).sum()
-            else:
-                loss_std = 0
-        else:
-            if nn_output is not None:
-                loss_std = alpha * torch.std(nn_output, dim=(-2, -1)).sum()
-            else:
-                loss_std = 0
 
-        return self.loss_function(b, target) + loss_std
+
+        return self.loss_function(b, target) 
 
     def extract_results(self, final_output,  final_Jxy, final_b, remove_padding = True,  additional_roi=None):
         """

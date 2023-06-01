@@ -121,7 +121,7 @@ class UniformMagnetisation(GenericModel):
         if self.source_weight is not None:
             nn_output = nn_output*self.source_weight
 
-        return self.magClass.transform(nn_output), nn_output
+        return self.magClass.transform(M = nn_output), nn_output
 
     def calculate_loss(self, b, target,  nn_output = None):
         """
@@ -133,24 +133,9 @@ class UniformMagnetisation(GenericModel):
             loss: The loss function
         """
 
-        # a scaling
-        alpha = self.std_loss_scaling
-
         if self.loss_weight is not None:
-            # b = b* loss_weight
             b = torch.einsum("...kl,kl->...kl", b, self.loss_weight)
             target = torch.einsum("...kl,kl->...kl", target, self.loss_weight)
-            if nn_output is not None:
-                # use the std of the outputs as an additional loss function
-                loss_std = alpha * torch.std(
-                    torch.einsum("...kl,kl->...kl", nn_output, self.loss_weight), dim=(-2, -1)).sum()
-            else:
-                loss_std = 0
-        else:
-            if nn_output is not None:
-                loss_std = alpha * torch.std(nn_output, dim=(-2, -1)).sum()
-            else:
-                loss_std = 0
 
         return self.loss_function(b, target)
 

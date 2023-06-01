@@ -37,46 +37,41 @@ class Bsensor2Mxy(GenericTranformation):
         # Define the sensor direction
         self.sensor_dir = self.get_cartesian_dir(dataset.sensor_theta, dataset.sensor_phi)
 
+        # convert from A/m to (uB/nm^2) * conversion from um k vectors 
+        unit_conversion = (1e-18 / 9.27e-24) * 1e-6
+
         # Define the kernal for the transformation
-        self.m_to_b_matrix = MagnetizationFourierKernel2d\
-            .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, dataset.height, dataset.layer_thickness)
+        self.m_to_b_matrix = (1/unit_conversion) * MagnetizationFourierKernel2d\
+            .define_kernel_matrix(self.ft.kx_vector, 
+                                  self.ft.ky_vector, 
+                                  dataset.height,
+                                  dataset.layer_thickness,
+                                  dx = dataset.dx,
+                                  dy = dataset.dy,
+                                  add_filter = True)
         
         # sum over the magnetisation direction
         self.m_to_b_matrix = torch.einsum("...ijkl,i->...jkl", self.m_to_b_matrix, self.mag_dir)
 
         # sum over the sensor direction
         self.m_to_b_matrix = torch.einsum("...jkl,j->...kl", self.m_to_b_matrix, self.sensor_dir)
-
-    def get_m_from_b(self, b):
-        # Calculate the matrix product M @ j for each k_x, k_y, z
-        # b — batch index
-        # i — index of the magnetic field component, i.e. b_x, b_y, b_z,
-        # j — index of the magnetization distribution component, i.e. m_x, m_y, m_z
-        # k, l — indices of k_x and k_y, respectively
-        # b = torch.einsum("ijkl,bjkl->bikl", self.m_to_b_matrix, m)
-
+        
         # Define the finally transformation
-        transform =  1/ self.m_to_b_matrix
+        self.b_to_m_matrix = 1/ self.m_to_b_matrix
 
-        # remove the 0 componenet
-        transform[0,0] = 0
         # If there exists any nans set them to zero
-        transform[transform != transform] = 0
-
-        m = b * transform
-        m[0,0] = 0 # remove DC componenet
-        return m
+        self.b_to_m_matrix[self.b_to_m_matrix != self.b_to_m_matrix] = 0
 
 
-    def transform(self):
-
-        B = self.dataset.target
-
+    def transform(self, B : torch.Tensor = None):
+        if B is None:
+            print("no input provided, using the dataset target")
+            B = self.dataset.target
         b = self.ft.forward(B, dim=(-2, -1))
-        b[0,0] = 0
-        m = self.get_m_from_b(b)
-        M = self.ft.backward(m, dim=(-2, -1))
-        # convert from A/m to uB/nm^2
-        unit_conversion = 1e-18 / 9.27e-24
-        return M * unit_conversion
+        # get the magnetisation in F space
+        m = b  * self.b_to_m_matrix
+        
+        M = self.ft.backward(m, dim=(-2, -1)).real
+        
+        return M 
     

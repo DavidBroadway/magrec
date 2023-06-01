@@ -43,6 +43,6 @@ class MagneticFields(GenericTranformation):
 
         b_fourier = self.ft.forward(self.dataset.target, dim=(-2, -1))
         b = torch.einsum("jkl,kl-> jkl", self.kernel, b_fourier)
-        self.bxyz = self.ft.backward(b, dim=(-2, -1))
+        self.bxyz = self.ft.backward(b, dim=(-2, -1)).real
 
         return self.bxyz
