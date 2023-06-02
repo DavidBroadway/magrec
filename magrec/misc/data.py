@@ -24,7 +24,13 @@ class Data(object):
                 "parameters"])
         self.actions["reverseable"] = self.actions["reverseable"].astype(bool)
 
-    def load_data(self, image, dx, dy, height, theta, phi, layer_thickness):
+    def load_data(self, image, 
+                  dx: float = 0, 
+                  dy: float = 0, 
+                  height: float = 0, 
+                  theta: float = 0, 
+                  phi: float = 0, 
+                  layer_thickness: float = 0):
         """ Load the data. """
 
         # Convert the data to a torch tensor.
