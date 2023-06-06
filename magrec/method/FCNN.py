@@ -68,16 +68,8 @@ class FCNN(object):
         self.img_input = torch.Tensor(torch.flatten(training_target))
         self.mask =np.where(self.img_input.numpy()  == 0,0,1) 
 
-        # self.Jxy = torch.FloatTensor(self.img_comp)
-        # self.Jxy = torch.FloatTensor(torch.zeros((1, 2, self.img_comp.shape[-2], self.img_comp.shape[-1])))
-
-        # if n_channels_out > 1:
-        #     self.img_comp = torch.FloatTensor(torch.zeros((1, self.img_comp.shape[-2], self.img_comp.shape[-1])))
-        # else:
+        # Expand the size of the tensors to include the batch size and channel size
         self.img_comp = torch.FloatTensor(self.img_comp[np.newaxis, np.newaxis])
-
-
-    
         self.img_input = torch.FloatTensor(self.img_input[np.newaxis, np.newaxis])
         self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
 
@@ -131,7 +123,10 @@ class FCNN(object):
                 # Source: https://pytorch.org/docs/stable/_modules/torch/nn/modules/module.html#Module
                 # See also: https://stackoverflow.com/questions/55338756/why-there-are-different-output-between-model-forwardinput-and-modelinput
                 if self.source_angles:
-                    outputs, self.source_theta, self.source_phi = self.Net(data)
+                    outputs, self.source_theta, self.source_phi = self.Net(data,
+                                                theta_guess = self.model.m_theta, 
+                                                phi_guess =self.model.m_phi)
+
                     # Convert to magnetic field
                     b, outputs = self.model.transform(outputs, self.source_theta, self.source_phi)
 
@@ -162,19 +157,26 @@ class FCNN(object):
         self.final_b = b.detach()
 
         if self.source_angles:
-            self.final_theta = self.source_theta.detach()
-            self.final_phi = self.source_phi.detach()
+            self.final_theta = self.source_theta.detach()[0]
+            self.final_phi = self.source_phi.detach()[0]
+        if not self.model.fit_m_theta:
+            self.final_theta = torch.tensor(self.model.m_theta)
+        if not self.model.fit_m_phi:
+            self.final_phi = torch.tensor(self.model.m_phi)
         # Return the loss and accuracy
         return 
 
 
     def extract_results(self, remove_padding = True, additional_roi=None):
+        # print the final angles that were used
+        print("Final reconstruction from the network used the following angles:")
+        print(f"theta: {self.final_theta:.2f}")
+        print(f"phi: {self.final_phi+90:.2f}")
+
         # Extract the results from the model and return them.
         self.results = self.model.extract_results(self.final_output, 
-                                                  self.final_Jxy, 
                                                   self.final_b, 
-                                                  remove_padding = remove_padding,
-                                                  additional_roi=additional_roi)
+                                                  remove_padding = remove_padding)
 
     def plot_results(self, remove_padding = True):
         # Plot the results from the model.
@@ -225,11 +227,20 @@ class Net(nn.Module):
         self.dec4 = nn.Linear(in_features=64, out_features=128)
         self.dec5 = nn.Linear(in_features=128, out_features= self.n_channels_out * self.input_size)
 
-        self.theta = nn.Linear(in_features=128, out_features=1)  # output layer for theta
-        self.phi = nn.Linear(in_features=128, out_features=1)  # output layer for phi
+        self.theta = nn.Linear(in_features=2, out_features=1)  # output layer for theta
+        self.phi = nn.Linear(in_features=2, out_features=1)  # output layer for phi
+
+        
+        # self.fc11 = nn.Linear(in_features=128,  out_features=120)
+        # self.fc12 = nn.Linear(120, 84)
+        # self.fc13 = nn.Linear(84, 1)
+
+        # self.fc21 = nn.Linear(in_features=128,  out_features=120)
+        # self.fc22 = nn.Linear(120, 84)
+        # self.fc23 = nn.Linear(84, 1)
 
 
-    def forward(self,input):
+    def forward(self, input, theta_guess = None, phi_guess = None):
 
         enc1 = F.relu(self.enc1(input))
         enc2 = F.relu(self.enc2(enc1))
@@ -246,8 +257,21 @@ class Net(nn.Module):
         final_output =  torch.reshape(out, (1, self.n_channels_out, self.output_size[-2], self.output_size[-1]))
 
         if self.source_angles:
-            theta = self.theta(dec4)  # output of the theta layer
-            phi = self.phi(dec4)  # output of the phi layer
+            # theta = torch.flatten(enc1, 1)
+            # theta= F.leaky_relu(self.fc11(theta),0)
+            # theta= F.leaky_relu(self.fc12(theta),0.)
+            # theta= 180*F.sigmoid(self.fc13(theta))
+
+            # phi = torch.flatten(enc1, 1)
+            # phi = F.leaky_relu(self.fc21(phi),0)
+            # phi = F.leaky_relu(self.fc22(phi),0.)
+            # phi = 360*F.sigmoid(self.fc23(phi))
+
+            theta_guess = torch.tensor([theta_guess, theta_guess], dtype=torch.float32)
+            phi_guess = torch.tensor([phi_guess, phi_guess], dtype=torch.float32)
+            
+            theta = 180*F.sigmoid(self.theta(theta_guess/180))  # output of the theta layer
+            phi = 360*F.sigmoid(self.phi(phi_guess/360))  # output of the phi layer
             return final_output, theta, phi
         else:
             return final_output

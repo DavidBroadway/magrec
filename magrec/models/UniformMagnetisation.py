@@ -11,7 +11,8 @@ from magrec.image_processing.Filtering import DataFiltering
 class UniformMagnetisation(GenericModel):
     def __init__(self,  
                 dataset : object, 
-                loss_type : str = "MSE", 
+                loss_type : str = "MSE",
+                positive_magnetisation : bool = False, 
                 m_theta : float = 0,
                 fit_m_theta: bool = False, 
                 m_phi: float = 0,
@@ -36,10 +37,13 @@ class UniformMagnetisation(GenericModel):
         self.spatial_filter_type = spatial_filter_type
         self.spatial_filter_kernal_size = spatial_filter_kernal_size
 
+        self.positive_magnetisation = positive_magnetisation
+
         self.m_theta = m_theta
         self.m_phi = m_phi
         self.fit_m_theta = fit_m_theta
         self.fit_m_phi = fit_m_phi
+
 
         self.Filtering = DataFiltering(dataset.target, dataset.dx, dataset.dy)
 
@@ -98,7 +102,10 @@ class UniformMagnetisation(GenericModel):
         self.require = dict()
         self.require["num_targets"] = 1
         self.require["num_sources"] = 1
-        self.require["source_angles"] = False
+        if self.fit_m_theta or self.fit_m_phi:
+            self.require["source_angles"] = True
+        else:
+            self.require["source_angles"] = False
 
     def transform(self, nn_output, m_theta = None, m_phi = None):
         if self.fit_m_theta:
@@ -120,6 +127,10 @@ class UniformMagnetisation(GenericModel):
         # Apply the weight matrix to the output of the NN
         if self.source_weight is not None:
             nn_output = nn_output*self.source_weight
+
+        # if requested apply a positive magnetisation constraint
+        if self.positive_magnetisation:
+            nn_output = nn_output.abs()
 
         return self.magClass.transform(M = nn_output), nn_output
 

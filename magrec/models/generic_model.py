@@ -26,7 +26,7 @@ class GenericModel(object):
         self.scaling_factor = scaling_factor
         
         # Add addtional requirements of the model here.
-        self.requirements()
+        # self.requirements()
 
         self.ft = FourierTransform2d(
             grid_shape=self.dataset.target.shape,

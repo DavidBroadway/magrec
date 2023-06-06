@@ -30,13 +30,19 @@ class GenericTranformation(object):
 
 
     def get_cartesian_dir(self, theta, phi):
-        theta = np.deg2rad(theta)
-        phi = np.deg2rad(phi)
+        # check if theta and phi are ints, if so convert to a tensor
+        if isinstance(theta, int):
+            theta = torch.tensor(theta)
+        if isinstance(phi, int):
+            phi = torch.tensor(phi)
+
+        theta = torch.deg2rad(theta)
+        phi = torch.deg2rad(phi)
 
         cart_dir = torch.tensor([ \
-            np.cos(phi)*np.sin( theta ), \
-            np.sin(phi)*np.sin( theta ), \
-            np.cos(theta)], dtype=torch.complex64)
+            torch.cos(phi)*torch.sin( theta ), \
+            torch.sin(phi)*torch.sin( theta ), \
+            torch.cos(theta)], dtype=torch.complex64)
         return cart_dir
     
     def transform(self):
