@@ -1,0 +1,55 @@
+\documentclass[justified]{tufte-handout}
+
+% Add your own customizations, packages, and settings here
+
+% Set the document metadata
+\title{Inverse Problem of Magnetostatics}
+% \author{Your Name}
+% \date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Multipole expansion}
+
+Biot---Savart law is given by
+
+\begin{equation}
+\mathbf{B}(\mathbf{r}) = \frac{\mu_0}{4\pi} \int \frac{\mathbf{J}(\mathbf{r}') \times (\mathbf{r} - \mathbf{r}')}{|\mathbf{r} - \mathbf{r}'|^3} \, d^3\mathbf{r}'
+\end{equation}
+and in case of the magnetisation $\mathbf{M}$ we have
+
+\begin{equation}
+\mathbf{B}(\mathbf{r}) = \frac{\mu_0}{4\pi} \int \frac{\left[\nabla\times\mathbf{M}(\mathbf{r}')\right] \times (\mathbf{r} - \mathbf{r}')}{|\mathbf{r} - \mathbf{r}'|^3} \, d^3\mathbf{r}'
+\end{equation}
+
+The question I ask myself is: are any statistical properties of the magnetic field
+connected to the statistical properties of the magnetisation or current density distribution that
+produces it?  
+
+\section{Popcorn model}
+
+The popcorn model is a model of a magnetised material that consists of a large number of 
+small magnetic dipoles.  The dipoles are randomly oriented and their positions are random.
+The magnetisation of the material is given by the sum of all the dipoles.  The magnetic field
+is given by the sum of the magnetic fields of all the dipoles.  The magnetic field of a single
+dipole is given by
+
+\begin{equation}
+\mathbf{B}(\mathbf{r}) = \frac{\mu_0}{4\pi} \frac{3\mathbf{m}(\mathbf{r}')\cdot(\mathbf{r} - \mathbf{r}')(\mathbf{r} - \mathbf{r}') - |\mathbf{r} - \mathbf{r}'|^2\mathbf{m}(\mathbf{r}')}{|\mathbf{r} - \mathbf{r}'|^5}
+\end{equation}
+where $\mathbf{m}(\mathbf{r}')$ is the magnetic moment of the dipole at position $\mathbf{r}'$.
+
+\section{Reconstructing magnetic field components}
+
+We have a set of measurements of the magnetic field component $B_{NV}(\mathbf{r}_i)$ at a set of points $\{\mathbf{r}_i\}_{i\in I}$. The first step usually assumed is that it is possible to find all other magnetic field components $B_x, B_y, B_z$. It is done in Fourier space:
+
+\begin{equation}
+\end{equation}
+
+\section{Neural network encoding current distribution}
+
+\cite{wang2021} 
+
+\end{document}
