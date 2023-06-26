@@ -23,9 +23,7 @@ from skorch.utils import open_file_like
 
 from magrec.misc.plot import plot_n_components
 from magrec.prop.Fourier import FourierTransform2d
-from magrec.prop.Pipeline import (CurrentLayerToField, FourierDivergence2d,
-                                  FourierZeroDivergenceConstraint2d, Function,
-                                  Pipe, Projection, Union)
+
 from magrec.prop.Propagator import (AxisProjectionPropagator,
                                     CurrentPropagator2d)
 
@@ -1611,7 +1609,7 @@ class LRScheduler(skorch.callbacks.LRScheduler):
             self.lr_scheduler_.step()
 
 
-class PrototypeWithDivergence(Prototype):
+class PipelineEstimatorWithDivergence(PipelineEstimator):
     def propagate(self, B, epochs=None, **params):
         """Propagate X along the reconstruction pipeline.
 
