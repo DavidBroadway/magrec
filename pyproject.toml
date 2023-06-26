@@ -1,23 +1,16 @@
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
 [project]
-name = "magnetisation_reconstruction"
-version = "0.0.2"
+name = "magrec"
+version = "0.0.3"
+
 authors = [
   { name="Adrien Dubois", email="adr.dubois@gmail.com" },
   { name="David Broadway", email="broadwayphysics@gmail.com" },
-]
-description = "A small example package"
-readme = "README.md"
-license = { file="LICENSE" }
-requires-python = ">=3.8"
-classifiers = [
-    "Programming Language :: Python :: 2",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+  { name="Mykhailo Flaks", email="mykhailo.flaks@gmail.com"},
 ]
 
-[project.urls]
-"Homepage" = "https://github.com/pypa/sampleproject"
-"Bug Tracker" = "https://github.com/pypa/sampleproject/issues"
+description = "Source reconstruction from magnetic field measurements"
+readme = "README.md"
+
+[build-system]
+requires = ["setuptools>=58.2.0", "wheel"]
+build-backend = "setuptools.build_meta"
