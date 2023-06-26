@@ -1,9 +1,95 @@
-
-
 import torch
 import numpy as np
 from abc import ABC, abstractmethod
 
+from magrec.nn.modules import GaussianFourierFeatureTransform, ZeroDivTransform
+from magrec.prop.Propagator import CurrentPropagator2d
+
+import pytorch_lightning as L
+
+class FourierFeatures2dCurrent(torch.nn.Module):
+    """2d current distribution function encoded with Fourier features neural network.
+    
+    By contstruction the current is divergence-free.
+    """
+    def __init__(self) -> None:
+        super().__init__()
+        self.ff1 = GaussianFourierFeatureTransform(2, 10, 0.1)
+        self.ff2 = GaussianFourierFeatureTransform(2, 10, 0.5)
+        self.ff3 = GaussianFourierFeatureTransform(2, 10, 2)
+        self.fcn = torch.nn.Sequential(
+            torch.nn.Linear(60, 60),
+            torch.nn.Sigmoid(),
+            torch.nn.Linear(60, 1),
+        )
+        self.divless = ZeroDivTransform()
+    
+    def forward(self, x):
+        # self.divless requires gradients to compute divergence-free field
+        # so we enable gradients for x
+        x.requires_grad_(True)  
+        y = torch.cat([self.ff1(x), self.ff2(x), self.ff3(x)], dim=1)
+        y = self.fcn(y)
+        J = self.divless(y, x)
+        return J
+    
+
+class FourierFeaturesPINN(L.LightningModule):
+    
+    def __init__(self, learning_rate=1e-1) -> None:
+        super().__init__()
+        self.soln = FourierFeatures2dCurrent()
+        self.learning_rate = learning_rate
+        self.save_hyperparameters()
+        
+    def forward(self, x):
+        J = self.soln(x)
+        return J
+    
+    def training_step(self, batch, batch_idx):
+        """
+        Training step for the model. 
+        
+        In PINN, expect batch to contain elements of the form (X, cond) where X is a set of 
+        points and cond is a Condition object. Condition objects are then used to evaluate the loss. 
+        
+        At each step, we need to evaluate values of self.soln(X) at a set of points X. 
+        Some points are used to connect with the physical model, and some enforce specific boundary conditions
+        on `self.soln`. 
+        
+        """
+        # The conditions are the following:
+        # 1. Having a grid X_grid, the magnetic field B_hat = self.prop(self.soln(X_grid)) should be equal to the self.cond(X_grid)
+        # 2. The current density should be zero in specific regions given by cond2.in_region(x)
+        # 3. The derivative should be minimal in specific regions given by cond3.in_region(x) (where the current is constant, we suspect)
+        loss = 0 
+    
+        for x, cond in batch:
+            y_hat = self.soln(x)
+            cond_loss = cond.loss(x, y_hat)
+            self.log(f'{cond.name}_loss', cond_loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=1)
+            loss += cond_loss
+        
+        self.log('total_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=1)
+        return loss
+    
+    def validation_step(self, batch, batch_idx):
+        # For validation, we show plots and corresponding errors from targets, if any. 
+        for x, cond in batch:
+            
+            with torch.enable_grad():
+                y_hat = self.soln(x)
+                try:
+                    cond.validate(x, y_hat, self.logger.experiment, step=self.global_step)
+                except AttributeError:
+                    self.logger.experiment.add_text(tag='error', text_string=f'No validation for {cond.name}')
+                    pass
+        pass
+    
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        # return torch.optim.LBFGS(self.parameters(), lr=1, max_iter=20, max_eval=30, history_size=10, line_search_fn='strong_wolfe')
+                
 
 class GenericModel(ABC):
     # Super class that other models can be based off.
@@ -51,7 +137,6 @@ class GenericModel(ABC):
 
 
 
-
 class UniformDirectionMagnetisation(GenericModel):
     def __init__(self, data, dx, dy, height, layer_thickness):
         super().__init__(data)
@@ -76,3 +161,5 @@ class UniformDirectionMagnetisation(GenericModel):
         """
         b = self.propagator.get_B(nn_output)
         return b
+
+
