@@ -27,3 +27,19 @@ class GaussianFourierFeatureTransform(torch.nn.Module):
         return torch.cat([torch.cos(x), torch.sin(x)], dim=1) / np.sqrt(self._m)
 
 
+class ZeroDivTransform(torch.nn.Module):
+    """
+    Obtains a 2d divergence-free vector field y(x) from a scalar function f(x):
+    
+    y(x) = (∂f/∂y, -∂f/∂x)
+    
+    The result is a vector field that is divergence-free by construction.
+    """
+    def __init__(self):
+        super().__init__()
+        
+    def forward(self, f, x):
+        # Calculate the curl of the field (f, 0):
+        df_dx = dde.grad.jacobian(f, x, i=0, j=0)
+        df_dy = dde.grad.jacobian(f, x, i=0, j=1)
+        return torch.cat([df_dy, -df_dx], dim=1)
