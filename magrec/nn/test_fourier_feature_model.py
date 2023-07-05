@@ -1,6 +1,7 @@
 import pytest
-from magrec.nn.modules import GaussianFourierFeaturesTransform
 import torch
+
+from magrec.nn.models import FourierFeatures2dCurrent
 
 def test_basic_tensor():
     """Test that the output of the module is the correct shape.
@@ -12,5 +13,5 @@ def test_basic_tensor():
     wtih 40 Fourier features coordinates (20 cosines and 20 sines).
     """
     x = torch.randn(50, 2)
-    y = GaussianFourierFeaturesTransform(2, 20, 1)(x)
-    assert y.shape == (50, 40)
+    y = FourierFeatures2dCurrent(ff_sigmas = [(1, 10), (2, 30), (3, 5)])(x)
+    assert y.shape == (50, 2)

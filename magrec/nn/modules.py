@@ -4,7 +4,7 @@ from magrec.prop.constants import twopi
 
 import deepxde as dde
 
-class GaussianFourierFeatureTransform(torch.nn.Module):
+class GaussianFourierFeaturesTransform(torch.nn.Module):
     """
     An implementation a random Fourier mapping as described in the paper:
     Wang (2021) https://doi.org/10.1016/j.cma.2021.113938, eq. (3.9)

@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from abc import ABC, abstractmethod
 
-from magrec.nn.modules import GaussianFourierFeatureTransform, ZeroDivTransform
+from magrec.nn.modules import GaussianFourierFeaturesTransform, ZeroDivTransform
 from magrec.prop.Propagator import CurrentPropagator2d
 
 import pytorch_lightning as L
@@ -12,15 +12,19 @@ class FourierFeatures2dCurrent(torch.nn.Module):
     
     By contstruction the current is divergence-free.
     """
-    def __init__(self) -> None:
+    def __init__(self, ff_sigmas=[(1, 10), (2, 10), (0.5, 10)]) -> None:
+        """
+        Args:
+            ff_sigmas: a list of standard deviations and the number of frequencies to sample for each sigma.
+                       Should be of the form [(sigma1, n1), (sigma2, n2), ...]
+        """
         super().__init__()
-        self.ff1 = GaussianFourierFeatureTransform(2, 10, 0.1)
-        self.ff2 = GaussianFourierFeatureTransform(2, 10, 0.5)
-        self.ff3 = GaussianFourierFeatureTransform(2, 10, 2)
+        self.ffs = torch.nn.ModuleList([GaussianFourierFeaturesTransform(2, n, sigma) for sigma, n in ff_sigmas])
+        self.ff_features_n = sum([n * 2 for _, n in ff_sigmas])
         self.fcn = torch.nn.Sequential(
-            torch.nn.Linear(60, 60),
+            torch.nn.Linear(self.ff_features_n, self.ff_features_n),
             torch.nn.Sigmoid(),
-            torch.nn.Linear(60, 1),
+            torch.nn.Linear(self.ff_features_n, 1),
         )
         self.divless = ZeroDivTransform()
     
@@ -28,7 +32,7 @@ class FourierFeatures2dCurrent(torch.nn.Module):
         # self.divless requires gradients to compute divergence-free field
         # so we enable gradients for x
         x.requires_grad_(True)  
-        y = torch.cat([self.ff1(x), self.ff2(x), self.ff3(x)], dim=1)
+        y = torch.cat([ff(x) for ff in self.ffs], dim=1)
         y = self.fcn(y)
         J = self.divless(y, x)
         return J
