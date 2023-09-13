@@ -71,7 +71,7 @@ class MagneticFieldObservations2d(Condition):
         y_hat_grid = y_hat.reshape(-1, 3 * W, 3 * H)
 
         curr_fig = plot_n_components(y_hat_grid, labels=[r"J_x", r"J_y"], cmap="bwr")
-        logger.add_figure(tag="current_distribution", figure=curr_fig, global_step=step)
+        logger.add_figure(tag="val/current distribution", figure=curr_fig, global_step=step)
 
         values_hat = self.prop(y_hat_grid).real
         mag_field = torch.cat([values_hat, self.proj(values_hat).unsqueeze(0)], dim=0)
@@ -79,7 +79,7 @@ class MagneticFieldObservations2d(Condition):
         mag_fig = plot_n_components(
             mag_field, labels=[r"target", r"B_x", r"B_y", r"B_z", r"B_{NV}"], cmap="bwr"
         )
-        logger.add_figure(tag="magnetic field", figure=mag_fig, global_step=step)
+        logger.add_figure(tag="val/magnetic field", figure=mag_fig, global_step=step)
 
     def in_region(self, x) -> bool:
         pass
@@ -196,7 +196,7 @@ def main():
     # Create a datamodule which contains data and appropriate conditions
     # for the model to calculate loss against
     datamodule = MagneticField2dDataModule()
-    model = FourierFeaturesPINN()
+    model = FourierFeaturesPINN(ff_sigmas=[(1, 20), (2, 20), (0.5, 20), (5, 20)])
     trainer = L.Trainer(
         logger=tensorboard_logger,
         accelerator="cpu",
