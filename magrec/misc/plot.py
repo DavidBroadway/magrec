@@ -292,3 +292,47 @@ def add_inner_title(ax: plt.Axes, title: str, loc, color=None, **kwargs):
     # add text to the axis
     ax.add_artist(at)
     return at
+
+
+def plot_vector_field_2d(current_distribution, interpolation='none', cmap='plasma', show=False):
+    """
+    Visualizes the current distribution in 2D as a heatmap and arrows.
+
+    Parameters:
+        current_distribution: ndarray of shape (2, W, H) representing current distribution vectors
+    """    
+    # Grid points in x and y direction
+    W, H = current_distribution.shape[1], current_distribution.shape[2]
+    x, y = np.meshgrid(np.arange(W), np.arange(H), indexing='xy')
+
+    # Current distribution vectors
+    u, v = current_distribution[0], current_distribution[1]
+    
+    # Calculate magnitudes
+    magnitudes = np.hypot(u, v)
+    
+    # Create figure
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.subplots(1, 1)
+    
+    # Display a heatmap of magnitudes
+    im = ax.imshow(magnitudes, interpolation=interpolation, cmap=cmap, origin='lower')
+    
+    # Add colorbar for the heatmap
+    fig.colorbar(im, ax=ax, orientation='vertical', label='Magnitude')
+    
+    max_magnitude = magnitudes.max()
+    desired_arrow_size_relative_to_canvas = W / 20.0
+    scale = max_magnitude / desired_arrow_size_relative_to_canvas
+    
+    # Add current distribution vectors using quiver (black arrows)
+    ax.quiver(x, y, u, v, color='black', pivot='mid', units='width')
+    
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_aspect('equal')
+    
+    if show:
+        plt.show()
+        
+    return fig
