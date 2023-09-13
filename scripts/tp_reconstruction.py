@@ -203,17 +203,6 @@ data_cond = PINNCondition(
     name="data_cond",
 )
 
-{
-    "train/data_cond": {
-        "module": module,
-        "sampler": grid_sampler,
-        "residual_fn": data_residual
-        },
-    "train/zero_cond": zero_cond,
-    "train/const_cond": const_cond,
-    "val/plots": plot_cond,
-}
-
 conditions = [const_cond, data_cond]
 optim = OptimizerSetting(optimizer_class=torch.optim.Adam, lr=0.001)
 

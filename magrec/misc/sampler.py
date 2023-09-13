@@ -1,5 +1,4 @@
 import torch
-from magrec.misc.domains import Rectangle, CompositeDomain
 
 # needs to implement sample_points
 
