@@ -27,11 +27,11 @@ class FourierFeatures2dCurrent(torch.nn.Module):
             torch.nn.Linear(self.ff_features_n, 1),
         )
         self.divless = ZeroDivTransform()
+        self.requires_grad = True
     
     def forward(self, x):
         # self.divless requires gradients to compute divergence-free field
-        # so we enable gradients for x
-        x.requires_grad_(True)  
+        # so we enable gradients for x  
         y = torch.cat([ff(x) for ff in self.ffs], dim=1)
         y = self.fcn(y)
         J = self.divless(y, x)
@@ -40,9 +40,10 @@ class FourierFeatures2dCurrent(torch.nn.Module):
 
 class FourierFeaturesPINN(L.LightningModule):
     
-    def __init__(self, learning_rate=1e-1) -> None:
+    def __init__(self, ff_sigmas, learning_rate=1e-1) -> None:
         super().__init__()
-        self.soln = FourierFeatures2dCurrent()
+        self.ff_sigmas = ff_sigmas
+        self.soln = FourierFeatures2dCurrent(ff_sigmas=ff_sigmas)
         self.learning_rate = learning_rate
         self.save_hyperparameters()
         
@@ -69,12 +70,17 @@ class FourierFeaturesPINN(L.LightningModule):
         loss = 0 
     
         for x, cond in batch:
+            # This becomes a convoluted logics of where we actually enable tracking
+            # of gradients for the input x. Should it be a responsibility of dataloader
+            # that returns the tensor x? Or should it be modules that operate on x that
+            # enable tracking the gradients? 
+            x.requires_grad_(True)
             y_hat = self.soln(x)
             cond_loss = cond.loss(x, y_hat)
-            self.log(f'{cond.name}_loss', cond_loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=1)
+            self.log(f'{cond.name}_loss', cond_loss.item(), on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=1)
             loss += cond_loss
         
-        self.log('total_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=1)
+        self.log('total_loss', loss.item(), on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=1)
         return loss
     
     def validation_step(self, batch, batch_idx):
@@ -82,6 +88,7 @@ class FourierFeaturesPINN(L.LightningModule):
         for x, cond in batch:
             
             with torch.enable_grad():
+                x = x.requires_grad_(True)
                 y_hat = self.soln(x)
                 try:
                     cond.validate(x, y_hat, self.logger.experiment, step=self.global_step)
