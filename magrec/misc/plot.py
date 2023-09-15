@@ -34,7 +34,7 @@ def plot_n_components(
         units (str):                        units of the field to display on the colorbar, e.g. 'mT' or 'A/m'
         norm (matplotlib.colors.Normalize): normalization object to share between different plot, for example
         cmap (str, matplotlib.colors.Colormap): colormap to use, default: viridis, 'cause it looks cool for magnetic fields
-        labels (list[str] or str):                 list of labels to label components with, e.g. ['x', 'y', 'z'] etc, if str 'no_labels' is passed then no labels will be shown
+        labels (list[str] or str):          list of labels to label components with, e.g. ['x', 'y', 'z'] etc, if str 'no_labels' is passed then no labels will be shown
         imshow_kwargs (dict, None):         kwargs to pass to .imshow()
         show (bool):                        whether to keep the plot or .close() it, if show is True, the plot will be shown in notebooks
         symmetric (bool):                   whether to symmetrize the colorbar so that 0 is in the middle of the colormap and lower and upper data limits
