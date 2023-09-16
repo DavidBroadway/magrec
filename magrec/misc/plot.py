@@ -1,12 +1,12 @@
+import matplotlib
 import matplotlib.colors
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-
+from matplotlib import cm
 from mpl_toolkits.axes_grid1 import ImageGrid
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-import matplotlib
-from matplotlib import cm
+from PIL import Image
 
 
 def plot_n_components(
@@ -22,6 +22,7 @@ def plot_n_components(
         norm_type: str = 'row',
         alignment: str = 'horizontal',
         show_coordinate_system: bool = True,
+        zoom_in_region=None,
         title: str = '',
 ) -> plt.Figure | list[plt.Figure]:
     """
@@ -29,7 +30,7 @@ def plot_n_components(
 
     Args:
         axes (list):                        list of n_components axes
-        data (torch.Tensor or numpy.array): field distribution to be plotted, shape (3, n_x, n_y), each component will be
+        data (torch.Tensor or numpy.array): field distribution to be plotted, shape (n_components, n_x, n_y), each component will be
                                             plotted on a separate axis or it is a list of 2d arrays of the same shape (one for each component)
         units (str):                        units of the field to display on the colorbar, e.g. 'mT' or 'A/m'
         norm (matplotlib.colors.Normalize): normalization object to share between different plot, for example
@@ -41,9 +42,14 @@ def plot_n_components(
                                             have the same absolute value
         norm_type ('row', 'all', str):      type of the normalization: per row ('row'), common to all ('all'), or by row with grouping,
                                             e.g. 'AAB' for 1st and 2nd rows to have the same norm, 3rd row to have its own norm
-        alignment (str):                    alignment of the same quantity components, either 'horizontal' or 'vertical'
+                                            If alignment is 'vertical' treat rows as columns and vice versa. Default: 'row'
+        alignment (str):                    alignment of the same quantity components, either 'horizontal' or 'vertical'. 
                                             if 'horizontal', then components will be plotted in the same row, if 'vertical', then in the same column
         show_coordinate_system (bool):      whether to show the coordinate system in the plot, default: True
+        zoom_in_region (bool):              whether to show an inset with a zoomed-in region of the plot, default: None
+                                            To specify the region, pass a list of two tuples, where the tuples contain the coordinates of the 
+                                            bottom-left (BL) and top-right (TR) and corners of the rectangle: [(BL_x, BL_y), (TR_x, TR_y)]. 
+                                            Shows the inset only for the first drawn component for now.
         title (list(str) or str):           if str, then it is the title of the plot, if list, then it is a list of titles for each row
 
     Returns:
@@ -220,6 +226,17 @@ def plot_n_components(
             # if last component, plot the colorbar
             cbar = ax.cax.colorbar(im)
             cbar.set_label(units)
+            
+    # Handle the inset: optionally display a zoomed-in region of the original plot
+    if zoom_in_region is not None:
+        x0, y0 = zoom_in_region[0]
+        x1, y1 = zoom_in_region[1]
+        axins = inset_axes(ax, width="30%", height="30%", loc='upper left')
+        inset_datum = datum[x0:x1, y0:y1]
+        axins.imshow(inset_datum, cmap=cmap, origin='lower')
+        
+        axins.set_xticks([])
+        axins.set_yticks([])
 
     # Make an array of tick positions from 0 to datum.shape[0] so that there are at least 5 ticks
     # and the last tick is at the end of the array
@@ -374,6 +391,43 @@ def plot_vector_field_2d(current_distribution, interpolation='none', cmap='plasm
         plt.close()
         
     return fig
+
+def plot_to_tensorboard(writer, fig, tag, step):
+    """
+    Takes a matplotlib figure handle and converts it using
+    canvas and string-casts to a numpy array that can be
+    visualized in TensorBoard using the add_image function
+
+    Parameters:
+        writer (tensorboard.SummaryWriter): TensorBoard SummaryWriter instance.
+        fig (matplotlib.pyplot.fig): Matplotlib figure handle.
+        tag (str): Name for the figure in TensorBoard.
+        step (int): counter usually specifying steps/epochs/time.
+    """
+
+    # Draw figure on canvas
+    matplotlib.use('Agg', force=True)
+    fig.canvas.draw_idle()  # Updates the canvas
+    fig.canvas.draw()
+    
+    renderer = fig.canvas.renderer
+    raw_data = renderer.tostring_rgb()
+    size = int(renderer.width), int(renderer.height)
+
+    # Convert the figure to numpy array, read the pixel values and reshape the array
+    pil_image = Image.frombytes('RGB', size, raw_data)
+    img = np.array(pil_image)
+
+    # Normalize into 0-1 range for TensorBoard(X). Swap axes for newer versions where API expects colors in first dim
+    # img = img / 255.0
+    img = np.swapaxes(img, 0, 2) # if your TensorFlow + TensorBoard version are >= 1.8
+    img = np.swapaxes(img, 1, 2) # if your TensorFlow + TensorBoard version are >= 1.8
+
+    # Add figure in numpy "image" to TensorBoard writer
+    writer.add_image(tag, img, step)
+    plt.close(fig)
+    
+
 def get_color_norm(z=None, vmin=None, vmax=None,
                    symmetric=False) -> matplotlib.colors.Normalize:
     if z is None:
