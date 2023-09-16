@@ -34,8 +34,8 @@ class FourierFeatures2dCurrent(torch.nn.Module):
         # so we enable gradients for x  
         y = torch.cat([ff(x) for ff in self.ffs], dim=1)
         y = self.fcn(y)
-        J = self.divless(y, x)
-        return J
+        y = self.divless(y, x)
+        return y
     
 
 class FourierFeaturesPINN(L.LightningModule):
