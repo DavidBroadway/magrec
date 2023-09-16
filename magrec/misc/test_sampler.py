@@ -8,6 +8,7 @@ def simple_sample_fn(num_points):
     return torch.rand(num_points)
 
 def test_sampler():
+    from magrec.misc.sampler import Sampler
     device = "cpu"  # Using CPU for simplicity
     cached_n_points = 20
     batch_n_points = 7
@@ -102,22 +103,118 @@ def test_sampler_visual():
     
 
 def test_grid_sampler():
+    from magrec.misc.sampler import GridSampler
+    import numpy as np
     import matplotlib.pyplot as plt
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
 
     # Assuming the function GridSampler.sample_grid is defined somewhere
     grid_points = GridSampler.sample_grid(50, 10, origin=[-2, -1], diagonal=[1, 1])
-    plt.scatter(grid_points[:, 0], grid_points[:, 1], marker='o', c='blue', s=10)  # Adjusted marker and size for clarity
 
-    # Adding labels, title, and a text box
-    plt.xlabel('X Coordinate')
-    plt.ylabel('Y Coordinate')
-    plt.title('Grid Points Distribution')
-    plt.text(-1.5, -0.5, 
-            "This plot shows a regular grid distribution, sampled from a rectangle\n"
-            "with origin (-2, -1) and diagonal (1, 1). There are 50 points in the x-direction\n"
-            "and 10 points in the y-direction for every unit rectangle.", 
-            bbox=dict(boxstyle="round,pad=0.3", edgecolor="black", facecolor="aliceblue"))
+    # Create a sequence of normalized values between 0 and 1 based on the number of grid points
+    num_points = grid_points.shape[0]
+    colors = np.linspace(0, 1, num_points)
 
-    plt.grid(True)  # Adds gridlines for better visualization
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.scatter(grid_points[:, 0], grid_points[:, 1], marker='o', c=colors, cmap='viridis', s=10)  # Adjusted marker and size for clarity
+
+    # Set the title and labels
+    ax.set_xlabel('X Coordinate')
+    ax.set_ylabel('Y Coordinate')
+    ax.set_title('Grid Points Distribution')
+
+    # Create an axes divider to manage the size and position of the text box
+    divider = make_axes_locatable(ax)
+    ax_text = divider.append_axes("top", size="20%", pad=0.3)
+
+    # Place the text inside the new axes and hide the axis
+    ax_text.text(0.5, 0.5, 
+                 "This plot shows a regular grid distribution, sampled from a rectangle\n"
+                 "with origin (-2, -1) and diagonal (1, 1). There are 50 points in the x-direction\n"
+                 "and 10 points in the y-direction for every unit rectangle.", 
+                 bbox=dict(boxstyle="round,pad=0.3", edgecolor="black", facecolor="aliceblue"),
+                 horizontalalignment='center', verticalalignment='center')
+    ax_text.axis('off')
+
+    # Add a colorbar and set the ticks to represent the point numbers
+    cbar = plt.colorbar(ax.scatter(grid_points[:, 0], grid_points[:, 1], c=colors, cmap='viridis', s=10), ax=ax, orientation='vertical')
+    cbar.set_label('Point Number')
+    tick_locs = (np.linspace(0, 1, 6) * num_points).astype(int)
+    cbar.set_ticks(np.linspace(0, 1, 6))
+    cbar.set_ticklabels(tick_locs)
+
+    ax.grid(True)  # Adds gridlines for better visualization
     plt.tight_layout()  # Adjusts the spacing to ensure everything fits
     plt.show()
+
+
+def test_grid_sampler_reshape():
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+    
+    W, H = 50, 10  # Given dimensions
+    
+    # Assuming the function GridSampler.sample_grid is defined somewhere
+    grid_points = GridSampler.sample_grid(W, H, origin=[-2, -1], diagonal=[1, 1])
+
+    # Create a sequence of normalized values between 0 and 1 based on the number of grid points
+    num_points = grid_points.shape[0]
+    colors = torch.linspace(0, 1, num_points)
+
+    # Reshape the grid_points
+    reshaped_grid_points = torch.tensor(grid_points).reshape(2, W, H)
+    
+    fig, ax = plt.subplots(figsize=(8, 8))
+    
+    # Extract x and y coordinates after reshaping
+    x = reshaped_grid_points[0].numpy()
+    y = reshaped_grid_points[1].numpy()
+    
+    # Extract colors in a grid format
+    reshaped_colors = torch.tile(colors.reshape(H, W), (2, 1, 1))[0]
+    
+    ax.scatter(x, y, c=reshaped_colors, cmap='viridis', s=10)
+
+    # Set the title and labels
+    ax.set_xlabel('X Coordinate')
+    ax.set_ylabel('Y Coordinate')
+    ax.set_title('Reshaped Grid Points Distribution')
+
+    # Create an axes divider to manage the size and position of the text box
+    divider = make_axes_locatable(ax)
+    ax_text = divider.append_axes("top", size="20%", pad=0.3)
+
+    # Place the text inside the new axes and hide the axis
+    ax_text.text(0.5, 0.5, 
+                 "This plot shows a regular grid distribution after reshaping.", 
+                 bbox=dict(boxstyle="round,pad=0.3", edgecolor="black", facecolor="aliceblue"),
+                 horizontalalignment='center', verticalalignment='center')
+    ax_text.axis('off')
+
+    # Add a colorbar and set the ticks to represent the point numbers
+    cbar = plt.colorbar(ax.scatter(x, y, c=reshaped_colors, cmap='viridis', s=10), ax=ax, orientation='vertical')
+    cbar.set_label('Point Number')
+    tick_locs = (torch.linspace(0, 1, 6) * num_points).int().numpy()
+    cbar.set_ticks(torch.linspace(0, 1, 6))
+    cbar.set_ticklabels(tick_locs)
+
+    ax.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
+def test_grid_sampler_pts_to_grid():
+    n_x = 3
+    n_y = 4
+    
+    pts = GridSampler.sample_grid(n_x, n_y, origin=[0, 0], diagonal=[n_x-1, n_y-1])
+    grid = GridSampler.pts_to_grid(pts, n_x, n_y)
+    
+    assert grid.shape == (2, n_x, n_y), "The shape of the grid is incorrect"
+    
+    # Check values
+    for i in range(n_x):
+        for j in range(n_y):
+            x, y = grid[:, i, j]
+            expected_x, expected_y = pts[i * n_y + j]
+            assert x == expected_x and y == expected_y, f"Expected ({expected_x}, {expected_y}), but got ({x}, {y}) at ({i}, {j})"

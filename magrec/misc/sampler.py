@@ -110,4 +110,12 @@ class GridSampler(Sampler):
         grid_points = torch.cat((flat_x, flat_y), 1)
         
         return grid_points
+    
+    @staticmethod
+    def pts_to_grid(pts, nx_points, ny_points):
+        """Given a tensor of batched points of shape (n_points, 2), return a tensor of shape 
+        (2, nx_points, ny_points) where the first dimension is the x and y coordinates, respectively."""
+        pts = pts.reshape(nx_points, ny_points, 2)
+        pts = pts.permute(2, 0, 1)
+        return pts
 
