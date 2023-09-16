@@ -90,6 +90,7 @@ class Solver(pl.LightningModule):
 
         self.log('train/loss', loss)
         self.n_training_step += 1
+        
         return loss
 
     def validation_step(self, batch, batch_idx):
