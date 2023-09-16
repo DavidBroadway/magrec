@@ -258,6 +258,122 @@ def plot_n_components(
     return fig
 
 
+def plot_vector_field_2d(current_distribution, interpolation='none', cmap='plasma', show=False, num_arrows=20, zoom_in_region=None):
+    """
+    Visualizes the current distribution in 2D as a heatmap of magnitudes and arrows representing the flow direction.
+    Additionally, the function can render an inset region from the given current distribution with an arrow indicating 
+    the average flow direction in that region.
+    
+    Parameters:
+    ----------
+    current_distribution : ndarray
+        An array of shape (2, W, H) representing current distribution vectors.
+    
+    interpolation : str, optional
+        The interpolation method to be used for the heatmap. Options are as provided by matplotlib's `imshow`.
+        Default is 'none'.
+    
+    cmap : str, optional
+        The colormap to be used for the heatmap. Options are as provided by matplotlib's colormaps.
+        Default is 'plasma'.
+    
+    show : bool, optional
+        If True, the plot is displayed using `plt.show()`. Otherwise, the plot is returned without being shown.
+        Default is False.
+    
+    num_arrows : int, optional
+        The approximate number of arrows to be used for the quiver plot across the width of the image.
+        The function will adjust the number of arrows to avoid overcrowding. Default is 20.
+    
+    zoom_in_region : tuple of two tuples, optional
+        A tuple representing the top-left and bottom-right corners of the rectangle for the inset. The format is 
+        ((index_x_origin, index_y_origin), (index_x_diagonal, index_y_diagonal)). If provided, the function will render 
+        the specified inset region with an arrow indicating the average flow direction. Default is None.
+    
+    Returns:
+    -------
+    fig : Figure
+        A matplotlib figure containing the visualizations.
+
+    Notes:
+    -----
+    - The main visualization provides a heatmap of the magnitudes and arrows indicating the flow direction of the 
+      current distribution.
+    - The inset, if specified, provides a zoomed-in view of a particular region of the main visualization, allowing for 
+      a closer inspection of details.
+
+    Examples:
+    --------
+    >>> dist = np.random.rand(2, 100, 100)
+    >>> fig = plot_vector_field_2d(dist, interpolation='bilinear', cmap='inferno', show=True, num_arrows=30, inset_region=((20, 20), (40, 40)))
+    """  
+    # PARAMS
+    figsize = (8, 8)
+    
+    # Grid points in x and y direction
+    W, H = current_distribution.shape[1], current_distribution.shape[2]
+
+    # Define a step size so we don't overcrowd the plot with arrows
+    step_size = max(W, H) // num_arrows
+
+    # Create a meshgrid with the step size for quiver
+    x, y = np.meshgrid(np.arange(0, W, step_size), np.arange(0, H, step_size), indexing='xy')
+
+    # Current distribution vectors
+    u, v = current_distribution[0], current_distribution[1]
+    
+    # Calculate magnitudes
+    magnitudes = np.hypot(u, v)
+    
+    # Create figure
+    fig = plt.figure(figsize=figsize)
+    ax = fig.subplots(1, 1)
+    
+    # Display a heatmap of all magnitudes
+    im = ax.imshow(magnitudes, interpolation=interpolation, cmap=cmap, origin='lower')
+    
+    # Add colorbar for the heatmap
+    fig.colorbar(im, ax=ax, orientation='vertical', label='Magnitude')
+    
+    # Add current distribution vectors using quiver (black arrows)
+    ax.quiver(x, y, u[::step_size, ::step_size], v[::step_size, ::step_size], color='black', pivot='mid', units='width', angles='uv')
+    
+    # Handle the inset
+    if zoom_in_region is not None:
+        x0, y0 = zoom_in_region[0]
+        x1, y1 = zoom_in_region[1]
+        axins = inset_axes(ax, width="30%", height="30%", loc='upper left')
+        inset_magnitudes = magnitudes[x0:x1, y0:y1]
+        axins.imshow(inset_magnitudes, cmap=cmap, origin='lower')
+        
+        # Calculate average u, v in the inset region
+        avg_u = torch.mean(u[x0:x1, y0:y1]).item()
+        avg_v = torch.mean(v[x0:x1, y0:y1]).item()
+        
+        # Normalize the average u, v vectors
+        magnitude = np.hypot(avg_u, avg_v)
+        normalized_u = avg_u / magnitude
+        normalized_v = avg_v / magnitude
+        
+        # Scale the vectors to be half the size of the inset
+        arrow_length = min(x1-x0, y1-y0) * 0.5
+        scaled_u = normalized_u * arrow_length
+        scaled_v = normalized_v * arrow_length
+        
+        center_x, center_y = (x1-x0)/2, (y1-y0)/2
+        axins.quiver(center_x, center_y, scaled_u, scaled_v, color='black', pivot='mid', units='xy', angles='xy', scale_units='xy', scale=1)
+        
+        axins.set_xticks([])
+        axins.set_yticks([])
+        
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_aspect('equal')
+    
+    if not show:
+        plt.close()
+        
+    return fig
 def get_color_norm(z=None, vmin=None, vmax=None,
                    symmetric=False) -> matplotlib.colors.Normalize:
     if z is None:
@@ -292,47 +408,3 @@ def add_inner_title(ax: plt.Axes, title: str, loc, color=None, **kwargs):
     # add text to the axis
     ax.add_artist(at)
     return at
-
-
-def plot_vector_field_2d(current_distribution, interpolation='none', cmap='plasma', show=False):
-    """
-    Visualizes the current distribution in 2D as a heatmap and arrows.
-
-    Parameters:
-        current_distribution: ndarray of shape (2, W, H) representing current distribution vectors
-    """    
-    # Grid points in x and y direction
-    W, H = current_distribution.shape[1], current_distribution.shape[2]
-    x, y = np.meshgrid(np.arange(W), np.arange(H), indexing='xy')
-
-    # Current distribution vectors
-    u, v = current_distribution[0], current_distribution[1]
-    
-    # Calculate magnitudes
-    magnitudes = np.hypot(u, v)
-    
-    # Create figure
-    fig = plt.figure(figsize=(8, 8))
-    ax = fig.subplots(1, 1)
-    
-    # Display a heatmap of magnitudes
-    im = ax.imshow(magnitudes, interpolation=interpolation, cmap=cmap, origin='lower')
-    
-    # Add colorbar for the heatmap
-    fig.colorbar(im, ax=ax, orientation='vertical', label='Magnitude')
-    
-    max_magnitude = magnitudes.max()
-    desired_arrow_size_relative_to_canvas = W / 20.0
-    scale = max_magnitude / desired_arrow_size_relative_to_canvas
-    
-    # Add current distribution vectors using quiver (black arrows)
-    ax.quiver(x, y, u, v, color='black', pivot='mid', units='width')
-    
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    ax.set_aspect('equal')
-    
-    if show:
-        plt.show()
-        
-    return fig
