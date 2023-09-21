@@ -8,7 +8,6 @@ import magrec
 from magrec.misc.plot import (
     plot_n_components,
     plot_vector_field_2d,
-    plot_to_tensorboard,
 )
 
 from magrec.nn.models import FourierFeatures2dCurrent
@@ -189,7 +188,7 @@ def data_residual(J, x):
 
 
 # define a model that maps from x ∊ R² to J ∊ R², div J = 0 by construction
-module = FourierFeatures2dCurrent(ff_sigmas=[(1, 10), (0.5, 20)])
+module = FourierFeatures2dCurrent(ff_sigmas=[(1, 10), (0.5, 10), (2, 10)])
 
 const_cond = PINNCondition(
     module=module,
@@ -245,18 +244,18 @@ class Solver(magrec.nn.solver.Solver):
             cmap="bwr",
             zoom_in_region=((20, 20), (30, 30)),
         )
-        plot_to_tensorboard(
-            writer, curr_fig, tag="val/current distribution", step=self.global_step
-        )
-        # self.logger.experiment.add_figure(tag="val/current distribution", figure=curr_fig, global_step=self.global_step)
+        # plot_to_tensorboard(
+        #     writer, curr_fig, tag="val/current distribution", step=self.global_step
+        # )
+        self.logger.experiment.add_figure(tag="val/current distribution", figure=curr_fig, global_step=self.global_step)
 
         flow_fig = plot_vector_field_2d(
             y_hat_grid, cmap="plasma", zoom_in_region=((20, 20), (30, 30))
         )
-        plot_to_tensorboard(
-            writer, flow_fig, tag="val/current flow", step=self.global_step
-        )
-        # self.logger.experiment.add_figure(tag="val/current flow", figure=flow_fig, global_step=self.global_step)
+        # plot_to_tensorboard(
+        #     writer, flow_fig, tag="val/current flow", step=self.global_step
+        # )
+        self.logger.experiment.add_figure(tag="val/current flow", figure=flow_fig, global_step=self.global_step)
 
         values_hat = prop(y_hat_grid).real
         mag_field = torch.cat([values_hat, proj(values_hat).unsqueeze(0)], dim=0)
@@ -266,21 +265,23 @@ class Solver(magrec.nn.solver.Solver):
             cmap="bwr",
             zoom_in_region=((20, 20), (30, 30)),
         )
-        plot_to_tensorboard(
-            writer, mag_fig, tag="val/magnetic field", step=self.global_step
-        )
-        # self.logger.experiment.add_figure(tag="val/magnetic field", figure=mag_fig, global_step=self.global_step)
+        # plot_to_tensorboard(
+        #     writer, mag_fig, tag="val/magnetic field", step=self.global_step
+        # )
+        self.logger.experiment.add_figure(tag="val/magnetic field", figure=mag_fig, global_step=self.global_step)
 
 
-solver = Solver(train_conditions=conditions, optimizer_setting=optim)
+solver = Solver(train_conditions=conditions, optimizer_setting=optim,)
+checkpointer = pl.callbacks.ModelCheckpoint(monitor="val/data_cond", save_top_k=1, every_n_train_steps=10, save_last=True)
 
 trainer = pl.Trainer(
     accelerator="cpu",
-    max_steps=400,
+    max_steps=20,
     logger=pl.loggers.TensorBoardLogger("logs/"),
     benchmark=True,
     log_every_n_steps=5,
-    val_check_interval=25.0,
+    val_check_interval=20,
+    callbacks=[checkpointer],
 )
 
 trainer.fit(solver)

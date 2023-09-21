@@ -6,6 +6,7 @@ import torch
 from matplotlib import cm
 from mpl_toolkits.axes_grid1 import ImageGrid
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 from PIL import Image
 
 
@@ -125,12 +126,16 @@ def plot_n_components(
 
     ## 
     # Create axes or create a figure here
-    if axes is not None:
+    if isinstance(axes, list):
         assert len(axes) == n_components * n_rows, \
             "There should be enough axes to plot {} components, " \
             "got {}".format(n_components * n_rows, len(axes))
         fig = axes[0].get_figure()
         # Assume that axes already have the associated color axis, as in case when it was created by ImageGrid
+        cax = axes[0].cax
+    elif isinstance(axes, plt.Axes):
+        axes = [axes]
+        fig = axes[0].get_figure()
         cax = axes[0].cax
     else:
         fig = plt.figure()
@@ -275,7 +280,8 @@ def plot_n_components(
     return fig
 
 
-def plot_vector_field_2d(current_distribution, interpolation='none', cmap='plasma', show=False, num_arrows=20, zoom_in_region=None):
+def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, interpolation='none', cmap='plasma', 
+                         show=False, num_arrows=20, zoom_in_region=None):
     """
     Visualizes the current distribution in 2D as a heatmap of magnitudes and arrows representing the flow direction.
     Additionally, the function can render an inset region from the given current distribution with an arrow indicating 
@@ -327,30 +333,37 @@ def plot_vector_field_2d(current_distribution, interpolation='none', cmap='plasm
     # PARAMS
     figsize = (8, 8)
     
+    # Create a figure with an axis if none is provided
+    if ax is None:
+        fig = plt.figure(figsize=figsize)
+        ax = fig.subplots(1, 1)
+        # add a colorbar axis
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="5%", pad="4%")
+        ax.cax = cax
+    else: 
+        fig = ax.get_figure()
+        
     # Grid points in x and y direction
-    W, H = current_distribution.shape[1], current_distribution.shape[2]
+    W, H = current_distribution.shape[-2:]
 
     # Define a step size so we don't overcrowd the plot with arrows
     step_size = max(W, H) // num_arrows
 
     # Create a meshgrid with the step size for quiver
-    x, y = np.meshgrid(np.arange(0, W, step_size), np.arange(0, H, step_size), indexing='xy')
+    x, y = np.meshgrid(np.arange(0, W, step_size), np.arange(0, H, step_size), indexing='ij')
 
     # Current distribution vectors
-    u, v = current_distribution[0], current_distribution[1]
+    u, v = current_distribution[0], current_distribution[1] 
     
     # Calculate magnitudes
     magnitudes = np.hypot(u, v)
     
-    # Create figure
-    fig = plt.figure(figsize=figsize)
-    ax = fig.subplots(1, 1)
-    
     # Display a heatmap of all magnitudes
-    im = ax.imshow(magnitudes, interpolation=interpolation, cmap=cmap, origin='lower')
+    im = ax.imshow(magnitudes.transpose(-2, -1), interpolation=interpolation, cmap=cmap, origin='lower')
     
     # Add colorbar for the heatmap
-    fig.colorbar(im, ax=ax, orientation='vertical', label='Magnitude')
+    fig.colorbar(im, cax=cax, orientation='vertical', label='Magnitude')
     
     # Add current distribution vectors using quiver (black arrows)
     ax.quiver(x, y, u[::step_size, ::step_size], v[::step_size, ::step_size], color='black', pivot='mid', units='width', angles='uv')
@@ -386,46 +399,43 @@ def plot_vector_field_2d(current_distribution, interpolation='none', cmap='plasm
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.set_aspect('equal')
-    
-    if not show:
-        plt.close()
         
     return fig
 
-def plot_to_tensorboard(writer, fig, tag, step):
-    """
-    Takes a matplotlib figure handle and converts it using
-    canvas and string-casts to a numpy array that can be
-    visualized in TensorBoard using the add_image function
+# def plot_to_tensorboard(writer, fig, tag, step):
+#     """
+#     Takes a matplotlib figure handle and converts it using
+#     canvas and string-casts to a numpy array that can be
+#     visualized in TensorBoard using the add_image function
 
-    Parameters:
-        writer (tensorboard.SummaryWriter): TensorBoard SummaryWriter instance.
-        fig (matplotlib.pyplot.fig): Matplotlib figure handle.
-        tag (str): Name for the figure in TensorBoard.
-        step (int): counter usually specifying steps/epochs/time.
-    """
+#     Parameters:
+#         writer (tensorboard.SummaryWriter): TensorBoard SummaryWriter instance.
+#         fig (matplotlib.pyplot.fig): Matplotlib figure handle.
+#         tag (str): Name for the figure in TensorBoard.
+#         step (int): counter usually specifying steps/epochs/time.
+#     """
 
-    # Draw figure on canvas
-    matplotlib.use('Agg', force=True)
-    fig.canvas.draw_idle()  # Updates the canvas
-    fig.canvas.draw()
+#     # Draw figure on canvas
+#     matplotlib.use('Agg', force=True)
+#     fig.canvas.draw_idle()  # Updates the canvas
+#     fig.canvas.draw()
     
-    renderer = fig.canvas.renderer
-    raw_data = renderer.tostring_rgb()
-    size = int(renderer.width), int(renderer.height)
+#     renderer = fig.canvas.renderer
+#     raw_data = renderer.tostring_rgb()
+#     size = int(renderer.width), int(renderer.height)
 
-    # Convert the figure to numpy array, read the pixel values and reshape the array
-    pil_image = Image.frombytes('RGB', size, raw_data)
-    img = np.array(pil_image)
+#     # Convert the figure to numpy array, read the pixel values and reshape the array
+#     pil_image = Image.frombytes('RGB', size, raw_data)
+#     img = np.array(pil_image)
 
-    # Normalize into 0-1 range for TensorBoard(X). Swap axes for newer versions where API expects colors in first dim
-    # img = img / 255.0
-    img = np.swapaxes(img, 0, 2) # if your TensorFlow + TensorBoard version are >= 1.8
-    img = np.swapaxes(img, 1, 2) # if your TensorFlow + TensorBoard version are >= 1.8
+#     # Normalize into 0-1 range for TensorBoard(X). Swap axes for newer versions where API expects colors in first dim
+#     # img = img / 255.0
+#     img = np.swapaxes(img, 0, 2) # if your TensorFlow + TensorBoard version are >= 1.8
+#     img = np.swapaxes(img, 1, 2) # if your TensorFlow + TensorBoard version are >= 1.8
 
-    # Add figure in numpy "image" to TensorBoard writer
-    writer.add_image(tag, img, step)
-    plt.close(fig)
+#     # Add figure in numpy "image" to TensorBoard writer
+#     writer.add_image(tag, img, step)
+#     plt.close(fig)
     
 
 def get_color_norm(z=None, vmin=None, vmax=None,
@@ -462,3 +472,10 @@ def add_inner_title(ax: plt.Axes, title: str, loc, color=None, **kwargs):
     # add text to the axis
     ax.add_artist(at)
     return at
+
+
+def set_backend(backend):
+    matplotlib.use(backend=backend, force=True)
+    
+def ion():
+    plt.ion()
