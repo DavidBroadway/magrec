@@ -280,7 +280,7 @@ def plot_n_components(
     return fig
 
 
-def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, interpolation='none', cmap='plasma', 
+def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, interpolation='none', cmap='plasma',
                          show=False, num_arrows=20, zoom_in_region=None):
     """
     Visualizes the current distribution in 2D as a heatmap of magnitudes and arrows representing the flow direction.
@@ -335,63 +335,63 @@ def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, interpolatio
     
     # Create a figure with an axis if none is provided
     if ax is None:
-        fig = plt.figure(figsize=figsize)
-        ax = fig.subplots(1, 1)
-        # add a colorbar axis
+        fig, ax = plt.subplots(figsize=figsize)
         divider = make_axes_locatable(ax)
         cax = divider.append_axes("right", size="5%", pad="4%")
-        ax.cax = cax
-    else: 
+    else:
         fig = ax.get_figure()
         
-    # Grid points in x and y direction
+    if isinstance(current_distribution, torch.Tensor):
+        current_distribution = current_distribution.detach().cpu().numpy()
+        
     W, H = current_distribution.shape[-2:]
-
-    # Define a step size so we don't overcrowd the plot with arrows
     step_size = max(W, H) // num_arrows
-
-    # Create a meshgrid with the step size for quiver
-    x, y = np.meshgrid(np.arange(0, W, step_size), np.arange(0, H, step_size), indexing='ij')
-
-    # Current distribution vectors
-    u, v = current_distribution[0], current_distribution[1] 
     
-    # Calculate magnitudes
-    magnitudes = np.hypot(u, v)
+    # Create averaged grid
+    x_centers = np.arange(step_size // 2, W, step_size)
+    y_centers = np.arange(step_size // 2, H, step_size)
     
-    # Display a heatmap of all magnitudes
-    im = ax.imshow(magnitudes.transpose(-2, -1), interpolation=interpolation, cmap=cmap, origin='lower')
+    x_grid, y_grid = np.meshgrid(x_centers, y_centers, indexing='ij')
     
-    # Add colorbar for the heatmap
+    # Initialize averaged fields
+    avg_u = np.zeros((len(x_centers), len(y_centers)))
+    avg_v = np.zeros((len(x_centers), len(y_centers)))
+    avg_m = np.zeros((len(x_centers), len(y_centers)))
+    
+    # Loop through and average
+    for i, x in enumerate(x_centers):
+        for j, y in enumerate(y_centers):
+            x_low, x_high = x - step_size // 2, x + step_size // 2 + 1
+            y_low, y_high = y - step_size // 2, y + step_size // 2 + 1
+            
+            avg_u[i, j] = np.mean(current_distribution[0, x_low:x_high, y_low:y_high])
+            avg_v[i, j] = np.mean(current_distribution[1, x_low:x_high, y_low:y_high])
+            avg_m[i, j] = np.sqrt(avg_v[i, j] ** 2 + avg_u[i, j] ** 2)
+    
+    magnitudes = np.hypot(current_distribution[0], current_distribution[1]).transpose(1, 0)
+    
+    im = ax.imshow(magnitudes, interpolation=interpolation, cmap=cmap, origin='lower')
+    
     fig.colorbar(im, cax=cax, orientation='vertical', label='Magnitude')
     
-    # Add current distribution vectors using quiver (black arrows)
-    ax.quiver(x, y, u[::step_size, ::step_size], v[::step_size, ::step_size], color='black', pivot='mid', units='width', angles='uv')
+    # Compute scale of the arrow length. 
+    # Scale gives number of data points per arrow length unit, 
+    # e.g. A/mm^2 per plot width. We want the maximum arrow length to be 1/num_arrows of the plot width.
+    # How much data units per arrow length unit? 
+    scale = 0.95 * avg_m.max() * num_arrows  # 0.95 to make the length of the longest arrow a bit longer 
+                                             # than the spacing between arrows blocks.  
     
-    # Handle the inset
+    ax.quiver(
+        x_grid, y_grid, avg_u, avg_v, color='black',
+        pivot='mid', units='width', angles='uv',
+        scale=scale, scale_units='width',
+    )
+    
     if zoom_in_region is not None:
         x0, y0 = zoom_in_region[0]
         x1, y1 = zoom_in_region[1]
         axins = inset_axes(ax, width="30%", height="30%", loc='upper left')
-        inset_magnitudes = magnitudes[x0:x1, y0:y1]
-        axins.imshow(inset_magnitudes, cmap=cmap, origin='lower')
-        
-        # Calculate average u, v in the inset region
-        avg_u = torch.mean(u[x0:x1, y0:y1]).item()
-        avg_v = torch.mean(v[x0:x1, y0:y1]).item()
-        
-        # Normalize the average u, v vectors
-        magnitude = np.hypot(avg_u, avg_v)
-        normalized_u = avg_u / magnitude
-        normalized_v = avg_v / magnitude
-        
-        # Scale the vectors to be half the size of the inset
-        arrow_length = min(x1-x0, y1-y0) * 0.5
-        scaled_u = normalized_u * arrow_length
-        scaled_v = normalized_v * arrow_length
-        
-        center_x, center_y = (x1-x0)/2, (y1-y0)/2
-        axins.quiver(center_x, center_y, scaled_u, scaled_v, color='black', pivot='mid', units='xy', angles='xy', scale_units='xy', scale=1)
+        axins.imshow(magnitudes[x0:x1, y0:y1], cmap=cmap, origin='lower')
         
         axins.set_xticks([])
         axins.set_yticks([])
@@ -402,40 +402,40 @@ def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, interpolatio
         
     return fig
 
-# def plot_to_tensorboard(writer, fig, tag, step):
-#     """
-#     Takes a matplotlib figure handle and converts it using
-#     canvas and string-casts to a numpy array that can be
-#     visualized in TensorBoard using the add_image function
+def plot_to_tensorboard(writer, fig, tag, step):
+    """
+    Takes a matplotlib figure handle and converts it using
+    canvas and string-casts to a numpy array that can be
+    visualized in TensorBoard using the add_image function
 
-#     Parameters:
-#         writer (tensorboard.SummaryWriter): TensorBoard SummaryWriter instance.
-#         fig (matplotlib.pyplot.fig): Matplotlib figure handle.
-#         tag (str): Name for the figure in TensorBoard.
-#         step (int): counter usually specifying steps/epochs/time.
-#     """
+    Parameters:
+        writer (tensorboard.SummaryWriter): TensorBoard SummaryWriter instance.
+        fig (matplotlib.pyplot.fig): Matplotlib figure handle.
+        tag (str): Name for the figure in TensorBoard.
+        step (int): counter usually specifying steps/epochs/time.
+    """
 
-#     # Draw figure on canvas
-#     matplotlib.use('Agg', force=True)
-#     fig.canvas.draw_idle()  # Updates the canvas
-#     fig.canvas.draw()
+    # Draw figure on canvas
+    matplotlib.use('Agg', force=True)
+    fig.canvas.draw_idle()  # Updates the canvas
+    fig.canvas.draw()
     
-#     renderer = fig.canvas.renderer
-#     raw_data = renderer.tostring_rgb()
-#     size = int(renderer.width), int(renderer.height)
+    renderer = fig.canvas.renderer
+    raw_data = renderer.tostring_rgb()
+    size = int(renderer.width), int(renderer.height)
 
-#     # Convert the figure to numpy array, read the pixel values and reshape the array
-#     pil_image = Image.frombytes('RGB', size, raw_data)
-#     img = np.array(pil_image)
+    # Convert the figure to numpy array, read the pixel values and reshape the array
+    pil_image = Image.frombytes('RGB', size, raw_data)
+    img = np.array(pil_image)
 
-#     # Normalize into 0-1 range for TensorBoard(X). Swap axes for newer versions where API expects colors in first dim
-#     # img = img / 255.0
-#     img = np.swapaxes(img, 0, 2) # if your TensorFlow + TensorBoard version are >= 1.8
-#     img = np.swapaxes(img, 1, 2) # if your TensorFlow + TensorBoard version are >= 1.8
+    # Normalize into 0-1 range for TensorBoard(X). Swap axes for newer versions where API expects colors in first dim
+    # img = img / 255.0
+    img = np.swapaxes(img, 0, 2) # if your TensorFlow + TensorBoard version are >= 1.8
+    img = np.swapaxes(img, 1, 2) # if your TensorFlow + TensorBoard version are >= 1.8
 
-#     # Add figure in numpy "image" to TensorBoard writer
-#     writer.add_image(tag, img, step)
-#     plt.close(fig)
+    # Add figure in numpy "image" to TensorBoard writer
+    writer.add_image(tag, img, step)
+    plt.close(fig)
     
 
 def get_color_norm(z=None, vmin=None, vmax=None,
