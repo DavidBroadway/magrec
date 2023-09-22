@@ -1,0 +1,91 @@
+#+TITLE: Autocorrelation Analysis
+#+AUTHOR: Mykhailo Flaks
+#+PLOT_CONFIGURATION: ./plot_configuration.yaml
+
+* Introduction
+
+The autocorrelation provides a measure of how a signal correlates with itself at various shifts. Essentially, it quantifies the degree of similarity between a function and a shifted version of itself. 
+
+- For purely random noise, the autocorrelation will essentially be a delta function, which means it'll have a peak at (0,0) and will be close to zero elsewhere.
+- For a signal with noise, the autocorrelation will still have a peak at (0,0), but the structure away from (0,0) will depend on the signal's shape.
+- The value at (0,0) in the autocorrelation is always the highest because it represents the signal's power. 
+
+* Analysis
+
+#+BEGIN_SRC matplotlib :output-format png :width 800 :height 600
+import numpy as np
+import matplotlib.pyplot as plt
+from autocorrelation import compute_2d_autocorrelation, rotate_image
+
+# Generate 2D Gaussian noise (50x50)
+noise = np.random.randn(50, 50)
+
+# Compute 2D autocorrelation of noise
+autocorr_noise = compute_2d_autocorrelation(noise)
+
+# Create a 2D skewed and asymmetrical signal with fading periodicity
+x = np.linspace(0, 4 * np.pi, 50)
+y = np.linspace(0, 4 * np.pi, 50)
+x, y = np.meshgrid(x, y)
+
+decay = np.exp(-x / 10)  # exponential decay
+phase_shift_x = np.pi / 3
+phase_shift_y = np.pi / 6
+
+signal = decay * np.sin(0.5 * x + phase_shift_x) * np.sin(0.5 * y + phase_shift_y)
+
+# Rotate the signal for asymmetry
+signal = rotate_image(signal, 30)  # rotate by 30 degrees
+
+# Add Gaussian noise to the signal
+noisy_signal = signal + noise * 0.5
+
+# Compute 2D autocorrelation of the noisy signal
+autocorr_signal = compute_2d_autocorrelation(noisy_signal)
+
+fig = plt.figure(figsize=(7, 7))
+
+# 2D plots
+ax1 = fig.add_subplot(2, 3, 1)
+ax1.imshow(noise, cmap='gray')
+ax1.set_title("2D Gaussian Noise")
+ax1.axis('off')
+
+ax2 = fig.add_subplot(2, 3, 2)
+ax2.imshow(autocorr_noise, cmap='gray')
+ax2.set_title("2D Autocorrelation of Noise")
+ax2.axis('off')
+
+ax3 = fig.add_subplot(2, 3, 4)
+ax3.imshow(noisy_signal, cmap='gray')
+ax3.set_title("Noisy Signal")
+ax3.axis('off')
+
+ax4 = fig.add_subplot(2, 3, 5)
+ax4.imshow(autocorr_signal, cmap='gray')
+ax4.set_title("2D Autocorrelation of Noisy Signal")
+ax4.axis('off')
+
+# 3D plots
+x_vals, y_vals = np.meshgrid(np.arange(autocorr_noise.shape[0]), np.arange(autocorr_noise.shape[1]))
+
+ax5 = fig.add_subplot(2, 3, 3, projection='3d')
+ax5.plot_surface(x_vals, y_vals, autocorr_noise, cmap='viridis')
+ax5.set_title("Autocorrelation of Noise")
+ax5.set_xlabel('X')
+ax5.set_ylabel('Y')
+ax5.set_zlabel('Autocorr Value')
+
+ax6 = fig.add_subplot(2, 3, 6, projection='3d')
+ax6.plot_surface(x_vals, y_vals, autocorr_signal, cmap='viridis')
+ax6.set_title("Autocorrelation of Noisy Signal")
+ax6.set_xlabel('X')
+ax6.set_ylabel('Y')
+ax6.set_zlabel('Autocorr Value')
+
+plt.tight_layout()
+#+END_SRC
+
+* Conclusion
+
+Analyzing the 2D autocorrelation provides insights into the structure and patterns present in the signal. The presence of patterns or structures will manifest as distinct shapes in the autocorrelation away from the (0,0) point, while purely random noise will mostly only have a significant value at the (0,0) point.
