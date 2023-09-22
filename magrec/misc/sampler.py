@@ -16,7 +16,7 @@ class Sampler(object):
         cached_n_points : int
             The number of points to be pregenerated and stored in memory.
         regenerate_cache : bool
-            If True, the cache points are regenerated every time cache is exhausted. `randomize` must be False.
+            If True, the cache points are regenerated every time cache is exhausted.
         """
         self.sample_fn = sample_fn
         self.batch_n_points = batch_n_points
@@ -113,9 +113,19 @@ class GridSampler(Sampler):
     
     @staticmethod
     def pts_to_grid(pts, nx_points, ny_points):
-        """Given a tensor of batched points of shape (n_points, 2), return a tensor of shape 
-        (2, nx_points, ny_points) where the first dimension is the x and y coordinates, respectively."""
-        pts = pts.reshape(nx_points, ny_points, 2)
-        pts = pts.permute(2, 0, 1)
+        """Given a tensor of batched points of shape (n_points, n), return a tensor of shape 
+        (n, nx_points, ny_points) where the first dimension are the components of the grid values, 
+        
+        n is inferred automatically. 
+        
+        Parameters
+            nx_points: number of points in the grid in x direction
+            ny_points: number of points in the grid in y direction
+        
+        Returns:
+            torch.Tensor, 
+        """
+        pts = pts.reshape(ny_points, nx_points, -1)
+        pts = pts.permute(2, 1, 0)
         return pts
 
