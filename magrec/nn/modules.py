@@ -4,40 +4,47 @@ from magrec.prop.constants import twopi
 
 import deepxde as dde
 
+
 class GaussianFourierFeaturesTransform(torch.nn.Module):
     """
     An implementation a random Fourier mapping as described in the paper:
     Wang (2021) https://doi.org/10.1016/j.cma.2021.113938, eq. (3.9)
-    
-    Random Fourier features are sampled from a Gaussian distribution with mean 0 and 
-    standard deviation std = sigma^2, that is B ~ N(0, sigma^2). 
-    
-    B can be thought of as a tensor of random Fourier wave-vectors. B[c, f] where c is 
-    a component corresponding to the x or y direction and f, for example, and f is the 
-    value of the Fourier wave-vector. This definition is consistent with the code in 
-    Fourier module. 
+
+    Random Fourier features are sampled from a Gaussian distribution with mean 0 and
+    standard deviation std = sigma^2, that is B ~ N(0, sigma^2).
+
+    B can be thought of as a tensor of random Fourier wave-vectors. B[c, f] where c is
+    a component corresponding to the x or y direction and f, for example, and f is the
+    value of the Fourier wave-vector. This definition is consistent with the code in
+    Fourier module.
     """
+
     def __init__(self, in_features: int, out_features: int, sigma: float) -> None:
         super().__init__()
-        self._B = twopi * torch.normal(mean=0, std=sigma ** 2, size=(in_features, out_features))
-        self._m = out_features
-        
+        # Register tensor as buffers so that they are saved with state_dict of the model
+        # https://discuss.pytorch.org/t/what-is-the-difference-between-register-buffer-and-register-parameter-of-nn-module/32723/19
+        self.register_buffer("sigma", torch.tensor(sigma))
+        self.register_buffer("B", twopi * torch.normal(mean=0, std=sigma**2, size=(in_features, out_features)))
+        self.register_buffer("m", torch.tensor(out_features))
+        # Below they are also accessible as object attributes: self.B, self.m, self.sigma
+
     def forward(self, x):
-        x = torch.einsum('...c,cj->...j', x, self._B.to(x.device))
-        return torch.cat([torch.cos(x), torch.sin(x)], dim=1) / np.sqrt(self._m)
+        x = torch.einsum("...c,cj->...j", x, self.B.to(x.device))
+        return torch.cat([torch.cos(x), torch.sin(x)], dim=1) / np.sqrt(self.m)
 
 
 class ZeroDivTransform(torch.nn.Module):
     """
     Obtains a 2d divergence-free vector field y(x) from a scalar function f(x):
-    
+
     y(x) = (∂f/∂y, -∂f/∂x)
-    
+
     The result is a vector field that is divergence-free by construction.
     """
+
     def __init__(self):
         super().__init__()
-        
+
     def forward(self, f, x):
         # Calculate the curl of the field (f, 0):
         df_dx = dde.grad.jacobian(f, x, i=0, j=0)

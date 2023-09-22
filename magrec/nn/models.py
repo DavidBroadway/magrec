@@ -45,7 +45,6 @@ class FourierFeaturesPINN(L.LightningModule):
         self.ff_sigmas = ff_sigmas
         self.soln = FourierFeatures2dCurrent(ff_sigmas=ff_sigmas)
         self.learning_rate = learning_rate
-        self.save_hyperparameters()
         
     def forward(self, x):
         J = self.soln(x)

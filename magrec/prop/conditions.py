@@ -1,4 +1,3 @@
-
 import torch
 import abc
 
@@ -20,22 +19,21 @@ class SquaredError(torch.nn.Module):
             The values for which the squared error should be computed.
         """
         return torch.sum(torch.square(x), dim=1)
-    
-    
+
+
 class Condition(abc.ABC):
     def __init__(self, name) -> None:
         super().__init__()
         self.name = name
-    
+
     @abc.abstractmethod
     def sample(self):
         pass
-    
+
     @abc.abstractmethod
     def loss(self):
         pass
-    
-    
+
 
 class TPCondition(torch.nn.Module):
     """
@@ -61,10 +59,10 @@ class TPCondition(torch.nn.Module):
         self.requires_grad = requires_grad
 
     @abc.abstractmethod
-    def forward(self, device='cpu', iteration=None):
+    def forward(self, device="cpu", iteration=None):
         """
         The forward run performed by this condition. Every
-        derived condition should implement it. Since it is 
+        derived condition should implement it. Since it is
         a torch.nn.Module, .forward() is called automatically
         by __call__().
 
@@ -83,7 +81,7 @@ class TPCondition(torch.nn.Module):
             for fun in data_functions:
                 points = sampler.sample_points()
                 data_fun_points = data_functions[fun](points)
-                #self.register_buffer(fun, data_fun_points)
+                # self.register_buffer(fun, data_fun_points)
                 data_functions[fun] = UserFunction(data_fun_points)
         return data_functions
 
@@ -92,9 +90,16 @@ class TPCondition(torch.nn.Module):
 
 
 class PINNCondition(TPCondition):
-
-    def __init__(self, module, sampler, residual_fn, 
-                 error_fn=SquaredError(), reduce_fn=torch.mean, name='pinncondition', **kwargs):
+    def __init__(
+        self,
+        module,
+        sampler,
+        residual_fn,
+        error_fn=SquaredError(),
+        reduce_fn=torch.mean,
+        name="pinncondition",
+        **kwargs
+    ):
         super().__init__(**kwargs)
         """
         
@@ -119,15 +124,15 @@ class PINNCondition(TPCondition):
         self.error_fn = error_fn
         self.reduce_fn = reduce_fn
         self.name = name
-        
-    def forward(self, device='cpu', iteration=None):
+
+    def forward(self, device="cpu", iteration=None):
         x = self.sampler.sample_points(device=device)
         x = x.requires_grad_(True)
         y = self.module(x)
         # Here the order of the arguments is defined
-        # in the defition of the residual function. 
+        # in the defition of the residual function.
         # It would be nice to remove this interdependency
-        # using UserFunction(). 
+        # using UserFunction().
         residuals = self.residual_fn(y, x)
         unreduced_loss = self.error_fn(residuals)
         return self.reduce_fn(unreduced_loss)
