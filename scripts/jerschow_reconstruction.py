@@ -1,91 +1,19 @@
 # reconstruction of current with torchphysics
-import numpy as np
-import torch
 import deepxde as dde
-
+import numpy as np
 import pytorch_lightning as pl
+import scipy.interpolate
+import torch
+
 import magrec
-from magrec.misc.plot import (
-    plot_n_components,
-    plot_vector_field_2d,
-)
-
-from magrec.nn.models import FourierFeatures2dCurrent
-from magrec.nn.solver import Solver, OptimizerSetting
-from magrec.nn.callbacks import ModuleCheckpoint, WeightSaveCallback
-from magrec.misc.sampler import (
-    GridSampler,
-    Sampler,
-    RectangleSampler,
-    StaticSampler,
-)
-
-# from magrec.nn.callbacks import FieldPlotCallback, CurrentPlotCallback, CurrentFlowPlotCallback
-from magrec.prop.Propagator import AxisProjectionPropagator, CurrentPropagator2d
-from magrec.prop.conditions import PINNCondition
 from magrec import __datapath__
-
-"""
-   Regions R, O, A:
-   
-   ..code::
-   
-      Y
-      ^
-    3 │ ┌───────┬───────┬───────┐
-      │ │       │   O   │       │
-      │ │       │       │       │
-    2 │ │       ├───────┤       │
-      │ │   R   │       │   R   │
-      │ │       │   A   │       │
-    1 │ │       ├───────┤       │
-      │ │       │       │       │
-      │ │       │   O   │       │
-    0 │ └───────┴───────┴───────┘
-      └─────────────────────────────>
-        0       1       2       3  X
-
-"""
-
-
-def const_region_sample_fn(n_points):
-    """Function to get points from the outer region around the measurement region Rs and Os.
-
-    ..code::
-
-      Y
-      ^
-    3 │ ┌───────┬───────┬───────[3, 3]
-      │ │       │  IV   │       │
-      │ │       │       │       │
-    2 │ │       ├───────┤       │
-      │ │   I   │       │   II  │
-      │ │       │       │       │
-    1 │ │       ├───────┤       │
-      │ │       │       │       │
-      │ │       │  III  │       │
-    0 │[0, 0]───┴───────┴───────┘
-      └─────────────────────────────>
-        0       1       2       3  X
-
-    """
-    region_n_points = n_points // 8  # ratios of the regions' areas are 3:1:1:3
-    region1_points = RectangleSampler.sample_rectangular_region(
-        region_n_points * 3, origin=[0, 0], diagonal=[1, 3]
-    )
-    region2_points = RectangleSampler.sample_rectangular_region(
-        region_n_points * 3, origin=[2, 0], diagonal=[3, 3]
-    )
-    region3_points = RectangleSampler.sample_rectangular_region(
-        region_n_points, origin=[1, 0], diagonal=[2, 1]
-    )
-    region4_points = RectangleSampler.sample_rectangular_region(
-        region_n_points, origin=[1, 0], diagonal=[2, 1]
-    )
-    points = torch.cat(
-        (region1_points, region2_points, region3_points, region4_points), dim=0
-    )
-    return points
+from magrec.misc.plot import plot_n_components, plot_vector_field_2d
+from magrec.misc.sampler import GridSampler, RectangleSampler, Sampler, StaticSampler
+from magrec.nn.callbacks import ModuleCheckpoint, WeightSaveCallback
+from magrec.nn.models import FourierFeatures2dCurrent
+from magrec.nn.solver import OptimizerSetting, Solver
+from magrec.prop.conditions import PINNCondition
+from magrec.prop.Propagator import AxisProjectionPropagator, CurrentPropagator2d
 
 
 def zero_region_sample_fn(n_points):
@@ -119,22 +47,58 @@ def zero_region_sample_fn(n_points):
     points = torch.cat((region1_points, region2_points), dim=0)
     return points
 
+def get_B_on_grid_from_file(path):
+    data = np.loadtxt(path, delimiter=",")
+    
+    # Get coordinates of the measurement points
+    x_coords = data[:, 0]
+    y_coords = data[:, 1]
+    # Find unique values of the coordinates
+    x_positions = np.unique(x_coords)
+    y_positions = np.unique(y_coords)
 
-Bx = np.loadtxt(__datapath__ / "ExperimentalData" / "NbWire" / "Bx.txt")
-By = np.loadtxt(__datapath__ / "ExperimentalData" / "NbWire" / "By.txt")
-Bz = np.loadtxt(__datapath__ / "ExperimentalData" / "NbWire" / "Bz.txt")
-B = torch.tensor(np.array([Bx, By, Bz]), dtype=torch.float32)
+    # Compute average spacing between measurement points
+    dx_avg = np.mean(np.diff(x_positions))
+    dy_avg = np.mean(np.diff(y_positions))
+    # Generate a regular grid of points, if measurements are on regular grid, x_grid and y_grid are the same as x_coords and y_coords, but reshaped
+    grid_x, grid_y = np.mgrid[
+        x_positions.min() : x_positions.max() + dx_avg : dx_avg,
+        y_positions.min() : y_positions.max() + dy_avg : dy_avg,
+    ]
 
-theta = 54.7  # degrees
-phi = 45.0  # degrees
-height = 0.015  # μm
-layer_thickness = 0.030  # μm
-dx = 0.408  # in μm
-dy = 0.408
+    # QUESTION: Where do these x, y positions come from? A measurement?
+    
+    # OBSERVATION: Upon inspecting B_x, B_y, B_z values with
+    # magrec.misc.plot.plot_n_components(data[:, 2:5])
+    # I noticed that the coordinate system in the sense of this package
+    # differs from the one in the dataset. In the package xy-plane is the
+    # plane of the current distribution, and the measurement plane is above. 
+    # 
+    # From these considerations follows that there must be a permutation of the dataset
+    # to the field structure expected in the reconstruction:
+    # B_x → B_x, B_y → B_z, B_z → -B_y
 
-proj = AxisProjectionPropagator(theta, phi)
-B_NV = proj(B)
-values = B_NV
+    Bx = data[:, 2]
+    By = data[:, 4]
+    Bz = -data[:, 3]
+
+    Bx = scipy.interpolate.griddata((x_coords, y_coords), Bx, (grid_x, grid_y), method='cubic')
+    By = scipy.interpolate.griddata((x_coords, y_coords), By, (grid_x, grid_y), method='cubic')
+    Bz = scipy.interpolate.griddata((x_coords, y_coords), Bz, (grid_x, grid_y), method='cubic')
+
+    B = torch.tensor(np.array([Bx, By, Bz]), dtype=torch.float32)
+    return B
+
+field = get_B_on_grid_from_file(__datapath__ / "Jerschow" / "Sine_wire.txt")
+background = get_B_on_grid_from_file(__datapath__ / "Jerschow" / "Sine_wire_blank.txt")
+
+values = field - background
+
+height = 12000  # μm
+layer_thickness = 100  # μm
+dx = 2000  # in μm
+dy = 2000
+
 W, H = values.shape[-2:]
 
 
@@ -146,12 +110,8 @@ def grid_sample_fn(n_points=None):
     return points
 
 
-const_sampler = Sampler(
-    const_region_sample_fn, batch_n_points=10**3, cached_n_points=10**4
-)
-
 zero_sampler = Sampler(
-    zero_region_sample_fn, batch_n_points=10**3, cached_n_points=10**4
+    zero_region_sample_fn, batch_n_points=10**3, cached_n_points=10**6
 )
 
 grid_sampler = StaticSampler(grid_sample_fn)
@@ -166,13 +126,6 @@ prop = CurrentPropagator2d(
 )
 
 
-def const_residual(J, x):
-    """Residual function for the constant current reconstruction."""
-    # computes a tensor of derivatives of J_x, J_y with respect to x, y
-    err = dde.grad.jacobian(J, x)
-    return err
-
-
 def zero_residual(J, x):
     """Residual function for the zero current reconstruction."""
     # error is the current itself, 0 is expected
@@ -184,25 +137,19 @@ def data_residual(J, x):
     """Residual function for the data condition."""
     J_grid = GridSampler.pts_to_grid(J, 3 * W, 3 * H)
     values_hat = prop(J_grid)[..., W:-W, H:-H]
-    err = values - proj(values_hat)
+    err = values - values_hat
     return err
 
 
 # define a model that maps from x ∊ R² to J ∊ R², div J = 0 by construction
-module = FourierFeatures2dCurrent(ff_sigmas=[(1, 10), (0.5, 10), (2, 10)])
-
-const_cond = PINNCondition(
-    module=module,
-    sampler=const_sampler,
-    residual_fn=const_residual,
-    name="const_cond",
-)
+module = FourierFeatures2dCurrent(ff_sigmas=[(1, 10), (0.01, 10), (0.5, 10)])
 
 zero_cond = PINNCondition(
     module=module,
     sampler=zero_sampler,
     residual_fn=zero_residual,
     name="zero_cond",
+    weight=1e5,  # add weight to balance out the data_cond 
 )
 
 data_cond = PINNCondition(
@@ -212,14 +159,13 @@ data_cond = PINNCondition(
     name="data_cond",
 )
 
-conditions = [const_cond, data_cond, zero_cond]
-optim = OptimizerSetting(optimizer_class=torch.optim.Adam, lr=0.01)
-
 
 class Solver(magrec.nn.solver.Solver):
     def on_train_start(self):
         super().on_train_start()
-        target_figure = plot_n_components(values, labels=[r"B_{NV}"], cmap="bwr")
+        target_figure = plot_n_components(
+            values, labels=[r"B_{x}", r"B_{y}", r"B_{z}"], cmap="bwr"
+        )
         self.logger.experiment.add_figure(tag="target", figure=target_figure)
 
     # This can be extracted to callbacks
@@ -254,9 +200,8 @@ class Solver(magrec.nn.solver.Solver):
         )
 
         values_hat = prop(y_hat_grid).real
-        mag_field = torch.cat([values_hat, proj(values_hat).unsqueeze(0)], dim=0)
         mag_fig = plot_n_components(
-            mag_field,
+            values_hat,
             labels=[r"B_x", r"B_y", r"B_z", r"B_{NV}"],
             cmap="bwr",
         )
@@ -265,11 +210,14 @@ class Solver(magrec.nn.solver.Solver):
         )
 
 
+conditions = [data_cond, zero_cond]
+optim = OptimizerSetting(optimizer_class=torch.optim.Adam, lr=0.001)
+
 solver = Solver(
     train_conditions=conditions,
     optimizer_setting=optim,
 )
-
+# ckpt = WeightSaveCallback(model=module, name="current", check_interval=1)
 ckpt = ModuleCheckpoint(
     module=module,
     name="current",
@@ -284,11 +232,11 @@ ckpt = ModuleCheckpoint(
 
 trainer = pl.Trainer(
     accelerator="cpu",
-    max_steps=4000,
-    logger=pl.loggers.TensorBoardLogger("logs/nbwire/"),
+    max_steps=20000,
+    logger=pl.loggers.TensorBoardLogger("logs/jerschow/"),
     benchmark=True,
     log_every_n_steps=5,
-    val_check_interval=50,
+    val_check_interval=200,
     callbacks=[ckpt],
 )
 
