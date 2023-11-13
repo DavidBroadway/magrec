@@ -109,23 +109,22 @@ The system requires the following:
 - [tqdm](http://www.tqdm.org/) : progress bar
 
 
-```
-pip install -r requirements.txt
-```
-#### Install using Conda or a Virtual Environment
-If you do not have sudo/root privileges on a system, we suggest you install using Conda a Virtualenv.
-From a **bash shell**, create a virtual environment in a folder that you wish.
-
-Using **Conda**:
+#### Install using Conda
+Make a new conda environment and install python:
 ```bash
-conda create -p FOLDER_FOR_ENVS/ve_tf_dmtf python=3.6.5 -y
-source activate FOLDER_FOR_ENVS/ve_tf_dmtf
+conda create -n magrec  
+conda activate magrec
+conda install python=3.11
 ```
 
-Using **Virtualenv**:
+We have some issue with install pytorch via pip so use conda to install this first. 
 ```bash
-virtualenv -p python3 FOLDER_FOR_ENVS/ve_tf_dmtf     # Use python up to 3.6
-source FOLDER_FOR_ENVS/ve_tf_dmtf/bin/activate       # If using csh, source ve_tf_dmtf/bin/activate.csh
+conda install pytorch
+```
+
+Then navigate to the magrec folder and use pip to install
+```bash
+pip install -e .
 ```
 
 

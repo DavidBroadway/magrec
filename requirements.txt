@@ -1,6 +1,0 @@
-pandas
-matplotlib
-numpy
-torch
-tqdm
-matplotlib-scalebar

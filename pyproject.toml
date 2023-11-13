@@ -1,23 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-[project]
-name = "magnetisation_reconstruction"
-version = "0.0.2"
-authors = [
-  { name="Adrien Dubois", email="adr.dubois@gmail.com" },
-  { name="David Broadway", email="broadwayphysics@gmail.com" },
+requires = [
+    "setuptools>=42",
+    "wheel"
 ]
-description = "A small example package"
-readme = "README.md"
-license = { file="LICENSE" }
-requires-python = ">=3.8"
-classifiers = [
-    "Programming Language :: Python :: 2",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-]
-
-[project.urls]
-"Homepage" = "https://github.com/pypa/sampleproject"
-"Bug Tracker" = "https://github.com/pypa/sampleproject/issues"
+build-backend = "setuptools.build_meta"
