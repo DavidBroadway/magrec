@@ -31,9 +31,9 @@ class GenericTranformation(object):
 
     def get_cartesian_dir(self, theta, phi):
         # check if theta and phi are ints, if so convert to a tensor
-        if isinstance(theta, int):
+        if isinstance(theta, int) or isinstance(theta, float):
             theta = torch.tensor(theta)
-        if isinstance(phi, int):
+        if isinstance(phi, int) or isinstance(phi, float):
             phi = torch.tensor(phi)
 
         theta = torch.deg2rad(theta)

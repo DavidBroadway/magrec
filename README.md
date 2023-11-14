@@ -117,7 +117,7 @@ conda activate magrec
 conda install python=3.11
 ```
 
-We have some issue with install pytorch via pip so use conda to install this first. 
+We have some issues with install pytorch via pip so use conda to install this first. 
 ```bash
 conda install pytorch
 ```

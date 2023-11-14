@@ -2,7 +2,6 @@
 
 import torch
 import matplotlib.pyplot as plt
-import torchvision.transforms as T
 from magrec.models.generic_model import GenericModel
 from magrec.transformation.Mxy2Bsensor import Mxy2Bsensor
 from magrec.transformation.Fourier import FourierTransform2d
@@ -87,8 +86,8 @@ class UniformMagnetisation(GenericModel):
             
 
             print(f"Spatial filter implemented into the model with a width of"
-                  + f" {self.spatial_filter_width[0]:0.2f} and {self.spatial_filter_width[1]:0.2f} pixels"
-                  + f" or {self.spatial_filter_width[0]*self.dataset.dx:0.2f} um.")
+                  + f" {sigma_x:0.2f} and {sigma_y:0.2f} pixels"
+                  + f" or {self.spatial_filter_width[0]:0.3f} um.")
         
         
 
