@@ -237,6 +237,8 @@ def plot_n_components(
         if (i + 1) % n_components == 0:
             # if last component, plot the colorbar
             cbar = ax.cax.colorbar(im)
+            # If units have "u" prefix in it, replace it with micro symbol
+            units = units.replace('u', '$\mu$')
             cbar.set_label(units)
             
     # Handle the inset: optionally display a zoomed-in region of the original plot
@@ -382,16 +384,25 @@ def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, interpolatio
     
     magnitudes = np.hypot(current_distribution[0], current_distribution[1]).transpose(1, 0)
     
-    im = ax.imshow(magnitudes, interpolation=interpolation, cmap=cmap, origin='lower')
+    im = ax.imshow(magnitudes, interpolation=interpolation, vmin=0, cmap=cmap, origin='lower')
     
-    fig.colorbar(im, cax=cax, orientation='vertical', label='Magnitude')
+    cbar = fig.colorbar(im, cax=cax, orientation='vertical')
+    if units:
+        cbar.set_label(units)
+        
+    if title:
+        if isinstance(title, str):
+            # Use .annotate() method to add the title text at the top of the figure
+            ax.annotate(title, xy=(0.5, 1.1), xycoords='axes fraction',
+                        xytext=(0, 0), textcoords='offset points',
+                        ha='center', va='baseline')
     
     # Compute scale of the arrow length. 
     # Scale gives number of data points per arrow length unit, 
     # e.g. A/mm^2 per plot width. We want the maximum arrow length to be 1/num_arrows of the plot width.
     # How much data units per arrow length unit? 
-    scale = 0.95 * avg_m.max() * num_arrows  # 0.95 to make the length of the longest arrow a bit longer 
-                                             # than the spacing between arrows blocks.  
+    scale = 1.1 * avg_m.max() * num_arrows  # 1.1 to make the length of the longest arrow a bit shorter 
+                                            # than the spacing between arrows blocks.  
     
     ax.quiver(
         x_grid, y_grid, avg_u, avg_v, color='black',
