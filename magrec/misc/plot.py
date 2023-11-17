@@ -9,10 +9,16 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 from PIL import Image
 
+plt.rcParams.update({
+    "text.usetex": False,
+    "font.family": "Helvetica"
+})
+
 
 def plot_n_components(
         data: list | tuple | np.ndarray | torch.Tensor,
-        axes: list[plt.Axes] = None, units: str = '',
+        axes: list[plt.Axes] = None, 
+        units: str = '',
         norm: matplotlib.colors.Normalize = None,
         cmap: matplotlib.colors.Colormap | str | list | tuple = 'viridis',
         labels: list[str] | None = None,
@@ -56,8 +62,6 @@ def plot_n_components(
     Returns:
         fig (plt.Figure, list[plt.Figure]): figure or a list of figures with n_components
     """
-    plt.rcParams['text.usetex'] = True
-
     if imshow_kwargs is None:
         imshow_kwargs = {}
 
