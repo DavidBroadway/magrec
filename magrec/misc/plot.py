@@ -174,13 +174,14 @@ def plot_n_components(
     if norm_type == 'all':
         norm_type = 'A' * n_rows
 
+    # Handle case when normalization is different for different groups of components
     norm_dict = {key: None for key in norm_type}
     for i, norm_group in enumerate(norm_type):
         row_data = data[i]
         if norm_dict[norm_group] is None and climits is None:
             norm_dict[norm_group] = get_color_norm(row_data, symmetric=symmetric)
         elif climits is not None:
-            norm_dict[norm_group] = get_color_norm(vmin=min(climits), vmax= max(climits), symmetric=False)
+            norm_dict[norm_group] = get_color_norm(vmin=min(climits), vmax=max(climits), symmetric=False)
         else:
             new_norm = get_color_norm(row_data, symmetric=symmetric)
             norm_dict[norm_group].vmin = min(norm_dict[norm_group].vmin, new_norm.vmin)
@@ -280,8 +281,7 @@ def plot_n_components(
     return fig
 
 
-def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, interpolation='none', cmap='plasma',
-                         show=False, num_arrows=20, zoom_in_region=None):
+def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, interpolation='none', cmap='plasma', units=None, title=None, show=False, num_arrows=20, zoom_in_region=None):
     """
     Visualizes the current distribution in 2D as a heatmap of magnitudes and arrows representing the flow direction.
     Additionally, the function can render an inset region from the given current distribution with an arrow indicating 
@@ -299,6 +299,12 @@ def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, interpolatio
     cmap : str, optional
         The colormap to be used for the heatmap. Options are as provided by matplotlib's colormaps.
         Default is 'plasma'.
+            
+    units : str, optional
+        Show units on the colorbar. Default is None (no units).
+        
+    title: str, optional
+        Title of the plot. Default is None (no title).
     
     show : bool, optional
         If True, the plot is displayed using `plt.show()`. Otherwise, the plot is returned without being shown.
@@ -440,6 +446,7 @@ def plot_to_tensorboard(writer, fig, tag, step):
 
 def get_color_norm(z=None, vmin=None, vmax=None,
                    symmetric=False) -> matplotlib.colors.Normalize:
+    """Returns a normalization object for the colorbar."""
     if z is None:
         if vmin is None and vmax is None:
             ValueError(
