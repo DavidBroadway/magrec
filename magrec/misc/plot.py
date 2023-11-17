@@ -89,6 +89,8 @@ def plot_n_components(
         # assume every row has the same number of components
         if isinstance(data[0], (list, tuple)):
             n_components = len(data[0])
+        elif isinstance(data[0], (torch.Tensor, np.ndarray)):
+            n_components = data[0].shape[0]
         else:
             # deal with the case when components are passed as a list of tensors
             n_components = len(data)
