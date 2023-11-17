@@ -63,12 +63,12 @@ class CurrentFourierKernel2d(object):
         M = (MU0 / 2) * M  # scale by mu0 to get [mT * mm / A] units
         return M
 
-
 class CurrentLayerFourierKernel2d(object):
     @staticmethod
     def define_kernel_matrix(kx_vector, ky_vector, height, layer_thickness):
-        """Defines a transformation matrix that connects a 2d current distribution that has 2 components of
+        """"Defines a transformation matrix that connects a 2d current distribution that has 2 components of
         the current density to the magnetic field it creates, that has 3 components.
+        
         ```
                                             ┌─                 ─┐
                                             │     0        1    │ ┌─   ─┐
@@ -119,6 +119,57 @@ class CurrentLayerFourierKernel2d(object):
         return M
 
 
+class InverseCurrentLayerFourierKernel2d(object):
+    @staticmethod
+    def define_kernel_matrix(kx_vector, ky_vector, height, layer_thickness):
+        """Defines a transformation matrix for the inverse propagation from 
+        2 components of the magnetic fiels to 2 components of the current density in 
+        Fourier-space (k_x, k_y, z).
+        
+        ```
+                                            
+                                            ┌─          ─┐ ┌─   ─┐
+                            2      1        │   0    -1  │ │ b_x │
+           j(k_x, k_y, z) = -- ------------ │   1     0  │ │     │
+                            μ0 depth_factor └─          ─┘ │ b_y │
+                                                           └─   ─┘
+                                                           └──┬──┘
+                           └────── M[:, :, k_x, k_y]────┘     │
+                                                         j[k_x, k_y]
+
+        ```
+        where `depth_factor` is a factor that accounts for the fact that the current layer has finite thickness and
+        is at `height` standoff distance from the observation plane. The factor is defined in `UniformLayerFactor2d`.
+        
+        1 / depth_factor = d / (1 - torch.exp(-k_matrix * layer_thickness))
+
+        Example:
+
+            .. code-block:: python
+            M = CurrentLayerFourierKernel2d.define_kernel_matrix(kx_vector, ky_vector, height, layer_thickness)
+            b = torch.einsum('ijkl,jkl->ikl', M, j)
+            # i — component of the magnetic field
+            # j — component of the current density
+            # k — spatial frequency in x direction
+            # l — spatial frequency in y direction
+
+        """
+        k_matrix = FourierTransform2d.define_k_matrix(kx_vector, ky_vector)
+        # components of ─┐  ┌─ components of
+        # magnetic field │  │  current density
+        #                V  V
+        M = torch.zeros((2, 2,) + k_matrix.shape, dtype=torch.complex64,)
+
+        M[0, 1, :, :] = -torch.ones_like(k_matrix)
+        M[1, 0, :, :] = torch.ones_like(k_matrix)
+
+        depth_factor = UniformLayerFactor2d.define_depth_factor(
+            k_matrix, height, layer_thickness
+        )
+
+        M = (2 / MU0) / depth_factor * M
+        return M
+
 class MagnetizationFourierKernel2d(object):
     @staticmethod
     def define_kernel_matrix(kx_vector, ky_vector, height, layer_thickness):
@@ -164,8 +215,7 @@ class UniformLayerFactor2d(object):
 
     @staticmethod
     def define_depth_factor(
-        k_matrix: torch.Tensor, height: float, layer_thickness: float
-    ):
+        k_matrix: torch.Tensor, height: float, layer_thickness: float):
         """
         Returns a matrix that scales each k-vector by the factor that appears after integration of a uniform source distribution.
 

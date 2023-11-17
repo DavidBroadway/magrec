@@ -14,6 +14,14 @@ import matplotlib.pyplot as plt
 
 from magrec.prop.Fourier import FourierTransform2d
 from magrec.prop.constants import DEFAULT_UNITS, get_exponent_from_unit
+from magrec.prop.Kernel import (
+    UniformLayerFactor2d, 
+    MagnetizationFourierKernel2d, 
+    CurrentFourierKernel2d, 
+    CurrentLayerFourierKernel2d, 
+    InverseCurrentLayerFourierKernel2d,
+    SphericalUnitVectorKernel
+    )
 
 
 # CurrentFourierPropagtor3d
@@ -386,19 +394,19 @@ class MagnetizationPropagator2d(object):
 
 
 class CurrentPropagator2d(object):
-    def __init__(self, source_shape, dx, dy, height, layer_thickness, real_signal=True):
+    def __init__(self, source_shape, dx, dy, height, layer_thickness, real_signal=True, units=None):
         """
-        Create a propagator for a 2d current distribution that computes the magnetic field at `height` above
-        the 2d current layer of finite thickness `layer_thickness`.
+        Create a propagator for a 2d current density that computes the magnetic field at `height` above
+        the 2d current layer of finite thickness `layer_thickness` from a constant volume current density density.
 
-        Assumes uniform current distribution across the layer thickness and uses the integration factor to account for the finite thickness.
+        Assumes uniform volume current density across the layer thickness and uses the integration factor to account for the finite thickness.
 
         Args:
-            source_shape:       shape of the magnetization distribution, shape (3, n_x, n_y)
+            source_shape:       shape of the volume current density, shape (2, n_x, n_y)
             dx:                 pixel size in the x direction, in [mm]
             dy:                 pixel size in the y direction, in [mm]
-            height:             height above the magnetization layer at which to evaluate the magnetic field, in [mm]
-            layer_thickness:    thickness of the magnetization layer, in [mm]
+            height:             height above the current layer at which to evaluate the magnetic field, in [mm]
+            layer_thickness:    thickness of the current layer, in [mm]
         """
         self.ft = FourierTransform2d(grid_shape=source_shape, dx=dx, dy=dy, real_signal=real_signal)
 
@@ -417,12 +425,22 @@ class CurrentPropagator2d(object):
         pass
 
     def __call__(self, J):
-        """Propagates planar magnetization M of shape (batch_size, 3, width, height) to the magnetic field
-        this magnetization creates at distance `self.height` from the plane where this magnetization is present.
+        """Propagates planar 2d current density J of shape (batch_size, 2, width, height) to the magnetic field
+        this current density creates at distance `self.height` from the plane where this current is present.
+        
+        Note that the current density is assumed to be volume density, in units A / mm^2, altough constant across z-layers. 
+        Planar current density is obtained by integrating the volume current density along the z-axis, which is just a multiplication
+        by the layer thickness in case of the constant in z current density. `CurrentPropagator2d` takes *volume current density* as input.
+        
+        ..math::
+        
+            surface current density = volume current density * layer thickness
+            
         """
         return self.B_from_J(J)
 
     def get_b_from_j(self, j):
+        """Calculate the Fourier image of the magnetic field b(k_x, k_y, z) from the Fourier image current field j(k_x, k_y, z)."""
         b = torch.einsum("...ijkl,...jkl->...ikl", self.j_to_b_matrix, j)
         return b
     
@@ -518,7 +536,161 @@ class CurrentPropagator2d(object):
         if not self.ft.real_signal:
             B = B.real
         return B
+    
+    
+class InverseCurrentPropagator2d(object):
+    def __init__(self, source_shape, dx, dy, height, 
+                 layer_thickness, real_signal=True, units=None,
+                 filters=None
+                 ):
+        """
+        Create a propagator for a 2d current density that computes the magnetic field at `height` above
+        the 2d current layer of finite thickness `layer_thickness` from a constant volume current density density.
 
+        Assumes uniform volume current density across the layer thickness and uses the integration factor to account for the finite thickness.
+
+        Args:
+            source_shape:       shape of the volume current density, shape (2, n_x, n_y)
+            dx:                 pixel size in the x direction, in [mm]
+            dy:                 pixel size in the y direction, in [mm]
+            height:             height above the current layer at which to evaluate the magnetic field, in [mm]
+            layer_thickness:    thickness of the current layer, in [mm]
+        """
+        self.ft = FourierTransform2d(grid_shape=source_shape, dx=dx, dy=dy, real_signal=real_signal)
+
+        self.b_to_j_matrix = InverseCurrentLayerFourierKernel2d\
+            .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, height, layer_thickness)
+        """Inverse field matrix that connects the measured field to sources in 2d case"""
+
+        # Take into the account provided units, if any, otherwise use default `DEFAULT_UNITS`
+        self.units = DEFAULT_UNITS.copy()
+        if units is not None:
+            # .set_units() needs to be called after .j_to_b_matrix is defined. I know it's not optimal
+            # but that needs to do for now. I'd prefer for units setting to be order-independent. One
+            # option is to have an attribue .prefactor that is multiplied by the j_to_b_matrix, but then  
+            self.set_units(units)
+            
+        self.filters = filters
+            
+        pass
+
+    def __call__(self, B):
+        """Propagates planar 2d current density J of shape (batch_size, 2, width, height) to the magnetic field
+        this current density creates at distance `self.height` from the plane where this current is present.
+        
+        Note that the current density is assumed to be volume density, in units A / mm^2, altough constant across z-layers. 
+        Planar current density is obtained by integrating the volume current density along the z-axis, which is just a multiplication
+        by the layer thickness in case of the constant in z current density. `CurrentPropagator2d` takes *volume current density* as input.
+        
+        ..math::
+        
+            surface current density = volume current density * layer thickness
+            
+        """
+        return self.J_from_B(B)
+
+    def get_j_from_b(self, b):
+        """Calculate the Fourier image of the magnetic field b(k_x, k_y, z) from the Fourier image current field j(k_x, k_y, z)."""
+        if self.filters is not None:
+            for filt in self.filters:
+                b = filt(b)
+                
+        j = torch.einsum("...ijkl,...jkl->...ikl", self.b_to_j_matrix, b)
+        return j
+    
+    def set_units(self, *units):
+        """Set the units of the propagator if they are different from the default units.
+        
+        `units` can be a dict with some of the keys `current`, `length` and `magnetic_field` that 
+        specify the units of the current, length, and magnetic field, respectively, to be updated. 
+        Example:
+        
+        units = {
+            "current": "A",
+            "length": "mm",
+            "magnetic_field": "mT"
+        } <--- default units
+        
+        units = {
+            "current": "mA",
+            "length": "um",  # micrometers
+            "magnetic_field": "uT"  # microtesla
+        } <--- modified units that warrant changing `self.j_to_b_matrix` 
+        
+        Also `set_units` accept up to three positional arguments that specify the units of the current, 
+        length, and magnetic field, respectively, as string. Order of the arguments is not important, 
+        and will be figured out from the major units of the provided strings "T" for magnetic field, 
+        "A" for current, and "m" for length.
+        
+        Values assumed to be affected by the units are the following (from magrec.prop.constants):
+        
+            MU0: float = 1.25663706212  # [mT * mm / A]
+            
+        Other values with units as assumed to be already in the proper units, e.g. 
+        
+            `height`, `layer_thickness`, `dx`, `dy`         units["length"]
+            `J`                                             units["current"] / units["length"]^2
+            `j` (Fourier image of J)                        units["current"]
+            
+        To get the proper units for the magnetic field, we modify MU0 to account for the change in units.
+        Since MU0 is already contained as a multiplicative factor in `self.j_to_b_matrix`, we modify it by
+        the factor we calculate from the change of units from the default to the provided units.
+        """
+        # copy the default units and update them with the provided units
+        updated_units = self.units.copy()
+        
+        if len(units) == 1:
+            if isinstance(units[0], dict):
+                units = units[0]
+                updated_units.update(units)
+            else:
+                raise ValueError("If only one argument is provided, it must be a dict with the units to be updated.")
+        elif len(units) > 1:
+            for unit in units:
+                if not isinstance(unit, str):
+                    raise ValueError("If more than one argument is provided, they must be strings, \
+                        but got type `{}` instead for {}.".format(type(unit), unit))
+                if unit[-1] == "m":
+                    updated_units["length"] = unit
+                elif unit[-1] == "A":
+                    updated_units["current"] = unit
+                elif unit[-1] == "T":
+                    updated_units["magnetic_field"] = unit
+                else:
+                    raise ValueError("Units specification have one of 'm', 'A', or 'T' endings for length, \
+                                     current, and magnetic field, respectively, got `{}`.".format(unit))
+        
+        # Prepare dicts with exponents of the units, to calculate the multiplicative prefactor
+        updated_exponents = {}
+        default_exponents = {}
+        # Iterate throught the keys of the units dict and get the exponents of the units, 
+        # and obtain the exponents of the  already set units
+        for key in updated_units.keys():
+            default_exponents[key] = get_exponent_from_unit(self.units[key])
+            updated_exponents[key] = get_exponent_from_unit(updated_units[key])
+        # Prefactor exponent is the order by which the multiplicative factor differs in set units from the updated units
+        prefactor_exponent = \
+          - (default_exponents["magnetic_field"] - updated_exponents["magnetic_field"]) - \
+            (default_exponents["length"] - updated_exponents["length"]) + \
+            (default_exponents["current"] - updated_exponents["current"])
+        # The reason to update the prefactor of this matrix, is that this is the only unit conversion point, which is not
+        # supplied by the user, and it uses the constant which connects a new quantity (magnetic field) to those supplied 
+        # by the user (current and length). 
+        self.b_to_j_matrix = self.b_to_j_matrix * (10 ** (prefactor_exponent))
+        self.units = updated_units
+        return self
+
+    def J_from_B(self, B):
+        if isinstance(B, np.ndarray):
+            B = torch.from_numpy(B)
+
+        b = self.ft.forward(B, dim=(-2, -1))
+        j = self.get_j_from_b(b)
+        J = self.ft.backward(j, dim=(-2, -1))
+        if not self.ft.real_signal:
+            J = J.real
+        return J
+    
 
 
 class AxisProjectionPropagator(object):
