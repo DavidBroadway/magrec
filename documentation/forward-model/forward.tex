@@ -1,0 +1,68 @@
+\documentclass[justified, nobib]{tufte-handout}
+\usepackage{amsmath,amsfonts,amssymb}
+
+% add bibliography
+\usepackage{biblatex}
+\addbibresource{/Users/mf/Documents/Sources/My Library.bib}
+
+% add graphics
+\usepackage{graphicx}
+
+% add hyperlinks
+\usepackage{hyperref}
+
+% add code listings
+\usepackage{listings}
+
+\title{Fourier-space Form of the Biot-Savart Law}
+\author{Mykhailo Flaks}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+Magnetostatics deals with magnetic fields in the presence of steady currents or magnetization. The magnetic field due to such sources can be determined using the Biot-Savart law. We limit considerations to the case of steady currents. 
+
+\section{Biot-Savart Law in Real Space}
+The Biot-Savart law for a steady current distribution \( \mathbf{J}(\mathbf{r}) \) in real space is:
+\[
+\mathbf{B}(\mathbf{r}) = \frac{\mu_0}{4\pi} \int \frac{\mathbf{J}(\mathbf{r'}) \times (\mathbf{r} - \mathbf{r'})}{|\mathbf{r} - \mathbf{r'}|^3} \, d^3\mathbf{r'}
+\]
+where \(\mu_0\) is the permeability of free space. The integration is over the entire space where the current distribution is non-zero, \( \mathbf{r} \) is the position vector of the point where the magnetic field \(\mathbf{B}(\mathbf{r})\) is to be determined, and \( \mathbf{r'} \) is the position vector of the current element.
+
+\section{Fourier Transformation}
+The convention for the physical Fourier transform used is:
+\begin{align*}
+g(k) &= \int G(x) \exp(-ikx) \, dx \\
+G(x) &= \frac{1}{2\pi} \int g(k) \exp(ikx) \, dk
+\end{align*}
+where \( k \) is the wave-vector. In DFT, the cyclic frequency \( f \) is used and is related to the wave-vector as:
+\[
+k = 2\pi f
+\]
+
+\section{Biot-Savart Law in Fourier Space}
+In Fourier space, the Biot-Savart law becomes:
+\[
+\hat{\mathbf{B}}(k) = i\mu_0 k \times \hat{\mathbf{J}}(k)
+\]
+
+To find the magnetic field in real space, one can take the inverse Fourier transform:
+\[
+\mathbf{B}(\mathbf{r}) = \frac{1}{2\pi} \int e^{ik\mathbf{r}} \hat{\mathbf{B}}(k) \, dk
+\]
+
+\section{Two-dimensional Fourier Transform}
+
+When dealing with planar distributions, it is convenient to use two-dimensional Fourier transform. Assuming distributions in the \(x-y\) plane, the Fourier transform is:
+
+\begin{equation}
+\hat{g}(k_x, k_y) = \int \int G(x, y) \exp(-i(k_x x + k_y y)) \, dx \, dy
+\end{equation}
+
+
+\section{Conclusion}
+By using the Fourier-space representation of the Biot-Savart law and the specific conventions for the Fourier transform, we can efficiently compute the magnetic field from a given current distribution. The approach is extended for two-dimensional distributions and can be adapted for various physical situations.
+
+\end{document}
