@@ -1,0 +1,2 @@
+matplotlib:
+  executable: /opt/homebrew/Caskroom/miniconda/base/envs/currec/bin/python
