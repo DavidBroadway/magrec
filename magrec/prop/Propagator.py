@@ -13,7 +13,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from magrec.prop.Fourier import FourierTransform2d
-from magrec.prop.Kernel import UniformLayerFactor2d, MagnetizationFourierKernel2d, CurrentFourierKernel2d, CurrentLayerFourierKernel2d, SphericalUnitVectorKernel
+from magrec.prop.constants import DEFAULT_UNITS, get_exponent_from_unit
 
 
 # CurrentFourierPropagtor3d
@@ -405,6 +405,15 @@ class CurrentPropagator2d(object):
         self.j_to_b_matrix = CurrentLayerFourierKernel2d\
             .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, height, layer_thickness)
         """Forward field matrix that connects sources to the measured field"""
+
+        # Take into the account provided units, if any, otherwise use default `DEFAULT_UNITS`
+        self.units = DEFAULT_UNITS.copy()
+        if units is not None:
+            # .set_units() needs to be called after .j_to_b_matrix is defined. I know it's not optimal
+            # but that needs to do for now. I'd prefer for units setting to be order-independent. One
+            # option is to have an attribue .prefactor that is multiplied by the j_to_b_matrix, but then  
+            self.set_units(units)
+            
         pass
 
     def __call__(self, J):
@@ -416,6 +425,88 @@ class CurrentPropagator2d(object):
     def get_b_from_j(self, j):
         b = torch.einsum("...ijkl,...jkl->...ikl", self.j_to_b_matrix, j)
         return b
+    
+    def set_units(self, *units):
+        """Set the units of the propagator if they are different from the default units.
+        
+        `units` can be a dict with some of the keys `current`, `length` and `magnetic_field` that 
+        specify the units of the current, length, and magnetic field, respectively, to be updated. 
+        Example:
+        
+        units = {
+            "current": "A",
+            "length": "mm",
+            "magnetic_field": "mT"
+        } <--- default units
+        
+        units = {
+            "current": "mA",
+            "length": "um",  # micrometers
+            "magnetic_field": "uT"  # microtesla
+        } <--- modified units that warrant changing `self.j_to_b_matrix` 
+        
+        Also `set_units` accept up to three positional arguments that specify the units of the current, 
+        length, and magnetic field, respectively, as string. Order of the arguments is not important, 
+        and will be figured out from the major units of the provided strings "T" for magnetic field, 
+        "A" for current, and "m" for length.
+        
+        Values assumed to be affected by the units are the following (from magrec.prop.constants):
+        
+            MU0: float = 1.25663706212  # [mT * mm / A]
+            
+        Other values with units as assumed to be already in the proper units, e.g. 
+        
+            `height`, `layer_thickness`, `dx`, `dy`         units["length"]
+            `J`                                             units["current"] / units["length"]^2
+            `j` (Fourier image of J)                        units["current"]
+            
+        To get the proper units for the magnetic field, we modify MU0 to account for the change in units.
+        Since MU0 is already contained as a multiplicative factor in `self.j_to_b_matrix`, we modify it by
+        the factor we calculate from the change of units from the default to the provided units.
+        """
+        # copy the default units and update them with the provided units
+        updated_units = self.units.copy()
+        
+        if len(units) == 1:
+            if isinstance(units[0], dict):
+                units = units[0]
+                updated_units.update(units)
+            else:
+                raise ValueError("If only one argument is provided, it must be a dict with the units to be updated.")
+        elif len(units) > 1:
+            for unit in units:
+                if not isinstance(unit, str):
+                    raise ValueError("If more than one argument is provided, they must be strings, \
+                        but got type `{}` instead for {}.".format(type(unit), unit))
+                if unit[-1] == "m":
+                    updated_units["length"] = unit
+                elif unit[-1] == "A":
+                    updated_units["current"] = unit
+                elif unit[-1] == "T":
+                    updated_units["magnetic_field"] = unit
+                else:
+                    raise ValueError("Units specification have one of 'm', 'A', or 'T' endings for length, \
+                                     current, and magnetic field, respectively, got `{}`.".format(unit))
+        
+        # Prepare dicts with exponents of the units, to calculate the multiplicative prefactor
+        updated_exponents = {}
+        default_exponents = {}
+        # Iterate throught the keys of the units dict and get the exponents of the units, 
+        # and obtain the exponents of the  already set units
+        for key in updated_units.keys():
+            default_exponents[key] = get_exponent_from_unit(self.units[key])
+            updated_exponents[key] = get_exponent_from_unit(updated_units[key])
+        # Prefactor exponent is the order by which the multiplicative factor differs in set units from the updated units
+        prefactor_exponent = \
+            (default_exponents["magnetic_field"] - updated_exponents["magnetic_field"]) + \
+            (default_exponents["length"] - updated_exponents["length"]) - \
+            (default_exponents["current"] - updated_exponents["current"])
+        # The reason to update the prefactor of this matrix, is that this is the only unit conversion point, which is not
+        # supplied by the user, and it uses the constant which connects a new quantity (magnetic field) to those supplied 
+        # by the user (current and length). 
+        self.j_to_b_matrix = self.j_to_b_matrix * (10 ** (prefactor_exponent))
+        self.units = updated_units
+        return self
 
     def B_from_J(self, J):
         if isinstance(J, np.ndarray):
