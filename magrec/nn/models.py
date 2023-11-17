@@ -4,23 +4,85 @@ from abc import ABC, abstractmethod
 
 from magrec.nn.modules import GaussianFourierFeaturesTransform, ZeroDivTransform
 from magrec.prop.Propagator import CurrentPropagator2d
+from magrec.nn.utils import load_model_from_ckpt
 
 import pytorch_lightning as L
+
+class Fourier2dMagneticField(torch.nn.Module):
+    """2d Fourier space representation of the magnetic field at a fixed measurement plane 
+    distance z from a planar source distribution.
+    """
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.fcn = torch.nn.Sequential(
+            torch.nn.Linear(2, 10),
+            torch.nn.Sigmoid(),
+            torch.nn.Linear(10, 10),
+            torch.nn.Sigmoid(),
+            torch.nn.Linear(10, 6),  # 6 components for real and imaginary parts of the field Fourier components
+        )
+        
+    def forward(self, x):
+        """Returns a vector of the three components of the  magnetic field vector [b_x, b_y, b_z](k_x, k_y | z) 
+        as a function of 2d Fourier components k_x, k_y, and z. Each of the three vector components is a Fourier 
+        component, thus it is complex. 
+        
+        Since Fourier components are complex, there's a connection between the real and imaginary parts of the k_y 
+        and -k_y components: c(k_y) = c*(-k_y). I tried combining different ouputs of the network to enforce this, such as
+        
+        ```python
+        f_kx_ky = self.fcn(x)
+        f_kx_neg_ky = self.fcn(torch.stack([x[:, 0], -x[:, 1]], dim=1))
+    
+        x = torch.stack([f_kx_neg_ky[:, 3:], -f_kx_ky[:, :3]], dim=2)
+        x = torch.view_as_complex(x)  # shape (n_batches, 3), dtype complex64
+        ```
+        
+        But it doesn't seem to work. Below is another a wrong approach, also leading to non-equal values 
+        of the real and imaginary parts of the field, as -k_y has just another value, with no connection to
+        the value of k_y:
+        
+        ```python
+        f_kx_neg_ky = self.fcn(torch.stack([x[:, 0], -x[:, 1]], dim=1))
+        x = torch.stack([f_kx_neg_ky[:, 3:], -f_kx_neg_ky[:, :3]], dim=2)
+        x = torch.view_as_complex(x)  # shape (n_batches, 3), dtype complex64
+        ```
+        
+        The best way to proceed would be to consider the values of the network for
+        k_y >= 0, and use Fourier transform with explicit real signal set. 
+        
+        BENEFITS: 
+        + Network is run on 1/2 of values.
+        + Easy.
+        DRAWBACKS:
+        - Requires passing only k_y >= 0 to the network.
+        """
+        # x = (k_x, k_y)
+        # Utilize the symmetry of the Fourier transform to reduce the number of parameters by half.
+        # The symmetry is that the Fourier transform is symmetric with respect to k_y -> -k_y
+        
+        x = self.fcn(x)
+        # Split the output into real and imaginary parts and combine them into a complex number.
+        # The output is a complex number for each of the three components of the field.
+        x = torch.stack([x[:, 3:], x[:, :3]], dim=2)
+        x = torch.view_as_complex(x)  # shape (n_batches, 3), dtype complex64
+        return x
+        
 
 class FourierFeatures2dCurrent(torch.nn.Module):
     """2d current distribution function encoded with Fourier features neural network.
     
     By contstruction the current is divergence-free.
     """
-    def __init__(self, ff_sigmas=[(1, 10), (2, 10), (0.5, 10)]) -> None:
+    def __init__(self, ff_stds=[(1, 10), (2, 10), (0.5, 10)]) -> None:
         """
         Args:
-            ff_sigmas: a list of standard deviations and the number of frequencies to sample for each sigma.
-                       Should be of the form [(sigma1, n1), (sigma2, n2), ...]
+            ff_stds: a list of standard deviations and the number of frequencies to sample for each std.
+                       Should be of the form [(std1, n1), (std2, n2), ...]
         """
         super().__init__()
-        self.ffs = torch.nn.ModuleList([GaussianFourierFeaturesTransform(2, n, sigma) for sigma, n in ff_sigmas])
-        self.ff_features_n = sum([n * 2 for _, n in ff_sigmas])
+        self.ffs = torch.nn.ModuleList([GaussianFourierFeaturesTransform(2, n, std) for std, n in ff_stds])
+        self.ff_features_n = sum([n * 2 for _, n in ff_stds])
         self.fcn = torch.nn.Sequential(
             torch.nn.Linear(self.ff_features_n, self.ff_features_n),
             torch.nn.Sigmoid(),
@@ -28,7 +90,7 @@ class FourierFeatures2dCurrent(torch.nn.Module):
         )
         self.divless = ZeroDivTransform()
         self.requires_grad = True
-    
+        
     def forward(self, x):
         # self.divless requires gradients to compute divergence-free field
         # so we enable gradients for x  
@@ -37,13 +99,22 @@ class FourierFeatures2dCurrent(torch.nn.Module):
         y = self.divless(y, x)
         return y
     
+    @classmethod
+    def load_model_from_ckpt(cls, version_n=None, ckpt_name_regexp='last.ckpt', folder_name='', ckpt=None, ckpt_path=None):
+        """Loads the model from a checkpoint, handling legacy naming of arguments and possible quirks of the model. 
+        Uses `load_model_from_ckpt` generic function."""
+        return load_model_from_ckpt(cls, version_n=version_n, ckpt_name_regexp=ckpt_name_regexp, 
+                                    folder_name=folder_name, type="ff_std_cond",
+                                    ckpt=ckpt, ckpt_path=ckpt_path)
+        
+    
 
 class FourierFeaturesPINN(L.LightningModule):
     
     def __init__(self, ff_sigmas, learning_rate=1e-1) -> None:
         super().__init__()
         self.ff_sigmas = ff_sigmas
-        self.soln = FourierFeatures2dCurrent(ff_sigmas=ff_sigmas)
+        self.soln = FourierFeatures2dCurrent(ff_stds=ff_sigmas)
         self.learning_rate = learning_rate
         
     def forward(self, x):
