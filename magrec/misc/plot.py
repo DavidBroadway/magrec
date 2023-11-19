@@ -14,7 +14,8 @@ plt.rcParams.update({
     "font.family": "Helvetica"
 })
 
-
+# TODO: add scaling factor, to be able to plot 2× component
+# TODO: add choice of label color, or heuristic to choose it automatically based on the colormap and background color
 def plot_n_components(
         data: list | tuple | np.ndarray | torch.Tensor,
         axes: list[plt.Axes] = None, 
@@ -26,7 +27,7 @@ def plot_n_components(
         show: bool = False,
         symmetric: bool = True,
         climits: tuple = None,
-        norm_type: str = 'row',
+        norm_type: str = 'map',
         alignment: str = 'horizontal',
         show_coordinate_system: bool = True,
         zoom_in_region=None,
@@ -39,17 +40,18 @@ def plot_n_components(
         axes (list):                        list of n_components axes
         data (torch.Tensor or numpy.array): field distribution to be plotted, shape (n_components, n_x, n_y), each component will be
                                             plotted on a separate axis or it is a list of 2d arrays of the same shape (one for each component)
+                                            Implicit limit of maximum 27 maps to be plotted. The secret reason is in norm_type handling. 
         units (str):                        units of the field to display on the colorbar, e.g. 'mT' or 'A/m'
         norm (matplotlib.colors.Normalize): normalization object to share between different plot, for example
-        cmap (str, matplotlib.colors.Colormap): colormap to use, default: viridis, 'cause it looks cool for magnetic fields
+        cmap (str, matplotlib.colors.Colormap): colormap to use, default: viridis, 'cause it looks cool for magnetic fields, can also be a list of colormaps or their names 
         labels (list[str] or str):          list of labels to label components with, e.g. ['x', 'y', 'z'] etc, if str 'no_labels' is passed then no labels will be shown
         imshow_kwargs (dict, None):         kwargs to pass to .imshow()
         show (bool):                        whether to keep the plot or .close() it, if show is True, the plot will be shown in notebooks
         symmetric (bool):                   whether to symmetrize the colorbar so that 0 is in the middle of the colormap and lower and upper data limits
                                             have the same absolute value
-        norm_type ('row', 'all', str):      type of the normalization: per row ('row'), common to all ('all'), or by row with grouping,
-                                            e.g. 'AAB' for 1st and 2nd rows to have the same norm, 3rd row to have its own norm
-                                            If alignment is 'vertical' treat rows as columns and vice versa. Default: 'row'
+        norm_type ('map', 'all', str):      type of the normalization: per map ('map'), common to all ('all'), or by row/column with grouping,
+                                            e.g. 'AAB' for 1st and 2nd maps to have the same norm, 3rd map to have its own norm. Default: 'map'
+                                            Allows to have common normalization for different maps, e.g. when they both show similar fields to compare
         alignment (str):                    alignment of the same quantity components, either 'horizontal' or 'vertical'. 
                                             if 'horizontal', then components will be plotted in the same row, if 'vertical', then in the same column
         show_coordinate_system (bool):      whether to show the coordinate system in the plot, default: True
@@ -76,16 +78,16 @@ def plot_n_components(
         # expect number of components to be in this dimension, if passed numpy.ndarray or torch.Tensor
         # handle the case when a list of rows is passed, then output each row in a new figure
         if len(shape) == 4:
-            n_rows = shape[0]
+            n_maps = shape[0]
         # otherwise think that there is only one set of components to plot and one row
         elif len(shape) == 3:
-            n_rows = 1
+            n_maps = 1
             # add a dimension for the number of rows if it is not present
             data = data.unsqueeze(0) if isinstance(data, torch.Tensor) else data[np.newaxis, ...]
         else:
             raise ValueError(f'Expected data to have 3 or 4 dimensions, got {len(shape)}')
     elif isinstance(data, (list, tuple)):
-        n_rows = len(data)
+        n_maps = len(data)
         # assume every row has the same number of components
         if isinstance(data[0], (list, tuple)):
             n_components = len(data[0])
@@ -94,7 +96,7 @@ def plot_n_components(
         else:
             # deal with the case when components are passed as a list of tensors
             n_components = len(data)
-            n_rows = 1
+            n_maps = 1
             data = torch.stack(data, dim=0).unsqueeze(0)
             
         # when list of tuple is passed, it is ([nx, ny], [nx, ny],…) maps, or at least we cannot say better for now
@@ -125,17 +127,17 @@ def plot_n_components(
             labels = [f'c{i}' for i in range(n_components)]
     
     if isinstance(labels, str):
-        if labels == 'no_labels':
+        if labels == 'no_labels' or labels == '':
             labels = [''] * n_components
         else:
-            raise ValueError('If `labels` is a string, it must be "no_labels", got {}'.format(labels))
+            raise ValueError('If `labels` is a string, it must be "no_labels" or an empty string \"\", got {}'.format(labels))
 
     ## 
     # Create axes or create a figure here
     if isinstance(axes, list):
-        assert len(axes) == n_components * n_rows, \
+        assert len(axes) == n_components * n_maps, \
             "There should be enough axes to plot {} components, " \
-            "got {}".format(n_components * n_rows, len(axes))
+            "got {}".format(n_components * n_maps, len(axes))
         fig = axes[0].get_figure()
         # Assume that axes already have the associated color axis, as in case when it was created by ImageGrid
         cax = axes[0].cax
@@ -144,41 +146,74 @@ def plot_n_components(
         fig = axes[0].get_figure()
         cax = axes[0].cax
     else:
-        fig = plt.figure()
+        # fig = plt.figure()
+        # if alignment == "horizontal":
+        #     grid = ImageGrid(fig, rect=(0, 0, 1, 1),
+        #                     nrows_ncols=(n_maps, n_components),
+        #                     axes_pad=0.05,
+        #                     label_mode="1",
+        #                     share_all=True,
+        #                     cbar_location="right",
+        #                     cbar_mode="edge",
+        #                     cbar_size="10%",
+        #                     cbar_pad=0.05,
+        #                     direction="row",
+        #                     )
+        # elif alignment == "vertical":
+        #     grid = ImageGrid(fig, rect=(0, 0, 1, 1),
+        #                     nrows_ncols=(n_components, n_maps),
+        #                     axes_pad=0.05,
+        #                     label_mode="1",
+        #                     share_all=True,
+        #                     cbar_location="bottom",
+        #                     cbar_mode="edge",
+        #                     cbar_size="10%",
+        #                     cbar_pad=0.3,
+        #                     direction="column",
+        #                     )
+        # axes = grid.axes_all
+        
+        pad_inch = 0.2
+        size_inch = 2
+        cbar_portion = 0.05
+        
+        # We need to approximately calculate the size of the figure according to the number of components and fields, and also the size of each
+        # component. That is needed to match size of the colorbar, that is otherwise larger than the component maps instead.
         if alignment == "horizontal":
-            grid = ImageGrid(fig, rect=(0, 0, 1, 1),
-                            nrows_ncols=(n_rows, n_components),
-                            axes_pad=0.05,
-                            label_mode="1",
-                            share_all=True,
-                            cbar_location="right",
-                            cbar_mode="edge",
-                            cbar_size="10%",
-                            cbar_pad=0.05,
-                            direction="row",
-                            )
+            fig_width = pad_inch + (size_inch + pad_inch) * n_components + cbar_portion * size_inch + pad_inch
+            fig_height = pad_inch + size_inch * n_maps + pad_inch             
         elif alignment == "vertical":
-            grid = ImageGrid(fig, rect=(0, 0, 1, 1),
-                            nrows_ncols=(n_components, n_rows),
-                            axes_pad=0.05,
-                            label_mode="1",
-                            share_all=True,
-                            cbar_location="bottom",
-                            cbar_mode="edge",
-                            cbar_size="10%",
-                            cbar_pad=0.3,
-                            direction="column",
-                            )
-        axes = grid.axes_all
+            gs = gridspec.GridSpec(ncols=n_maps, nrows=n_components + 1, height_ratios=[0.05] + [1] * n_components, 
+                                   hspace=pad_inch/size_inch, wspace=pad_inch/size_inch)
+            fig_width = pad_inch + size_inch * n_maps + pad_inch
+            fig_height = pad_inch + (size_inch + pad_inch) * n_components + cbar_portion * size_inch + pad_inch
+        else:
+            raise ValueError("Unknown alignment: `{}`. Should be either `horizontal` or `vertical`".format(alignment))
+        
+        # Create the figure according to the calculated size
+        fig = plt.figure(figsize=(fig_width, fig_height))  
+        
+        if alignment == "horizontal":
+            gs = gridspec.GridSpec(nrows=n_maps, ncols=n_components + 1, width_ratios=[1] * n_components + [cbar_portion], 
+                                   wspace=pad_inch/size_inch, hspace=pad_inch/size_inch)    
+        elif alignment == "vertical":
+            gs = gridspec.GridSpec(ncols=n_maps, nrows=n_components + 1, height_ratios=[0.05] + [1] * n_components, 
+                                   hspace=pad_inch/size_inch, wspace=pad_inch/size_inch)
+        # Note to self: gs indexing is gs[row_index, column_index].
 
+        
+        
     # use default colormap if not specified
     c = get_color_map('viridis') if cmap is None else cmap
 
-    if norm_type == 'row':
-        norm_type = 'ABCDEFFGHIJKLMNOPQRSTUVWXYZ'[:n_rows]
-
-    if norm_type == 'all':
-        norm_type = 'A' * n_rows
+    if norm_type == 'map':
+        norm_type = 'ABCDEFFGHIJKLMNOPQRSTUVWXYZ'[:n_maps]
+    elif norm_type == 'all':
+        norm_type = 'A' * n_maps
+    else:
+        if len(norm_type) != n_maps:
+            raise ValueError('`norm_type` must be a string of length equal to the number of maps, '
+                            'got {} with length {} instead of required length {}'.format(norm_type, len(norm_type), n_maps))
 
     # Handle case when normalization is different for different groups of components
     norm_dict = {key: None for key in norm_type}
@@ -193,53 +228,100 @@ def plot_n_components(
             norm_dict[norm_group].vmin = min(norm_dict[norm_group].vmin, new_norm.vmin)
             norm_dict[norm_group].vmax = max(norm_dict[norm_group].vmax, new_norm.vmax)
 
-    for i, ax in enumerate(axes):
-        ax: plt.Axes
-        ax.set_aspect(aspect='equal', adjustable='box', anchor='NW')
+    def is_lower_left_axis(map_n, component_n):
+        if alignment == "vertical":
+            if map_n == 0 and component_n == n_components - 1:
+                return True
+        elif alignment == "horizontal":
+            if map_n == n_maps - 1 and component_n == 0:
+                return True
+        return False
 
-        # take // to get integer division to understand which row, and take % to get which component (column)
-        # REMARK: Maybe I should report the problem with imshow that when the data is exactly 0, and the limits are smaller than 1e-9,
-        # and the dtype of the data is float32 or smaller, then imshow shows wrong colors, as explained below:
-        datum = np.float64(data[i // n_components][i % n_components]).T  # convert to float64 to avoid an issue with matplotlib and casting
-        # the problems arises when vmin and vmax is small (< 1e-9) and the data is very close to or is exactly 0
-        # in those cases the color is like it is 0 on the colormap, even though 0 should be mapped by norm to 0.5
+    # for i, ax in enumerate(axes):
+    for map_n in range(n_maps):
+        for component_n in range(n_components):
+            if alignment == "horizontal":
+                subplot_spec = gs[map_n, component_n]
+            elif alignment == "vertical":
+                subplot_spec = gs[1 + component_n, map_n]
+            
+            ax = fig.add_subplot(subplot_spec)            
+            ax: plt.Axes 
+                            
+            ax.set_aspect(aspect='equal', adjustable='box', anchor='NW')
 
-        # # do once at the very beginning for all axes
-        # if i == 0:
-        #     if norm_type == 'all':
-        #         norm = get_color_norm(datum, symmetric=symmetric) if norm is None else norm
+            # take // to get integer division to understand which row, and take % to get which component (column)
+            # REMARK: Maybe I should report the problem with imshow that when the data is exactly 0, and the limits are smaller than 1e-9,
+            # and the dtype of the data is float32 or smaller, then imshow shows wrong colors, as explained below:
+            datum = np.float64(data[map_n][component_n]).T  # convert to float64 to avoid an issue with matplotlib and casting
+            # the problems arises when vmin and vmax is small (< 1e-9) and the data is very close to or is exactly 0
+            # in those cases the color is like it is 0 on the colormap, even though 0 should be mapped by norm to 0.5
 
-        # do at the beginning of row
-        if i % n_components == 0:
-            # assign colormap to the row if colormap is given as a list | tuple (cmap1, cmap2, ...)
-            if isinstance(cmap, (list, tuple)):
-                c = cmap[i // n_components]
-                if c is Ellipsis and i == 0:
-                    c = get_color_map('viridis')
-                elif c is Ellipsis:
-                    # if Ellipsis is passed, use the same colormap as for the previous row
-                    c = get_color_map(cmap[i // n_components - 1])
-                elif isinstance(c, (str, matplotlib.colors.Colormap)):
-                    c = get_color_map(c)
+            # # do once at the very beginning for all axes
+            # if i == 0:
+            #     if norm_type == 'all':
+            #         norm = get_color_norm(datum, symmetric=symmetric) if norm is None else norm
 
-        norm = norm_dict[norm_type[i // n_components]]
+            # do at the beginning of row
+                
 
-        im = ax.imshow(datum, cmap=c, norm=norm, origin='lower',
-                       **imshow_kwargs)  # extent=(0, 1, 0, 1))
-        # https://github.com/matplotlib/matplotlib/issues/16910 — seems to be related
-        ax.set_label(labels[i % n_components])
-        if cmap == 'bwr':
-            label_color = 'black'
-        else:
-            label_color = None
-        add_inner_title(ax, labels[i % n_components], loc='upper left', color=label_color)
+            norm = norm_dict[norm_type[map_n]]
 
-        if (i + 1) % n_components == 0:
-            # if last component, plot the colorbar
-            cbar = ax.cax.colorbar(im)
-            # If units have "u" prefix in it, replace it with micro symbol
-            units = units.replace('u', '$\mu$')
-            cbar.set_label(units)
+            im = ax.imshow(datum, cmap=c, norm=norm, origin='lower',
+                        **imshow_kwargs)  # extent=(0, 1, 0, 1))
+            # https://github.com/matplotlib/matplotlib/issues/16910 — seems to be related
+            ax.set_label(labels[component_n])
+            
+            if cmap == 'bwr':
+                label_color = 'black'
+            else:
+                label_color = None
+            
+            add_inner_title(ax, labels[component_n], loc='upper left', color=label_color)
+            
+            if subplot_spec.is_first_col() and subplot_spec.is_last_row():
+                # Make an array of tick positions from 0 to datum.shape[0] so that there are at least 5 ticks
+                # and the last tick is at the end of the array
+                xticks = np.arange(0, datum.shape[1], max(20, datum.shape[1] // 5))
+                ax.set_xticks(xticks)
+                ax.set_xticklabels(xticks)
+                
+                yticks = np.arange(0, datum.shape[0], max(20, datum.shape[0] // 5))
+                ax.set_yticks(yticks)
+                ax.set_yticklabels(yticks)     
+            else: 
+                ax.set_xticks([])
+                ax.set_yticks([])
+            
+        # After going through all components, add a colorbar:    
+        # get colormap for the map (collection of components) if colormap is given as a list | tuple (cmap1, cmap2, ...)
+        if isinstance(cmap, (list, tuple)):
+            c = cmap[map_n]
+            if c is Ellipsis and map_n == 0:
+                c = get_color_map('viridis')
+            elif c is Ellipsis:
+                # if Ellipsis is passed, use the same colormap as for the previous row
+                c = get_color_map(cmap[map_n - 1])
+        elif isinstance(c, (str, matplotlib.colors.Colormap)):
+            c = get_color_map(c)
+        
+        if alignment == "horizontal":
+            # effectively pad the colorbar by 0.1 on each side
+            cax_gs = gs[map_n, component_n + 1].subgridspec(nrows=3, ncols=1, height_ratios=[0.1, 1, 0.2], wspace=0, hspace=0)[1]
+            cax = fig.add_subplot(cax_gs)
+            cbar = fig.colorbar(im, cax=cax, orientation='vertical')
+        elif alignment == "vertical":
+            # effectively pad the colorbar by 0.1 on each side
+            cax_gs = gs[0, map_n].subgridspec(nrows=1, ncols=3, width_ratios=[0.1, 1, 0.2], wspace=0, hspace=0)[1]
+            cax = fig.add_subplot(cax_gs)
+            cbar = fig.colorbar(im, cax=cax, orientation='horizontal')
+            # locate ticks at the top of the colorbar
+            cax.xaxis.tick_top()
+        
+        # If units have "u" prefix in it, replace it with micro symbol
+        units = units.replace('u', '$\mu$')
+        cbar.set_label(units)
+
             
     # Handle the inset: optionally display a zoomed-in region of the original plot
     if zoom_in_region is not None:
@@ -252,16 +334,6 @@ def plot_n_components(
         axins.set_xticks([])
         axins.set_yticks([])
 
-    # Make an array of tick positions from 0 to datum.shape[0] so that there are at least 5 ticks
-    # and the last tick is at the end of the array
-    xticks = np.arange(0, datum.shape[1], max(20, datum.shape[1] // 5))
-    ax.set_xticks(xticks)
-    ax.set_xticklabels(xticks)
-    
-    yticks = np.arange(0, datum.shape[0], max(20, datum.shape[0] // 5))
-    ax.set_yticks(yticks)
-    ax.set_yticklabels(yticks)
-
     # On the last axis, show an inset with coordinate system directions: arrows pointing to the right and up
     if show_coordinate_system:
         ax_inset = inset_axes(ax, width="30%", height="30%", loc='lower left')
@@ -271,8 +343,6 @@ def plot_n_components(
         ax_inset.arrow(0, 0, 0, 1, head_width=0.3, head_length=0.3, linewidth=0.3, capstyle='butt', facecolor='k', edgecolor='k')
         ax_inset.text(1.5, 0, r'$x$', fontsize=12, color='k')
         ax_inset.text(0, 1.7, r'$y$', fontsize=12, color='k')
-
-    fig.subplots_adjust(hspace=None)
     
     if title:
         if isinstance(title, str):
