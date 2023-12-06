@@ -4,26 +4,6 @@ Magrec is a package for the reconstruction of the source quantity from the measu
 The source quantity can be the magnetisation or the current density in 2 dimensions.
 The task is completed by a untrained physics informed neural networks that learn on the fly on each new single image.
 
-
-### Table of Contents
-* [1. Installation and Requirements](#1-Installation and Requirements)
-  * [1.1. Required Libraries](#11-Required Libraries)
-  * [1.2. Installation](#12-installation)
-  * [1.3. GPU Processing](#13-gpu-processing)
-* [2. Usage](#2-Usage)
-  * [2.1. Data format](#21-Data format)
-  * [2.2. Measurements parameters](#22- Measurements parameters)
-  * [2.3. Networks](#23-Networks)
-  * [2.4. Training parameters](#13-raining parameters)
-* [3. Admin](#3-Admin)
-  * [3.1 Citation](#31-Documentation)
-  * [3.2. Documentation](#32-Documentation)
-  * [3.3. Collaboration](#33-Contributors)
-  * [3.4. License](#34-License)
-  * [3.5. Contributors](#35-Contributors)
-
-
-
 ## 1.Installation and Requirements
 ### 1.1. Installation
 
@@ -66,12 +46,12 @@ Then navigate to the magrec folder and use pip to install
 pip install -e .
 ```
 
-##  2. Usage
+#  2. Usage
 
 Simple examples of use can be found in the example notebooks test notebooks (E.g. Test Magnetisation Reconstruction)
 
 
-### 2.1. Data format
+## 2.1. Data format
 
 To faciliate passing and manipulation of the image data we use a data class. This takes a series of required arguments. An example of initalising the data class is given below. 
 
@@ -98,7 +78,7 @@ dataset = Data()
 dataset.load_data(Bsensor, dx, dy, height, sensor_theta, sensor_phi, layer_thickness)
 ```
 
-### 2.2 Data manipulation
+## 2.2 Data manipulation
 
 The principle behind the software is that every modification of the data is tracked. We refers to anything that interacts with the data as an action and then the information and order of the actions is tracked. The order of different actions is important for the reconstruction process so this is an important tool for debugging with difficult to reconstruct data. 
 
@@ -129,8 +109,7 @@ dataset.actions
 ![actions](images/actions.png)
 
 
-### 2.3 Transformations
-
+## 2.3 Transformations
 Various transformations can be performed without the add of the neural network. All transformations are contains in magrec.transformation, including those used by the neural network reconstruction. To perform the transformation using a Fourier space method you can use the following code. This is a suitable approach when reconstructing Bsensor -> Bxyz, B -> Mz, and B -> Jxy. 
 
 ```
@@ -153,8 +132,7 @@ dataset.transform_data()
 plot_n_components(dataset.transformed_target, symmetric=True, labels=[r"$B_x$", r"$B_y$", r"$B_z$"], cmap="bwr")
 ```
 
-### 2.3 Models 
-
+## 2.3 Models 
 For reconstruction we define a model that is used to transform from the neural network output back into the target magnetic field. These models go beyond a the transformation itself by containing addation restrictions like mask. 
 
 Example of the model for a uniform magnetisation direction.
@@ -191,7 +169,29 @@ scaling_factor: is a number to multiple the magnetic field by for the fitting. I
 source_weight and loss_weight: Masks for calculating the source and loss functions. This is discussed later. 
 
 
-## 2.4.1 Masks
+### 2.4.1 Masks and wieghts
+The neural network approach allows for the inclusion of masks or weights. This method has only been tested with hard masks, it is in principle possible to use them a wieghting for the fitting process. These masks are passed to the model.
+
+There are two types of masks. 
+**source_weight** 
+This is applied to the source image itself. Which means it can be used to restrict the region in which the source quanity can be reconstructed. This is a excellent tool for removing background values when the image is known to have zero source in the background. This is a distinct advantage over the Fourier method which often added a source value into the background which has no obvious solution for removal both raw subtraction and fitting of the background can lead to an offset in the true source value.
+
+**loss_weight**
+This is applied to the loss calculation and can be used as a traditional wieghting to minimise the allocation of source values to regions that are more error prone or background. This can be useful when using padding to get better Fourier transforms. In this case you don't want the NN to focus on matching the padding region. Including this mask can help to remove edge artifacts when using padding. 
+
+**Defining a mask**
+To help define quick and simple masks there is a vertical and horizontial mask function. This iterates through each line of the image from both edges and finds the first value that is larger than the threshold. The magnetic field tends to have the largest value at the edge of the material so this can be used to roughly detect the edges. 
+
+Example of definng a mask. 
+```
+import magrec.image_processing.Masks as masks
+# Deifne the source weight
+threshold = 0.8e-4 # Threshold value in Tesla
+# define a vertical based mask
+source_weight = masks.mask_vert_dir(dataset.transformed_target[2,::], threshold, plot = True)
+```
+The mask can be plotted when requested
+![mask](images/mask_example.png)
 
 
 ## 2.4.2 Spatial filters
@@ -205,7 +205,8 @@ spatial_filter_kernal_size: int = 3,
 spatial_filter_width: float = 0.5
 ```
 
-### 2.5 Neural Network types 
+
+## 2.5 Neural Network types 
 Different networks are available depending of the reconstruction task(magnetisation or current density). All of these reconstruction methods inhert from the generic_method parent class.
 
 1) CNN : Convolutionnal neural network
@@ -225,11 +226,55 @@ padding=2 # whether to pad input image for convolution and by how much
 ```
 
 2) FCNN : Fully connected neural network
+The fully connected network doesn't have any convolutions but behaves in a similar fashion to the CNN method. But because there is no convolution the FCNN will tend to produce an artifically sharp image. To overcome this you can introduce a blurring function to the model. This will blur the output of the network with the desired function and width to match the spatial resolution of the measurement. 
+For example
+```
+# Define the model of the source that will be reconstructed
+Model = UniformMagnetisation(NN_recon_data, 
+                             loss_type = "MSE", 
+                             m_theta = 0, 
+                             m_phi = 0,
+                             scaling_factor = 1e6,
+                             source_weight = source_weight,
+                             loss_weight = None, 
+                             spatial_filter = True, 
+                             spatial_filter_type = "Lorentzian",
+                             spatial_filter_width = [height, height])
+``` 
+Here a lorentzian spatial filter has been applied to the output (gaussian also available) that has a width of the hieght of the sensor. While this can match the spatial resolution of the measurement it can also result in local bunching in the source values. This can be seen as oscilations in the value that are not physical. As a concequence it can be tricker to get this method to work, however, the benefit is that because the model is more accurate to the physical measurement is can produce a better approximation of the source quantity by remove low frequency oscillations that can be introduced in the convolution and fouier methods. See the comparison of methods. 
 
 ### 2.6. Fitting process
+To perform the fitting we define the neural network and pass it the model.
+```
+# Define the fitting method and pass it the model
+FittingMethod = CNN(Model, learning_rate = 0.1)
+```
+We optionally pass the learning rate for the network. This modifies how large of a step the neural network can take between each epoch. See the pytorch documentation for more details, but generally the default value is fine. 
+
+
+The fitting is performed by calling
+```
+# Perform the fit using the NN
+FittingMethod.fit(n_epochs=200)
+```
+where n_epochs is the number of epochs that the neural network will go through. 
+
+```
+# Plot the exvolution of the loss function
+FittingMethod.plot_loss()
+```
+The error function should evolve until it flattens off. At this stage the NN is likely optimising on noise. 
+![error_evol](images/error_evolution.png)
+
+Like most fitting algorithms you may need to run the network several times and play around with the number of epochs and learning rate to get a better fit. 
 
 
 ### 2.7 Comparison of techniques
+Here is an example of using different methods to reconstruct the Mz component of a CrI3 flake from the publication 10.1126/science.aav6926. No additional background subtractions are performed to give a straight comparison of the methods. 
+
+![method_comp](images/method_comp.png)
+
+
 
 ## 3. Admin
 
@@ -247,11 +292,7 @@ Untrained Physically Informed Neural Network for Image Reconstruction of Magneti
 
 ### 3.3 Collaboration
 
-If you wanna collaborate or have questions please contact one of the contributors.
-
-For AI related questions : Adrien Dubois (adr.dubois@gmail.com)
-
-For physics related questions : David Broadway (davidaaron.broadway@unibas.ch)
+If you wanna collaborate or have questions please contact me at broadwayphysics@gmail.com or my relavant univeristy account currently david.broadway@rmit.edu.au
 
 ### 3.4. License
 Permission is hereby granted, free of charge, to any person obtaining a copy
