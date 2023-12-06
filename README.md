@@ -6,8 +6,6 @@ The task is completed by a untrained physics informed neural networks that learn
 
 
 ### Table of Contents
-* [0. Structure](#0-Structure)
-  * [0.1 Programming conventions]
 * [1. Installation and Requirements](#1-Installation and Requirements)
   * [1.1. Required Libraries](#11-Required Libraries)
   * [1.2. Installation](#12-installation)
@@ -26,66 +24,7 @@ The task is completed by a untrained physics informed neural networks that learn
 
 
 
-##	0. Structure
-
-```
-magrec
-
-├── database # data that can be used for testing the code
-|	├── experimental # Data from actually measurements
-|		├──  Magnetisation in plane
-|		├──  Magnetisation out of plane
-|		└──  NbWire # measurement of current density
-|	├── Simulations # Data from simulations of magnetic fields
-|
-├── data  # functions for handling the data
-│  	├── Data.py  # class for data
-│  		├── load  # loading data for analysis
-│  		├── plot  # plotting relevant bits of data
-│  		└── plotly_plot  # interactive plotting functions
-|
-├── models # module for different models of transforming a source to a magnetic field
-|	├── GenericModel.py # generic class that is inhereted by other models
-|	├── Magnetisation2B.py
-|	└── Current2B.py
-|
-├── image_processing  # functions and classes for processing images
-│  	├── Pad
-│  	├── Filter
-│  	├── denoise
-│  	├── extend
-|	
-├── Transform  # propagation modules to transform between fields and sources
-│  	├── Fourier.py
-│  	├── Kernel.py
-│  	├── Propagator.py  # contains forward propagation 
-│ 	├── utils.py
-│  	└── constants.py   # module-wide physical constants in appropriate units
-|
-├── method  # fitting method
-|	├── OptimisationArch.py
-|	├── OptimisationUtils.py
-│  	├── NNarch.py
-│  	└── NNutils.py
-|
-├── notebooks  # notebooks to test modules, training, and reconstuction
-│  ├── Experiment
-│  ├── Test Current Density Reconstruction
-│  ├── Test Magnetisation Reconstruction
-│  ├── Test Propagation
-│  └── Train Network on Datasets
-└── scripts
-
-```
-
-### 0.1. Programming conventions
-
-Classes are defined in CamelCase
-functions are defined using snake_case
-
-
 ## 1.Installation and Requirements
-
 ### 1.1. Installation
 
 The software cloned with:
@@ -128,69 +67,69 @@ pip install -e .
 ```
 
 
-### 1.3. GPU processing
-
-As the network learns on a single image, it can be run on the cpu without any problem.
 
 ##  2. Usage
 
-Simple example of use can be found in notebooks test notebooks (E.g. Test Magnetisation Reconstruction)
-
+Simple examples of use can be found in the example notebooks test notebooks (E.g. Test Magnetisation Reconstruction)
 
 
 ### 2.1. Data format
-The input file should be in json format with the following structure:
-```
-{
-"MagneticFieldImage (2D double array)": magnetic field image 
-"[Tesla] PixleSizeX (double)": size of the pixels [meters] 
-"PixleSizeY (double)": size of the pixels [meters]
-"NVTheta (double)": Angle from z [degrees] 
-"NVPhi (double)": in-plane angle, relative to the image [degrees] 
-"NVHeight (double)": Scanning height from the sample [meters] 
 
-#Optional (better if we know these values though) 
-
-"MagnetisationType (string)": In-plane or out-of-plane 
-"MagnetisationAngle (double)": If in-plane and the magnetisation has been set by an external field. We don't need this but it is a good check. 
-
-#House keeping info 
-
-"SampleComposition (string)": what the sample is 
-"SampleIdentification (string)": Unique identifier for the sample 
-"SampleSource (string)": The research institute/group did the sample came from 
-"SamplePI (string)": Name(s) of the PI(s) for the sample fabrication 
-"SampleFabricator (string)": Name of person who made the sample 
-"MeasurementIdentification (string)": Unique identifier for the measurement 
-"MeasurementPersonel (string)": name of person/people who took the measurement 
-"MeasurementInstitute (string)": The name of the institute where the measurement was taken. 
-"MeasurementPI (string)": Name(s) of the PI(s) for the measurement 
-"MeasurementApparatus (string)": Widefield or scanning include the name of the setup 
-"MeasurementType (string)": the measurement sequence type (ODMR, pulsed ODMR, Ramsey, etc)
-}
-```
-
-### 2.2 Measurements parameters
-The parameters of the measurements are directly taken from the input file. 
-They can be modified or infered by the model.
+To faciliate passing and manipulation of the image data we use a data class. This takes a series of required arguments. An example of initalising the data class is given below. 
 
 ```
-optional arguments:
-	--['NV']['Height'] = Height of NV measurement
-	--['PixelSize'] = size of pixel
-	--['ImageShape']= size of the image
+from magrec.misc.data import Data
+import numpy as np
 
-	--['NV']['Theta'] = Nv theta angle
-	--['NV']['FindTheta']= False #True to infer the nv theta angle
-	--['NV']['Phi']= Nv phi angle
-	--['NV']['FindPhi']= False #True to infer the nv phi angle
+# Make some fake data
+Bsensor = np.random.rand((256,256))
 
-	--['Magnetisation']['Theta']=  magnetisation theta angle
-	--['Magnetisation']['FindTheta']= False  #True to infer the magnetisation theta angle
-	--['Magnetisation']['Phi'] =  magnetisation phi angle
-	--['Magnetisation']['FindPhi']= False #True to infer the magnetisation Phi angle
-  
+# Define the pixel dimensions. 
+dx = 0.1 # (um)
+dy = dx # (um)
+
+# Define the properties related to the sensor
+sensor_theta = 54 # (deg)
+sensor_phi = 45 # (deg)
+height = 30e-3 # (um)
+layer_thickness = 0 # set this to zero as it can cause issues and doesn't change results significantly
+
+# Initialise the data class
+dataset = Data()
+# load the data
+dataset.load_data(Bsensor, dx, dy, height, sensor_theta, sensor_phi, layer_thickness)
 ```
+
+### 2.2 Data manipulation
+
+The principle behind the software is that every modification of the data is tracked. We refers to anything that interacts with the data as an action and then the information and order of the actions is tracked. The order of different actions is important for the reconstruction process so this is an important tool for debugging with difficult to reconstruct data. 
+
+Below is an example of applying actions to a dataset in the data class. 
+
+```
+# Initialise the data class
+dataset = Data()
+# load the data
+dataset.load_data(Bsensor, dx, dy, height, sensor_theta, sensor_phi, layer_thickness)
+
+# Add spatial filters and perform other actions on the dataset 
+dataset.add_hanning_filter(height)
+dataset.add_short_wavelength_filter(height)
+dataset.remove_DC_background()
+dataset.crop_data([0,256,0,256])
+dataset.pad_data_to_power_of_two()
+
+# Plot the current dataset at any stage by calling dataset.plot_target()
+# The Bsensor data is refered to as the target because it acts as the fitting 
+# image in the neural network based reconstructions. 
+
+dataset.plot_target()
+
+# Display all of the actions that have been performed on the data
+dataset.actions
+```
+
+![Example of actions](images/actions.png)
 
 
 ### 2.3 Networks 
