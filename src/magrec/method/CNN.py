@@ -30,14 +30,12 @@ class CNN(object):
     def prepare_fit(self, 
                     n_channels_in=1, 
                     n_channels_out=1, 
-                    size=2, 
                     kernel=5, 
                     stride=2, 
                     padding=2,
                     ):
         # Prepare the method for fitting.
        
-        # Check the size of the data and pad it if necessary.
 
         # check model requirements
         self.model.requirements()
