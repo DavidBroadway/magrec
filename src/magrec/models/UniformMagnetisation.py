@@ -16,7 +16,7 @@ class UniformMagnetisation(GenericModel):
                 fit_m_theta: bool = False, 
                 m_phi: float = 0,
                 fit_m_phi: bool = False,
-                scaling_factor: float = 1, 
+                scaling_factor: float = 1e6, 
                 std_loss_scaling : float = 0, 
                 loss_weight: torch.Tensor = None,
                 source_weight: torch.Tensor = None,

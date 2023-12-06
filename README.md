@@ -66,8 +66,6 @@ Then navigate to the magrec folder and use pip to install
 pip install -e .
 ```
 
-
-
 ##  2. Usage
 
 Simple examples of use can be found in the example notebooks test notebooks (E.g. Test Magnetisation Reconstruction)
@@ -128,50 +126,110 @@ dataset.plot_target()
 # Display all of the actions that have been performed on the data
 dataset.actions
 ```
+![actions](images/actions.png)
 
-![Example of actions](images/actions.png)
 
+### 2.3 Transformations
 
-### 2.3 Networks 
-Different networks are available depending of the reconstruction task(magnetisation or current density)
+Various transformations can be performed without the add of the neural network. All transformations are contains in magrec.transformation, including those used by the neural network reconstruction. To perform the transformation using a Fourier space method you can use the following code. This is a suitable approach when reconstructing Bsensor -> Bxyz, B -> Mz, and B -> Jxy. 
 
 ```
-1) generator_CNN : Convolutionnal network for magnetization
+# Example of transforming a magnetic field with an arbitray sensor angle in the cartesian components.
 
-optional arguments:
-  --Size            size of the network (1,2,3)
-  --ImageSize		size of the image
-  --kernel  		size of the kernel
-  --stride 			size of the stride
+from magrec.transformation.MagneticFields import MagneticFields   
+from magrec.misc.plot import plot_n_components
 
+# Initialise the data class
+dataset = Data()
+# load the data
+dataset.load_data(Bsensor, dx, dy, height, sensor_theta, sensor_phi, layer_thickness)
 
-2)generator_MLP : Fully connected network for magnetization
+# Set the transformation to be performed on the data
+dataset.set_transformer(MagneticFields)
+# Perform the transformation
+dataset.transform_data()
 
-optional arguments:
-  --Size            size of the image
-
-
-3)generator_CNN_J : Fully connected for current density
-
-optional arguments:
-  --Size            size of the network (1,2,3)
-  --ImageSize		size of the image
-  --kernel  		size of the kernel
-  --stride 			size of the stride
+# Plot the results
+plot_n_components(dataset.transformed_target, symmetric=True, labels=[r"$B_x$", r"$B_y$", r"$B_z$"], cmap="bwr")
 ```
 
+### 2.3 Models 
 
-### 2.4. Training parameters
-the training can be controlled with the following options :
+For reconstruction we define a model that is used to transform from the neural network output back into the target magnetic field. These models go beyond a the transformation itself by containing addation restrictions like mask. 
+
+Example of the model for a uniform magnetisation direction.
+
 ```
-	--['mlp']=True for fully connected network
-	--['LossFunction']= L1 or L2 
-	--['Magnetization']= True for a given magnetization to compare with
-	--['IntegerOnly']= True to output only integer values 
-	--['PositiveMagnetisationOnly']= True to output only postive values
-	--['PrintLossValue']= True to print loss values
-	--['Epochs']= Number of epochs
+from magrec.models.UniformMagnetisation import UniformMagnetisation
+
+
+dataset = Data()
+dataset.load_data(Bz_data, 
+                        dx = dx, 
+                        dy = dy, 
+                        height = height, 
+                        theta = 0, 
+                        phi = 0, 
+                        layer_thickness = 0)
+
+# Define the model of the source that will be reconstructed
+Model = UniformMagnetisation(dataset, 
+                             loss_type = "MSE", 
+                             m_theta = 0, 
+                             m_phi = 0,
+                             scaling_factor = 1e6)
 ```
+
+Here the model takes a series of important parameters.
+
+dataset: is the data class that contains the target magnetic field
+
+loss_type: is an options to switch from different loss function definitions. The default is type is mean square error "MSE" 
+
+scaling_factor: is a number to multiple the magnetic field by for the fitting. In most cases the magnetic field is small which can lead to poor convergence of the NN. We multiple by this factor to improve the fit convergence. The default of 1e6 is good starting position. If the network doesn't converge this parameter can be optimised. 
+
+source_weight and loss_weight: Masks for calculating the source and loss functions. This is discussed later. 
+
+
+## 2.4.1 Masks
+
+
+## 2.4.2 Spatial filters
+Only used when using a fully connected neural network. This acts to introduce the measurement spatial resolution into the dataset, otherwise the FCNN will converge to an image that is too sharp to be a realisic result. 
+
+Options and defualt values. 
+```
+spatial_filter: bool = False,
+spatial_filter_type: str = "Gaussian",
+spatial_filter_kernal_size: int = 3,
+spatial_filter_width: float = 0.5
+```
+
+### 2.5 Neural Network types 
+Different networks are available depending of the reconstruction task(magnetisation or current density). All of these reconstruction methods inhert from the generic_method parent class.
+
+1) CNN : Convolutionnal neural network
+init: takes the model and a leanring_rate
+
+preparing the fit has options about the network and doesn't need to be called as the default values will be assumed in the init statement. 
+
+If you want to play with the size of the network these are the parameters. 
+```
+n_channels_in=1 # The number of magnetic field components
+n_channels_out=1 # the number of source componets (e.g. Mz)
+
+# Kernal stride and padding as defined in the pytorch documentation
+kernel=5 # Size of the convolutional kernal
+stride=2 # step in which to do the convolution
+padding=2 # whether to pad input image for convolution and by how much
+```
+
+2) FCNN : Fully connected neural network
+
+### 2.6. Fitting process
+
+
+### 2.7 Comparison of techniques
 
 ## 3. Admin
 
