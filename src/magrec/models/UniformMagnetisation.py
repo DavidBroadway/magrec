@@ -35,6 +35,7 @@ class UniformMagnetisation(GenericModel):
         self.spatial_filter_width = spatial_filter_width
         self.spatial_filter_type = spatial_filter_type
         self.spatial_filter_kernal_size = spatial_filter_kernal_size
+        self.scaling_factor = scaling_factor
 
         self.positive_magnetisation = positive_magnetisation
 
