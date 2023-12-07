@@ -21,7 +21,7 @@ The system requires the following:
 
 	
 - [Python](https://www.python.org/downloads/): Python 3 by default (works for python 2, but no future guarantees).
-- [Pytorch](https://www.pytorch.org/): The Deep Learning library for back end.
+- [Pytorch](https://pytorch.org/): The Deep Learning library for back end.
 - [matplotlib](http://matplotlib.org/): visualization library
 - [matplotlib-scalebar](https://pypi.org/project/matplotlib-scalebar/): Provides a new artist for matplotlib to display a scale bar
 - [numpy](http://www.numpy.org/) : General purpose array-processing package.
