@@ -80,11 +80,15 @@ class CNN(object):
         self.train_loader = DataLoader(self.train_data_cnn)
 
         # Define the optimizer
-        self.optimizer = optim.Adam(self.Net.parameters(), lr=self.learning_rate, eps=1e-08, weight_decay=0, amsgrad=False)
+        self.optimizer = optim.Adam(self.Net.parameters(), 
+                                    lr=self.learning_rate, 
+                                    eps=1e-08, 
+                                    weight_decay=0, 
+                                    amsgrad=False)
 
 
 
-    def fit(self, n_epochs=25, print_every_n=10, weight = None):    
+    def fit(self, n_epochs=25, print_every_n=10):    
         """
         Run gradient descent on the network to optimize the weights and biases.
 
@@ -113,7 +117,7 @@ class CNN(object):
             # Note that the training data is shuffled every epoch by the DataLoader
 
         # Iterate for each batch
-            for batch_idx, (data,mask_t) in enumerate(self.train_loader):
+            for _, (data,mask_t) in enumerate(self.train_loader):
                 # Get the batch data and labels
                 # inputs = batch
                 # print(inputs[0].size() )
@@ -183,101 +187,6 @@ class Net(nn.Module):
     """
     Architecture for 2d → 2d image reconstruction, which learns to reconstruct 2d image from another 2d image.
     """
-    # def __init__(self, Size=1, ImageSize=256, kernel = 5, stride = 2, padding = 2, n_channels_in = 1, n_channels_out=1):
-
-    #     """
-    #     Create the net that takes an image of currents of size (3, W, H) and creates another image (3, W, H).
-    #     3 corresponds to the number of channels in the input image. W and H must be multiples of 2^4 = 16, because the
-    #     net has 4 convolution layers if stride = 2.
-
-    #     Args:
-    #         n_channels_in:  number of channels in input image (number of components)
-    #         size:           kinda channel inflation parameter, inner convolution layers give size * 8 or size * 16 output parameters
-    #         kernel:         kernel size
-    #         stride:         step in which to do the convolution
-    #         padding:        whether to pad input image for convolution and by how much
-
-    #     Returns:
-    #         GeneratorCNN:   the net
-    #     """
-    #     super().__init__()
-
-    #     M=Size
-    
-    #     if ImageSize == 512:
-    #         ConvolutionSize = 32
-    #     elif ImageSize == 256:
-    #         ConvolutionSize = 16
-    #     else: # size is 128
-    #         ConvolutionSize = 8
-    #     # first index is the number of channels
-    #     self.convi = nn.Conv2d(n_channels_in, 8*M, kernel, 1, padding)
-    #     self.conv_r0 = nn.Conv2d(1, 8*M, kernel, 1, padding)
-    #     self.conv1 = nn.Conv2d(8*M, 8*M, kernel, stride, padding)
-    #     self.bn1  = nn.BatchNorm2d(8*M)
-    #     self.conv2 = nn.Conv2d(8*M, 16*M, kernel, stride, padding)
-    #     self.bn2  = nn.BatchNorm2d(16*M)
-    #     self.conv3 = nn.Conv2d(16*M, 32*M, kernel, stride, padding)
-    #     self.bn3  = nn.BatchNorm2d(32*M)
-    #     self.conv4 = nn.Conv2d(32*M, 64*M, kernel, stride, padding)
-    #     self.bn4  = nn.BatchNorm2d(64*M)
-
-    #     self.conv5 = nn.Conv2d(64*M, 128*M, 5, 1, 2)
-    #     self.bn5  = nn.BatchNorm2d(128*M)
-
-    #     self.trans1 = nn.ConvTranspose2d(128*M, 64*M, kernel, stride, padding,1)
-    #     self.trans2 = nn.ConvTranspose2d(64*M+32*M, 32*M, kernel, stride, padding,1)
-    #     self.trans3 = nn.ConvTranspose2d(32*M+16*M, 16*M, kernel, stride, padding,1)
-    #     self.trans4 = nn.ConvTranspose2d(16*M+8*M, 8*M, kernel, stride, padding,1)
-    #     self.conv6 = nn.Conv2d(8*M, n_channels_out, kernel, 1, padding)
-    #     self.conv7 = nn.Conv2d(n_channels_out, n_channels_out, kernel, 1, padding)
-
-
-    #     self.fc11 = nn.Linear(64*M * ConvolutionSize*ConvolutionSize, 120)
-    #     self.fc12 = nn.Linear(120, 84)
-    #     self.fc13 = nn.Linear(84, 1)
-
-    #     self.fc21 = nn.Linear(64*M * ConvolutionSize*ConvolutionSize, 120)
-    #     self.fc22 = nn.Linear(120, 84)
-    #     self.fc23 = nn.Linear(84, 1)
-
-    #     self.fc31 = nn.Linear(64*M * ConvolutionSize*ConvolutionSize, 120)
-    #     self.fc32 = nn.Linear(120, 84)
-    #     self.fc33 = nn.Linear(84, 1)
-
-    #     self.fc41 = nn.Linear(64*M * ConvolutionSize*ConvolutionSize, 120)
-    #     self.fc42 = nn.Linear(120, 84)
-    #     self.fc43 = nn.Linear(84, 1)
-
-    #     self.fc51 = nn.Linear(64*M * ConvolutionSize*ConvolutionSize, 120)
-    #     self.fc52 = nn.Linear(120, 84)
-    #     self.fc53 = nn.Linear(84, 1)
-
-    #     self.transfc1 = nn.Linear(64*M * ConvolutionSize*ConvolutionSize, 120)
-    #     self.transfc2 = nn.Linear(120, 256)
-    #     self.transfc3 = nn.Linear(256, 65536)
-
-    # def forward(self, input):
-
-    #     conv0 = self.convi(input)
-    #     conv0 = F.leaky_relu(conv0, 0.2)
-    #     conv1 = F.leaky_relu(self.bn1(self.conv1(conv0)), 0.2)
-    #     conv2 = F.leaky_relu(self.bn2(self.conv2(conv1)), 0.2)
-    #     conv3 = F.leaky_relu(self.bn3(self.conv3(conv2)), 0.2)
-    #     conv4 = F.leaky_relu(self.bn4(self.conv4(conv3)), 0.2)
-
-    #     conv5 = F.leaky_relu(self.conv5(conv4), 0.2)
-
-    #     trans1 = F.leaky_relu(self.bn4(self.trans1(conv5)), 0.2)
-    #     trans2 = F.leaky_relu(self.bn3(self.trans2(torch.cat([conv3, trans1], dim=1))), 0.2)
-    #     trans3 = F.leaky_relu(self.bn2(self.trans3(torch.cat([conv2, trans2], dim=1))), 0.2)
-    #     trans4 = F.leaky_relu(self.bn1(self.trans4(torch.cat([conv1, trans3], dim=1))), 0.2)
-
-    #     conv6 = self.conv6(trans4)
-    #     conv7 = self.conv7(conv6)
-
-    #     return conv7
-
     def __init__(self, n_channels_in=1, n_channels_out=1, size=1, kernel=5, stride=2, padding=2):
         """
         Create the net that takes an image of currents of size (3, W, H) and creates another image (3, W, H).

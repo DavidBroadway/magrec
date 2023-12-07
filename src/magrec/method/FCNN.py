@@ -16,7 +16,7 @@ class FCNN(object):
 
     def __init__(self, 
                  model: object, 
-                 learning_rate: float = 0.001):
+                 learning_rate: float = 0.1):
         """
         Args:
             model: The model to be fitted.
@@ -159,19 +159,24 @@ class FCNN(object):
         if self.source_angles:
             self.final_theta = self.source_theta.detach()[0]
             self.final_phi = self.source_phi.detach()[0]
-        if not self.model.fit_m_theta:
-            self.final_theta = torch.tensor(self.model.m_theta)
-        if not self.model.fit_m_phi:
-            self.final_phi = torch.tensor(self.model.m_phi)
+        # check if the model has a fixed theta or phi 
+        # and if the model has this attribute
+        if hasattr(self.model, "fit_m_theta"):
+            if not self.model.fit_m_theta:
+                self.final_theta = torch.tensor(self.model.m_theta)
+        if hasattr(self.model, "fit_m_phi"):
+            if not self.model.fit_m_phi:
+                self.final_phi = torch.tensor(self.model.m_phi)
         # Return the loss and accuracy
         return 
 
 
     def extract_results(self, remove_padding = True, additional_roi=None):
         # print the final angles that were used
-        print("Final reconstruction from the network used the following angles:")
-        print(f"theta: {self.final_theta:.2f}")
-        print(f"phi: {self.final_phi+90:.2f}")
+        if hasattr(self.model, "fit_m_theta"):
+            print("Final reconstruction from the network used the following angles:")
+            print(f"theta: {self.final_theta:.2f}")
+            print(f"phi: {self.final_phi+90:.2f}")
 
         # Extract the results from the model and return them.
         self.results = self.model.extract_results(self.final_output, 
