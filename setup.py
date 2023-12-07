@@ -11,7 +11,8 @@ required = [
     "numpy",
     "matplotlib>=3.8.1",
     "matplotlib-scalebar>=0.8",
-    "simplejson", 
+    "simplejson",
+    "scipy" 
     "pandas"
 ]
 
