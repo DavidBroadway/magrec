@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 
 from magrec.transformation.Fourier import FourierTransform2d
 from magrec.misc.constants import MU0, twopi, convert_AperM2_to_ubpernm2
@@ -70,23 +71,38 @@ class MagnetizationFourierKernel2d(object):
 
         _M = torch.zeros((3, 3,) + k_matrix.shape, dtype=torch.complex64,)
 
-        # divide by 2 to get the proper quantity when _M + _M.T
-        _M[0, 1, :, :] = kx_vector[:, None] * ky_vector[None, :] / k_matrix / 2
-        _M[0, 2, :, :] = - 1j * kx_vector[:, None] / k_matrix / 2
-        _M[1, 2, :, :] = - 1j * ky_vector[None, :] / k_matrix / 2
+        # _M[0, 1, :, :] = kx_vector[:, None] * ky_vector[None, :] / k_matrix/2
+        # _M[0, 2, :, :] = - 1j * kx_vector[:, None] / k_matrix /2
+        # _M[1, 2, :, :] = - 1j * ky_vector[None, :] / k_matrix /2
 
-        _M[0, 0, :, :] = kx_vector[:, None] ** 2 / k_matrix / 2
-        _M[1, 1, :, :] = ky_vector[None, :] ** 2 / k_matrix / 2
-        _M[2, 2, :, :] = k_matrix / 2
+        # _M[0, 0, :, :] = kx_vector[:, None] ** 2 / k_matrix /2
+        # _M[1, 1, :, :] = ky_vector[None, :] ** 2 / k_matrix /2
+        # _M[2, 2, :, :] = k_matrix /2
 
-        # Deal with the case where k = 0 by setting the corresponding elements to 0
-        # _M[[0, 1, 1], [0, 0, 1], [0, 0, 0], [0, 0, 0]] = 0
+        # # Use the property of the M matrix that it is symmetric
+        # # divide by 2 to get the proper quantity when _M + _M.T
+        # M = _M + _M.transpose(0, 1)
+
+        _M[0, 1, :, :] = kx_vector[:, None] * ky_vector[None, :] / k_matrix
+        _M[0, 2, :, :] = 1j * kx_vector[:, None] 
+        _M[1, 2, :, :] = 1j * ky_vector[None, :]  
+
+        _M[1, 0, :, :] = kx_vector[:, None] * ky_vector[None, :] / k_matrix
+        _M[2, 0, :, :] = 1j * kx_vector[:, None] 
+        _M[2, 1, :, :] = 1j * ky_vector[None, :]  
+
+        _M[0, 0, :, :] = kx_vector[:, None] ** 2 / k_matrix 
+        _M[1, 1, :, :] = ky_vector[None, :] ** 2 / k_matrix 
+        _M[2, 2, :, :] = -k_matrix 
+
+        M = _M
+
 
         depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness, dx, dy, add_filter)
-        # Use the property of the M matrix that it is symmetric (that's why we divide by 1/2 above, to get the proper diagonal terms)
-        M = _M + _M.transpose(0, 1)
+        
+       
 
-        M = -(MU0 / 2) * depth_factor * M
+        M = (MU0 / 2) * depth_factor * M
 
         # Set the components of the kernel matrix to zero for k = 0, where the denominator is zero
         M[:, 0, 0] = 0
@@ -132,7 +148,7 @@ class UniformLayerFactor2d(object):
         if add_filter:
             Filtering = DataFiltering(depth_factor, dx, dy)
             
-            wavelength = height + layer_thickness
+            wavelength = np.abs(height + layer_thickness)
             # add a hanning filter to the depth factor
             depth_factor = Filtering.apply_hanning_filter(wavelength, data=depth_factor, plot_results=False, in_fourier_space=True)
             depth_factor = Filtering.apply_short_wavelength_filter(wavelength, data=depth_factor, plot_results=False,  in_fourier_space=True) 

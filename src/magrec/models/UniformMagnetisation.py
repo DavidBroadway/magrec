@@ -169,7 +169,7 @@ class UniformMagnetisation(GenericModel):
         return self.results
     
 
-    def plot_results(self, results):  
+    def plot_results(self, results, brange = None, srange = None):  
         """
         Args:
             nn_output: The output of the neural network
@@ -179,7 +179,7 @@ class UniformMagnetisation(GenericModel):
             None
         """
         
-        plt.figure()
+        self.recon_fig = plt.figure()
         plt.subplot(2, 2, 1)
         plot_data = 1e3*results["original B"]
         plot_range = abs(plot_data).max()

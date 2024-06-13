@@ -65,16 +65,19 @@ class CNN(object):
 
         # Define the data for loading into the network.
         self.img = torch.Tensor(training_target)
-        self.mask = np.where(self.img.numpy() == 0,0,1)  
+        self.mask = np.where(self.img.numpy() == 0,0,1)
 
         # Expand the size of the tensors to include the batch size and channel size
         if n_channels_in > 1:
             self.img_comp = torch.tensor(self.img[np.newaxis])
+            self.img_input = torch.FloatTensor(self.img[np.newaxis])
+            self.mask_t = torch.FloatTensor(self.mask[np.newaxis])
         else:
             self.img_comp = torch.FloatTensor(self.img[np.newaxis, np.newaxis])
 
-        self.img_input = torch.FloatTensor(self.img[np.newaxis, np.newaxis])
-        self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
+            self.img_input = torch.FloatTensor(self.img[np.newaxis, np.newaxis])
+            self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
+
 
         self.train_data_cnn = TensorDataset(self.img_input, self.mask_t)
         self.train_loader = DataLoader(self.train_data_cnn)
@@ -85,7 +88,6 @@ class CNN(object):
                                     eps=1e-08, 
                                     weight_decay=0, 
                                     amsgrad=False)
-
 
 
     def fit(self, n_epochs=25, print_every_n=10):    
@@ -164,14 +166,14 @@ class CNN(object):
         # Extract the results from the model and return them.
         self.results = self.model.extract_results(self.final_output, self.final_b, remove_padding = remove_padding)
 
-    def plot_results(self, remove_padding = True):
+    def plot_results(self, remove_padding = True, brange = None, srange = None):
         # Plot the results from the model.
 
         # check is results have been unpacked
         if not hasattr(self, "results"):
             self.results = self.model.extract_results(self.final_output, self.final_b, remove_padding = remove_padding)
 
-        self.model.plot_results(self.results)
+        self.model.plot_results(self.results, brange = brange, srange = srange)
 
     def plot_loss(self):
         # Plot the evolution of the loss function at the end of the train
@@ -206,13 +208,12 @@ class Net(nn.Module):
         super().__init__()
 
         M = size
-        
+
         self.n_channels_in = n_channels_in
         self.n_channels_out = n_channels_out
 
         self.convi = nn.Conv2d(n_channels_in, 8 * M, kernel_size=kernel, stride=1, padding=padding)
-        # This was in the original architecture given by Adrien, but it is not used anywhere AFAIS
-        # self.conv_r0 = nn.Conv2d(3, 8 * M, kernel, 1, padding)
+
         self.conv1 = nn.Conv2d(8 * M, 8 * M, kernel, stride, padding)
         self.bn1 = nn.BatchNorm2d(8 * M)
         self.conv2 = nn.Conv2d(8 * M, 16 * M, kernel, stride, padding)
@@ -233,8 +234,24 @@ class Net(nn.Module):
         self.bn2t = nn.BatchNorm2d(16 * M)
         self.trans4 = nn.ConvTranspose2d(16 * M, 8 * M, kernel, stride, padding, 1)
         self.bn1t = nn.BatchNorm2d(8 * M)
-        self.conv6 = nn.Conv2d(8 * M, n_channels_out, 5, 1, 2)
-        self.conv7 = nn.Conv2d(n_channels_out, n_channels_out, kernel, 1, padding)
+
+        self.conv6 = nn.Conv2d(8 * M, 1, kernel, 1, padding)
+        self.conv7 = nn.Conv2d(1, 1, kernel, 1, padding)
+
+        # Try to have seperate channels for each output channel 
+        if self.n_channels_out > 1:
+            self.trans11 = nn.ConvTranspose2d(128 * M, 64 * M, kernel, stride, padding, 1)
+            self.bn41t = nn.BatchNorm2d(64 * M)
+            self.trans21 = nn.ConvTranspose2d(64 * M, 32 * M, kernel, stride, padding, 1)
+            self.bn31t = nn.BatchNorm2d(32 * M)
+            self.trans31 = nn.ConvTranspose2d(32 * M, 16 * M, kernel, stride, padding, 1)
+            self.bn21t = nn.BatchNorm2d(16 * M)
+            self.trans41 = nn.ConvTranspose2d(16 * M, 8 * M, kernel, stride, padding, 1)
+            self.bn11t = nn.BatchNorm2d(8 * M)
+
+            self.conv61 = nn.Conv2d(8 * M, 1, kernel, 1, padding)
+            self.conv71 = nn.Conv2d(1, 1, kernel, 1, padding)
+
 
     def forward(self, input):
 
@@ -251,9 +268,28 @@ class Net(nn.Module):
         trans2 = F.leaky_relu(self.bn3t(self.trans2(trans1)), 0.2)
         trans3 = F.leaky_relu(self.bn2t(self.trans3(trans2)), 0.2)
         trans4 = F.leaky_relu(self.bn1t(self.trans4(trans3)), 0.2)
-
         conv6 = self.conv6(trans4)
         conv7 = self.conv7(conv6)
 
-        return conv7 
+        # For the second output channel
+        if self.n_channels_out > 1:
+            trans11 = F.leaky_relu(self.bn41t(self.trans11(conv5)), 0.2)
+            trans21 = F.leaky_relu(self.bn31t(self.trans21(trans11)), 0.2)
+            trans31 = F.leaky_relu(self.bn21t(self.trans31(trans21)), 0.2)
+            trans41 = F.leaky_relu(self.bn11t(self.trans41(trans31)), 0.2)
+            conv61 = self.conv61(trans41)
+            conv71 = self.conv71(conv61)
+
+            # stack the two outputs
+            conv8 = torch.stack([conv7[0], conv71[0]], dim = 1)
+        else:
+            conv8 = conv7
+
+
+
+        # conv6 = self.conv6(trans4)
+        # conv7 = self.conv7(conv6)
+        # conv8 = self.conv8(conv7)
+
+        return conv8
 

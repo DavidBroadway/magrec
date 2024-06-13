@@ -217,8 +217,13 @@ class GuassianBlur(torch.nn.Module):
         Returns:
             torch.Tensor: The tensor after the Lorentzian blur has been applied
         """
-        batch_size, channels, height, width = input_tensor.size()
-        kernel = self.kernel.unsqueeze(0).repeat(channels, 1, 1, 1).to(input_tensor.device)
+        if len(input_tensor.size()) == 2:
+            input_tensor = input_tensor.unsqueeze(0).unsqueeze(0)
+            kernel = self.kernel.unsqueeze(0).repeat(1, 1, 1, 1).to(input_tensor.device)
+            channels = 1
+        else:
+            batch_size, channels, height, width = input_tensor.size()
+            kernel = self.kernel.unsqueeze(0).repeat(channels, 1, 1, 1).to(input_tensor.device)
         return torch.nn.functional.conv2d(input_tensor, weight=kernel, groups=channels, stride=1, padding="same")
 
     def get_2d_gaussian_kernel(self, size, sigma_x: float, sigma_y: float):
