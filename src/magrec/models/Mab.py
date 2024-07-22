@@ -24,6 +24,10 @@ class Mab(GenericModel):
                 spatial_filter_width: float = 0.5):
         super().__init__(dataset, loss_type, scaling_factor)
 
+        # for the Model to work the height needs to be negative. I.e. the field needs to be projected onto
+        # the plane of the sensor.
+        dataset.height = -np.abs(dataset.height)
+
         # Define the propagator so that this isn't performed during a loop.
         self.magClass = Mab2Babz(dataset, theta = theta)
         self.std_loss_scaling = std_loss_scaling
@@ -46,9 +50,7 @@ class Mab(GenericModel):
             real_signal=True,
                 )
 
-        # for the Model to work the height needs to be negative. I.e. the field needs to be projected onto
-        # the plane of the sensor.
-        dataset.height = -np.abs(dataset.height)
+
 
         # define the requirements for the model that may change the fitting method
         self.requirements()

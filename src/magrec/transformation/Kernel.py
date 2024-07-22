@@ -97,11 +97,8 @@ class MagnetizationFourierKernel2d(object):
 
         M = _M
 
-
         depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, layer_thickness, dx, dy, add_filter)
-        
-       
-
+            
         M = (MU0 / 2) * depth_factor * M
 
         # Set the components of the kernel matrix to zero for k = 0, where the denominator is zero
@@ -194,7 +191,7 @@ class HarmonicFunctionComponentsKernel(object):
         pass
 
     @staticmethod
-    def define_kernel_matrix(kx_vector, ky_vector, theta, phi) -> torch.Tensor:
+    def define_kernel_matrix(kx_vector, ky_vector, theta, phi, height, dx, dy) -> torch.Tensor:
         """
         Defines a transform matrix that maps from a single component of the magnetic field, usually
         denoted by b_NV in 2d Fourier space, to the three components of the magnetic field in the Cartesian coordinate system,
@@ -222,6 +219,9 @@ class HarmonicFunctionComponentsKernel(object):
         """
         k_matrix = FourierTransform2d.define_k_matrix(kx_vector, ky_vector)
 
+        depth_factor = UniformLayerFactor2d.define_depth_factor(k_matrix, height, 0, dx, dy, add_filter=False)
+        
+
         # Do type conversion
         theta = torch.deg2rad(torch.tensor(theta))
         phi = torch.deg2rad(torch.tensor(phi))
@@ -238,18 +238,35 @@ class HarmonicFunctionComponentsKernel(object):
         u[0, :, :] = kx_vector[:, None]
         u[1, :, :] = ky_vector[None, :]
         u[2, :, :] = 1j * k_matrix
+
         _denominator = torch.einsum('cjk,c->jk', u, n)
 
         # denominator is zero for k = 0, where u = (k_x, k_y, ik) = 0. We set it to 1 to avoid division by zero, and later
         # set the corresponding elements of the kernel matrix to zero to null those components.
         _denominator[0, 0] = 1
 
-        M = u / _denominator
+        M = u  * (1) / _denominator
 
         # Set the components of the kernel matrix to zero for k = 0, where the denominator is zero
         M[:, 0, 0] = 0
 
+        # kx = kx_vector[:, None]
+        # ky = ky_vector[None, :]
+        # k = k_matrix
 
+        # bnv2bx =  1/(n[0]                   + n[1] * ky / kx        + 1j * n[2] * k / kx)
+        # bnv2by =  1/(n[0] * kx / ky         + n[1]                  + 1j * n[2] * k / ky)
+        # bnv2bz = 1/(-1j * n[0] * kx / k     - 1j * n[1] * ky / k    + n[2])
+
+        # bnv2bx[0,0] = 1
+        # bnv2by[0,0] = 1
+        # bnv2bz[0,0] = 1
+        
+        # M[0, :, :] =  bnv2bx
+        # M[1, :, :] =  bnv2by
+        # M[2, :, :] =  bnv2bz
+
+        # M[:, 0, 0] = 1
 
         return M
 

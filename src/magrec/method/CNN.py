@@ -175,14 +175,22 @@ class CNN(object):
 
         self.model.plot_results(self.results, brange = brange, srange = srange)
 
-    def plot_loss(self):
+    def plot_loss(self, ylog = False):
         # Plot the evolution of the loss function at the end of the train
-        plt.figure()
-        plt.plot(self.track_loss, label='Loss function')
-        plt.xlim([0, len(self.track_loss)])
-        plt.ylabel('Average difference B (mT)')
-        plt.title('Error function evolution')
-        plt.xlabel('Epochs')
+        if ylog:
+            plt.figure()
+            plt.semilogy(self.track_loss)
+            plt.xlim([0, len(self.track_loss)])
+            plt.ylabel('Average difference B (mT)')
+            plt.title('Error function evolution')
+            plt.xlabel('Epochs')
+        else:
+            plt.figure()
+            plt.plot(self.track_loss, label='Loss function')
+            plt.xlim([0, len(self.track_loss)])
+            plt.ylabel('Average difference B (mT)')
+            plt.title('Error function evolution')
+            plt.xlabel('Epochs')
 
 # Subclass for the architecture of the NN
 class Net(nn.Module):
