@@ -15,6 +15,7 @@ class CNN(object):
 
     def __init__(self,                  
                  model: object, 
+                 initial_guess: np.ndarray = None,
                  learning_rate: float = 0.1):
         """
         Args:
@@ -23,6 +24,7 @@ class CNN(object):
         """
         self.model = model
         self.learning_rate = learning_rate
+        self.initial_guess = initial_guess
         torch.autograd.set_detect_anomaly(True)
 
         self.prepare_fit()
@@ -72,11 +74,15 @@ class CNN(object):
             self.img_comp = torch.tensor(self.img[np.newaxis])
             self.img_input = torch.FloatTensor(self.img[np.newaxis])
             self.mask_t = torch.FloatTensor(self.mask[np.newaxis])
+            if self.initial_guess is not None:
+                self.initial_guess  = torch.FloatTensor(self.initial_guess[np.newaxis])
         else:
             self.img_comp = torch.FloatTensor(self.img[np.newaxis, np.newaxis])
 
             self.img_input = torch.FloatTensor(self.img[np.newaxis, np.newaxis])
             self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
+            if self.initial_guess is not None:
+                self.initial_guess  = torch.FloatTensor(self.initial_guess[np.newaxis,np.newaxis])
 
 
         self.train_data_cnn = TensorDataset(self.img_input, self.mask_t)
@@ -136,6 +142,10 @@ class CNN(object):
                 # See also: https://stackoverflow.com/questions/55338756/why-there-are-different-output-between-model-forwardinput-and-modelinput
                 
                 outputs = self.Net(data) 
+
+                # check if the NN is modifying an initial guess or not
+                if self.initial_guess is not None:
+                    outputs = outputs + self.initial_guess
 
                 # Convert to magnetic field
                 b, outputs = self.model.transform(outputs)
@@ -260,6 +270,19 @@ class Net(nn.Module):
             self.conv61 = nn.Conv2d(8 * M, 1, kernel, 1, padding)
             self.conv71 = nn.Conv2d(1, 1, kernel, 1, padding)
 
+        if self.n_channels_out > 2:
+            self.trans12 = nn.ConvTranspose2d(128 * M, 64 * M, kernel, stride, padding, 1)
+            self.bn42t = nn.BatchNorm2d(64 * M)
+            self.trans22 = nn.ConvTranspose2d(64 * M, 32 * M, kernel, stride, padding, 1)
+            self.bn32t = nn.BatchNorm2d(32 * M)
+            self.trans32 = nn.ConvTranspose2d(32 * M, 16 * M, kernel, stride, padding, 1)
+            self.bn22t = nn.BatchNorm2d(16 * M)
+            self.trans42 = nn.ConvTranspose2d(16 * M, 8 * M, kernel, stride, padding, 1)
+            self.bn12t = nn.BatchNorm2d(8 * M)
+
+            self.conv62 = nn.Conv2d(8 * M, 1, kernel, 1, padding)
+            self.conv72 = nn.Conv2d(1, 1, kernel, 1, padding)
+
 
     def forward(self, input):
 
@@ -280,7 +303,7 @@ class Net(nn.Module):
         conv7 = self.conv7(conv6)
 
         # For the second output channel
-        if self.n_channels_out > 1:
+        if self.n_channels_out == 2:
             trans11 = F.leaky_relu(self.bn41t(self.trans11(conv5)), 0.2)
             trans21 = F.leaky_relu(self.bn31t(self.trans21(trans11)), 0.2)
             trans31 = F.leaky_relu(self.bn21t(self.trans31(trans21)), 0.2)
@@ -290,6 +313,27 @@ class Net(nn.Module):
 
             # stack the two outputs
             conv8 = torch.stack([conv7[0], conv71[0]], dim = 1)
+
+        # For the third output channel
+        elif self.n_channels_out == 3:
+
+            trans11 = F.leaky_relu(self.bn41t(self.trans11(conv5)), 0.2)
+            trans21 = F.leaky_relu(self.bn31t(self.trans21(trans11)), 0.2)
+            trans31 = F.leaky_relu(self.bn21t(self.trans31(trans21)), 0.2)
+            trans41 = F.leaky_relu(self.bn11t(self.trans41(trans31)), 0.2)
+            conv61 = self.conv61(trans41)
+            conv71 = self.conv71(conv61)
+
+            trans12 = F.leaky_relu(self.bn42t(self.trans12(conv5)), 0.2)
+            trans22 = F.leaky_relu(self.bn32t(self.trans22(trans12)), 0.2)
+            trans32 = F.leaky_relu(self.bn22t(self.trans32(trans22)), 0.2)
+            trans42 = F.leaky_relu(self.bn12t(self.trans42(trans32)), 0.2)
+            conv62 = self.conv62(trans42)
+            conv72 = self.conv72(conv62)
+
+            # stack the two outputs
+            conv8 = torch.stack([conv7[0], conv71[0], conv72[0]], dim = 1)
+
         else:
             conv8 = conv7
 

@@ -1,22 +1,19 @@
 
-
 import torch
+import numpy as np
 import matplotlib.pyplot as plt
 from magrec.models.generic_model import GenericModel
-from magrec.transformation.Mxy2Bsensor import Mxy2Bsensor
-from magrec.transformation.Ms2Bxyz import Ms2Bxyz
+from magrec.transformation.M2Bxyz import M2Bxyz
+from magrec.transformation.Mdir2Bxyz import Mdir2Bxyz
 from magrec.transformation.Fourier import FourierTransform2d
 from magrec.image_processing.Filtering import DataFiltering
 
-class UniformMagnetisation(GenericModel):
+class Mdir(GenericModel):
     def __init__(self,  
-                dataset : object, 
+                dataset : object,
                 loss_type : str = "MSE",
+                magnetisation_strength : float = 1,
                 positive_magnetisation : bool = False, 
-                m_theta : float = 0,
-                fit_m_theta: bool = False, 
-                m_phi: float = 0,
-                fit_m_phi: bool = False,
                 scaling_factor: float = 1e6, 
                 std_loss_scaling : float = 0, 
                 loss_weight: torch.Tensor = None,
@@ -27,12 +24,12 @@ class UniformMagnetisation(GenericModel):
                 spatial_filter_width: float = 0.5):
         super().__init__(dataset, loss_type, scaling_factor)
 
+        # for the Model to work the height needs to be negative. I.e. the field needs to be projected onto
+        # the plane of the sensor.
+        dataset.height = -np.abs(dataset.height)
+
         # Define the propagator so that this isn't performed during a loop.
-        # check if the dataset
-        if len(dataset.target.shape) > 2:
-            self.magClass = Ms2Bxyz(dataset, m_theta = m_theta, m_phi = m_phi)
-        else:
-            self.magClass = Mxy2Bsensor(dataset, m_theta = m_theta, m_phi = m_phi)
+        self.magClass = Mdir2Bxyz(dataset)
         self.std_loss_scaling = std_loss_scaling
         self.loss_weight = loss_weight
         self.source_weight = source_weight
@@ -43,12 +40,7 @@ class UniformMagnetisation(GenericModel):
         self.scaling_factor = scaling_factor
 
         self.positive_magnetisation = positive_magnetisation
-
-        self.m_theta = m_theta
-        self.m_phi = m_phi
-        self.fit_m_theta = fit_m_theta
-        self.fit_m_phi = fit_m_phi
-
+        self.magnetisation_strength = magnetisation_strength
 
         self.Filtering = DataFiltering(dataset.target, dataset.dx, dataset.dy)
 
@@ -58,6 +50,8 @@ class UniformMagnetisation(GenericModel):
             dy=self.dataset.dy,
             real_signal=True,
                 )
+
+
 
         # define the requirements for the model that may change the fitting method
         self.requirements()
@@ -105,24 +99,11 @@ class UniformMagnetisation(GenericModel):
         """ 
         # Define the number of targets and sources for the network. 
         self.require = dict()
-        if len(self.dataset.target.shape) > 2:
-            self.require["num_targets"] = 3
-        else:
-            self.require["num_targets"] = 1
-        self.require["num_sources"] = 1
-        if self.fit_m_theta or self.fit_m_phi:
-            self.require["source_angles"] = True
-        else:
-            self.require["source_angles"] = False
+        self.require["num_targets"] = 3
+        self.require["num_sources"] = 2
 
-    def transform(self, nn_output, m_theta = None, m_phi = None):
-        if self.fit_m_theta:
-            self.m_theta = m_theta
-        if self.fit_m_phi:
-            self.m_phi = m_phi
 
-        # if self.m_theta or self.m_phi:
-            # self.magClass = Mxy2Bsensor(self.dataset, m_theta = self.m_theta, m_phi = self.m_phi)
+    def transform(self, nn_output):
 
         # Apply a spatial filter to the output of the NN
         if self.spatial_filter:
@@ -140,7 +121,10 @@ class UniformMagnetisation(GenericModel):
         if self.positive_magnetisation:
             nn_output = nn_output.abs()
 
-        return self.magClass.transform(M = nn_output), nn_output
+        
+
+
+        return self.magClass.transform(M = nn_output, magnitude = self.magnetisation_strength) , nn_output
 
     def calculate_loss(self, b, target,  nn_output = None):
         """
@@ -167,14 +151,13 @@ class UniformMagnetisation(GenericModel):
         Returns:
             results: The results of the neural network
         """
-
         self.results = dict()
-        self.results["Magnetisation"] = final_output[0,0,::] / self.scaling_factor
+        self.results["Mtheta"] = final_output[0,0,::] / self.scaling_factor
+        self.results["Mphi"] = final_output[0,1,::] / self.scaling_factor
+        # self.results["Mz"] = final_output[0,2,::] / self.scaling_factor
+        self.results["Recon B"] = final_b / self.scaling_factor
         self.results["original B"] = self.original_target
-        if len(self.results["original B"].shape) > 2:
-            self.results["Recon B"] = final_b / self.scaling_factor
-        else:
-            self.results["Recon B"] = final_b[0,0, ::] / self.scaling_factor
+
         if remove_padding:
             self.remove_padding_from_results()
         return self.results
@@ -189,148 +172,151 @@ class UniformMagnetisation(GenericModel):
         Returns:
             None
         """
-        
-
-        self.recon_fig = plt.figure()
-
-        
-
-        if len(results["original B"].shape) > 2:
-            # plot all three components of the magnetic field
-            plt.subplot(3, 3, 1)
-            plot_data = 1e3*results["original B"][0,::]
-            plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('original Bx')
-            cb.set_label("Bx (mT)")
-
-            plt.subplot(3, 3, 2)
-            plot_data = 1e3*results["original B"][1,::]
-            plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('original By')
-            cb.set_label("By (mT)")
-
-            plt.subplot(3, 3, 3)
-            plot_data = 1e3*results["original B"][2,::]
-            plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('original Bz')
-            cb.set_label("Bz (mT)")
 
 
-            plt.subplot(3, 3, 4)
-            plot_data = 1e3*results["Recon B"][0,::]
-            plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('reconstructed Bx')
-            cb.set_label("Bx (mT)")
-
-            plt.subplot(3, 3, 5)
-            plot_data = 1e3*results["Recon B"][1,::]
-            plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('reconstructed By')
-            cb.set_label("By (mT)")
-
-            plt.subplot(3, 3, 6)
-            plot_data = 1e3*results["Recon B"][2,::]
-            plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('reconstructed Bz')
-            cb.set_label("Bz (mT)")
-
-            plt.subplot(3, 3, 7)
-            plot_data = 1e3*results["original B"][0,::] - 1e3*results["Recon B"][0,::]
-            plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('difference $\Delta Bx$')
-            cb.set_label("Bx (mT)")
-
-            plt.subplot(3, 3, 8)
-            plot_data = 1e3*results["original B"][2,::] - 1e3*results["Recon B"][2,::]
-            plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('difference $\Delta Bx$')
-            cb.set_label("Bx (mT)")
-
-            plt.subplot(3, 3, 9)
-            plot_data = 1e3*results["original B"][2,::] - 1e3*results["Recon B"][2,::]
-            plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('difference $\Delta Bx$')
-            cb.set_label("Bx (mT)")
-
-
+        self.recon_fig = plt.figure(figsize=(15, 15))
+        plt.subplot(4, 3, 1)
+        plot_data = 1e3*results["original B"][0,::]
+        if brange is not None:
+            plot_range = brange
         else:
-            plt.subplot(2, 2, 1)
-            plot_data = 1e3*results["original B"]
             plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('original B')
-            cb.set_label("B (mT)")
+        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('Ba')
+        cb.set_label("Ba (mT)")
 
-
-            plt.subplot(2, 2, 2)
-            plot_data = 1e3*results["Recon B"]
+        plt.subplot(4, 3, 2)
+        plot_data = 1e3*results["original B"][1,::]
+        if brange is not None:
+            plot_range = brange
+        else:
             plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('reconstructed B')
-            cb.set_label("B (mT)")
+        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('Bb')
+        cb.set_label("Bb (mT)")
 
-            plt.subplot(2, 2, 3)
-            plot_data = 1e3*results["original B"] - 1e3*results["Recon B"]
+
+        plt.subplot(4, 3, 3)
+        plot_data = 1e3*results["original B"][2,::]
+        if brange is not None:
+            plot_range = brange
+        else:
             plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('difference $\Delta B$')
-            cb.set_label("B (mT)")
+        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('Bz')
+        cb.set_label("Bz (mT)")
 
-            plt.subplot(2,2,4)
-            plot_data = results["Magnetisation"]
+
+
+        plt.subplot(4, 3, 4)
+        plot_data = 1e3*results["Recon B"][0,::]
+        if brange is not None:
+            plot_range = brange
+        else:
             plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('reconstructed M')
-            cb.set_label("M ($\mu_b/nm^2$)")
+        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('recon Ba')
+        cb.set_label("Ba (mT)")
 
+        plt.subplot(4, 3, 5)
+        plot_data = 1e3*results["Recon B"][1,::]
+        if brange is not None:
+            plot_range = brange
+        else:
+            plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('recon Bb')
+        cb.set_label("Bb (mT)")
+
+        plt.subplot(4, 3, 6)
+        plot_data = 1e3*results["Recon B"][2,::]
+        if brange is not None:
+            plot_range = brange
+        else:
+            plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('recon Bz')
+        cb.set_label("Bz (mT)")
+
+        difference = 1e3*(results["original B"] - results["Recon B"])
+
+        plt.subplot(4, 3, 7)
+        plot_data = difference[0,::]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('difference $\Delta Bx$')
+        cb.set_label("Bx (mT)")
+
+        plt.subplot(4, 3, 8)
+        plot_data = difference[1,::]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('difference $\Delta By$')
+        cb.set_label("By (mT)")
+
+        plt.subplot(4, 3, 9)
+        plot_data = difference[2,::]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('difference $\Delta Bz$')
+        cb.set_label("Bz (mT)")
+
+        plt.subplot(4,3, 10)
+        plot_data = results["Mtheta"]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('reconstructed Mtheta')
+        cb.set_label("M ($\mu_b/nm^2$)")
+
+        plt.subplot(4,3,11)
+        plot_data = results["Mphi"]
+        plot_range = abs(plot_data).max()
+        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
+        plt.xticks([])
+        plt.yticks([])
+        cb = plt.colorbar()
+        plt.title('reconstructed Mphi')
+        cb.set_label("M ($\mu_b/nm^2$)")
+
+        # plt.subplot(4,3,12)
+        # plot_data = results["Mz"]
+        # plot_range = abs(plot_data).max()
+        # plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
+        # plt.xticks([])
+        # plt.yticks([])
+        # cb = plt.colorbar()
+        # plt.title('reconstructed Mz')
+        # cb.set_label("M ($\mu_b/nm^2$)")
 
 class LorentzianBlur(torch.nn.Module):
     def __init__(self, kernel_size, sigma_x: float, sigma_y: float):
