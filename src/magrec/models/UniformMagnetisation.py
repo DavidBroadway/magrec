@@ -191,103 +191,78 @@ class UniformMagnetisation(GenericModel):
         """
         
 
-        self.recon_fig = plt.figure()
+        self.recon_fig = plt.figure(figsize=(12, 12))
 
+        def plot_img_data(data, title, plot_range):
+            plt.imshow(data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+            plt.xticks([])
+            plt.yticks([])
+            cb = plt.colorbar()
+            plt.title(title)
+            cb.set_label("B (mT)")
         
 
         if len(results["original B"].shape) > 2:
             # plot all three components of the magnetic field
-            plt.subplot(3, 3, 1)
+            plt.subplot(4, 3, 1)
             plot_data = 1e3*results["original B"][0,::]
             plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('original Bx')
-            cb.set_label("Bx (mT)")
+            plot_img_data(plot_data, "original Bx", plot_range)
 
-            plt.subplot(3, 3, 2)
+
+            plt.subplot(4, 3, 2)
             plot_data = 1e3*results["original B"][1,::]
             plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('original By')
-            cb.set_label("By (mT)")
+            plot_img_data(plot_data, "original By", plot_range)
 
-            plt.subplot(3, 3, 3)
+
+            plt.subplot(4, 3, 3)
             plot_data = 1e3*results["original B"][2,::]
             plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('original Bz')
-            cb.set_label("Bz (mT)")
+            plot_img_data(plot_data, "original Bz", plot_range)
 
 
-            plt.subplot(3, 3, 4)
+            plt.subplot(4, 3, 4)
             plot_data = 1e3*results["Recon B"][0,::]
             plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('reconstructed Bx')
-            cb.set_label("Bx (mT)")
+            plot_img_data(plot_data, "recon Bx", plot_range)
 
-            plt.subplot(3, 3, 5)
+            plt.subplot(4, 3, 5)
             plot_data = 1e3*results["Recon B"][1,::]
             plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('reconstructed By')
-            cb.set_label("By (mT)")
+            plot_img_data(plot_data, "recon By", plot_range)
 
-            plt.subplot(3, 3, 6)
+            plt.subplot(4, 3, 6)
             plot_data = 1e3*results["Recon B"][2,::]
             plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('reconstructed Bz')
-            cb.set_label("Bz (mT)")
+            plot_img_data(plot_data, "recon Bz", plot_range)
 
-            plt.subplot(3, 3, 7)
+            plt.subplot(4, 3, 7)
             plot_data = 1e3*results["original B"][0,::] - 1e3*results["Recon B"][0,::]
             plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('difference $\Delta Bx$')
-            cb.set_label("Bx (mT)")
+            plot_img_data(plot_data, "difference $\Delta Bx$", plot_range)
 
-            plt.subplot(3, 3, 8)
+            plt.subplot(4, 3, 8)
             plot_data = 1e3*results["original B"][2,::] - 1e3*results["Recon B"][2,::]
             plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-            plt.xticks([])
-            plt.yticks([])
-            cb = plt.colorbar()
-            plt.title('difference $\Delta Bx$')
-            cb.set_label("Bx (mT)")
+            plot_img_data(plot_data, "difference $\Delta By$", plot_range)
 
-            plt.subplot(3, 3, 9)
+            plt.subplot(4, 3, 9)
             plot_data = 1e3*results["original B"][2,::] - 1e3*results["Recon B"][2,::]
             plot_range = abs(plot_data).max()
-            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+            plot_img_data(plot_data, "difference $\Delta Bz$", plot_range)
+
+            plt.subplot(4, 3, 10)
+            plot_data = results["Magnetisation"]
+            plot_range = abs(plot_data).max()
+            plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
             plt.xticks([])
             plt.yticks([])
             cb = plt.colorbar()
-            plt.title('difference $\Delta Bx$')
-            cb.set_label("Bx (mT)")
+            plt.title('reconstructed M')
+            cb.set_label("M ($\mu_b/nm^2$)")
 
+            
 
         else:
             plt.subplot(2, 2, 1)

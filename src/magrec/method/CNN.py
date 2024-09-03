@@ -24,7 +24,7 @@ class CNN(object):
         """
         self.model = model
         self.learning_rate = learning_rate
-        self.initial_guess = initial_guess
+        self.initial_guess = initial_guess * self.model.scaling_factor
         torch.autograd.set_detect_anomaly(True)
 
         self.prepare_fit()
@@ -83,6 +83,7 @@ class CNN(object):
             self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
             if self.initial_guess is not None:
                 self.initial_guess  = torch.FloatTensor(self.initial_guess[np.newaxis,np.newaxis])
+
 
 
         self.train_data_cnn = TensorDataset(self.img_input, self.mask_t)

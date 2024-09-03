@@ -114,7 +114,13 @@ class Mab(GenericModel):
 
         # Apply the weight matrix to the output of the NN
         if self.source_weight is not None:
-            nn_output = nn_output*self.source_weight
+            if len(self.source_weight.shape) > 2:
+                # multiple maskes have been passed for each output channel
+                # nn_output = torch.einsum("...kl,jkl->...kl", nn_output, self.source_weight)
+                nn_output[0,0,::] = nn_output[0,0,::]*self.source_weight[0,::]
+                nn_output[0,1,::] = nn_output[0,1,::]*self.source_weight[1,::]
+            else:
+                nn_output = nn_output*self.source_weight
 
         # if requested apply a positive magnetisation constraint
         if self.positive_magnetisation:
