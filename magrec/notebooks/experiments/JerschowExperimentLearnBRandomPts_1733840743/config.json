@@ -1,0 +1,28 @@
+{
+    "data_filename": "Sine_wire.txt",
+    "background_filename": "Sine_wire_blank.txt",
+    "model_class": "FourierFeaturesNd",
+    "model_params": {
+        "n_inputs": 3,
+        "n_outputs": 3,
+        "ff_stds": [
+            [
+                0.1,
+                10
+            ],
+            [
+                2,
+                5
+            ],
+            [
+                5,
+                5
+            ]
+        ]
+    },
+    "units": {
+        "length": "mm",
+        "magnetic_field": "nT",
+        "current": "mA"
+    }
+}

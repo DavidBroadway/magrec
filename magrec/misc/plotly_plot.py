@@ -65,6 +65,50 @@ def plot_vector_field(xyz, uvw, show=False, **kwargs):
 
     return fig
 
+def plot_vector_field_streamtube(xyz, uvw, starts = None, show=False, **kwargs):
+    """
+    Plot vector field defined by vectors with components uvw at positions xyz.  
+    """
+    import plotly.graph_objects as go
+    
+    x = xyz[:, 0]
+    y = xyz[:, 1]
+    z = xyz[:, 2]
+    
+    u = uvw[:, 0]
+    v = uvw[:, 1]
+    w = uvw[:, 2]
+    
+    # Use provided `starts`, but if None, select randomly provided points from `xyz` and corresponding `uvw`
+    if starts is None:
+        idx = np.random.choice(len(x), 16, replace=False)
+        starts = dict(
+            x = x[idx],
+            y = y[idx],
+            z = z[idx]
+        )
+    
+    tube = go.Streamtube(    
+        x = x,
+        y = y,
+        z = z,
+        u = u,
+        v = v,
+        w = w,
+        starts = starts,
+        sizeref = 1,
+        colorscale = 'Portland',
+        showscale = False,
+        # maxdisplayed = 3000
+    )
+    
+    fig = go.Figure(data=tube)
+
+    if show:
+        fig.show()
+
+    return fig
+
 
 def visualize_vector_fields(magnetic_field, current_distribution, z1, z0):
     """

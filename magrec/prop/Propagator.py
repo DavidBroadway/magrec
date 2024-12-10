@@ -7,13 +7,14 @@ magnetization distribution m.
 """
 # used for base class methods that need to be implemented
 from abc import abstractmethod
+from types import MethodType
 
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 
 from magrec.prop.Fourier import FourierTransform2d
-from magrec.prop.constants import DEFAULT_UNITS, get_exponent_from_unit
+from magrec.prop.constants import DEFAULT_UNITS, MU0, get_exponent_from_unit
 from magrec.prop.Kernel import (
     UniformLayerFactor2d, 
     MagnetizationFourierKernel2d, 
@@ -22,6 +23,8 @@ from magrec.prop.Kernel import (
     InverseCurrentLayerFourierKernel2d,
     SphericalUnitVectorKernel
     )
+
+from magrec.misc.sampler import GridSampler
 
 
 # CurrentFourierPropagtor3d
@@ -238,6 +241,7 @@ class CurrentFourierPropagator3d(object):
         j = self.ft.forward(J, dim=(-2, -1))
         b = self.get_b_from_j(M=self.j_to_b_z_matrix, j=j, exp_matrix=self.exp_matrix, zs=self.zs, rule=self.rule)
         B = self.ft.backward(b, dim=(-2, -1))
+        return B
 
 
 class MagnetizationPropagator2d(object):
@@ -421,6 +425,14 @@ class CurrentPropagator2d(object):
             # but that needs to do for now. I'd prefer for units setting to be order-independent. One
             # option is to have an attribue .prefactor that is multiplied by the j_to_b_matrix, but then  
             self.set_units(units)
+        
+        # Generate a grid of points of 
+        nx_points, ny_points = source_shape[-2], source_shape[-1]
+        
+        pts = GridSampler.sample_grid(nx_points, ny_points, (0., 0.), (dx * nx_points, dy * ny_points))
+        
+        self.pts = pts
+        self.grid = GridSampler.pts_to_grid(pts, nx_points, ny_points)
             
         pass
 
@@ -463,7 +475,7 @@ class CurrentPropagator2d(object):
             "magnetic_field": "uT"  # microtesla
         } <--- modified units that warrant changing `self.j_to_b_matrix` 
         
-        Also `set_units` accept up to three positional arguments that specify the units of the current, 
+        Also `set_units` accepts up to three positional arguments that specify the units of the current, 
         length, and magnetic field, respectively, as string. Order of the arguments is not important, 
         and will be figured out from the major units of the provided strings "T" for magnetic field, 
         "A" for current, and "m" for length.
@@ -485,27 +497,25 @@ class CurrentPropagator2d(object):
         # copy the default units and update them with the provided units
         updated_units = self.units.copy()
         
-        if len(units) == 1:
-            if isinstance(units[0], dict):
-                units = units[0]
-                updated_units.update(units)
+        for unit in units:
+            if isinstance(unit, dict):
+                updated_units.update(unit)
+                if len(units) > 1:
+                    raise ValueError("If dict is provided as an argument, it must be the only argument, \
+                        but got {} arguments in {}.".format(len(units), units))
+            elif not isinstance(unit, str):
+                raise ValueError("Provided arguments must be must be one or more strings or a dict, \
+                    but got type `{}` instead for {} in {}.".format(type(unit), unit, units))
+            elif unit[-1] == "m":
+                updated_units["length"] = unit
+            elif unit[-1] == "A":
+                updated_units["current"] = unit
+            elif unit[-1] == "T":
+                updated_units["magnetic_field"] = unit
             else:
-                raise ValueError("If only one argument is provided, it must be a dict with the units to be updated.")
-        elif len(units) > 1:
-            for unit in units:
-                if not isinstance(unit, str):
-                    raise ValueError("If more than one argument is provided, they must be strings, \
-                        but got type `{}` instead for {}.".format(type(unit), unit))
-                if unit[-1] == "m":
-                    updated_units["length"] = unit
-                elif unit[-1] == "A":
-                    updated_units["current"] = unit
-                elif unit[-1] == "T":
-                    updated_units["magnetic_field"] = unit
-                else:
-                    raise ValueError("Units specification have one of 'm', 'A', or 'T' endings for length, \
-                                     current, and magnetic field, respectively, got `{}`.".format(unit))
-        
+                raise ValueError("Units specification have one of 'm', 'A', or 'T' endings for length, \
+                                    current, and magnetic field, respectively, got `{}`.".format(unit))
+    
         # Prepare dicts with exponents of the units, to calculate the multiplicative prefactor
         updated_exponents = {}
         default_exponents = {}
@@ -691,7 +701,138 @@ class InverseCurrentPropagator2d(object):
             J = J.real
         return J
     
+    
+    
+class CurrentDipolePropagator(object):
+        
+    def __init__(self, r_source, r_sensor):
+        self.ffm = self.get_ffm(r_source=r_source, r_sensor=r_sensor)
+        pass
+    
+    @staticmethod
+    def get_ffm(r_source, r_sensor, as_matrix=False):
+        """Get forward-field matrix (FFM) for a current dipole propagator. FFM is a matrix
+        that connects 3 components of a current dipole at location r_i to the 3 magnetic field 
+        components at location r_j"""
+        if isinstance(r_source, list):
+            r_source = torch.tensor(r_source, dtype=torch.float32)
+        
+        if isinstance(r_sensor, list):
+            r_sensor = torch.tensor(r_sensor, dtype=torch.float32)
+        
+        n_sensor = r_sensor.shape[0]
+        n_source = r_source.shape[0]
+        
+        tau = torch.empty((n_sensor, n_source, 3))
+        tau[:, :] = r_sensor[:, None, :] - r_source[None, :, :]
+        tau = MU0 / (4 * torch.pi) * tau / (torch.norm(tau, dim=-1, keepdim=True) ** 3)
+        # inf is possible when |τ| = 0, it should return an infinite field as well
+        
+        """
+        cross_product_matrix, indexed `ijr` with shape (3, 3, 3) is such a matrix (tensor), that, 
+        when contracted with any vector [v_r] gives a transformation: • × v, where • is another 
+        arbitrary vector
+        """
+        cross_product_matrix = torch.zeros((3, 3, 3))
+        cross_product_matrix[:, :, 0] = torch.tensor(
+            [[ 0,  0,  0],
+            [ 0,  0,  1],
+            [ 0, -1,  0]])
 
+        cross_product_matrix[:, :, 1] = torch.tensor(
+            [[ 0,  0, -1],
+            [ 0,  0,  0],
+            [ 1,  0,  0]])
+
+        cross_product_matrix[:, :, 2] = torch.tensor(
+            [[ 0,  1,  0],
+            [-1,  0,  0],
+            [ 0,  0,  0]])
+        
+        ffm = torch.einsum('smr,ijr->smij', tau, cross_product_matrix)
+        if as_matrix:
+            ffm = CurrentDipolePropagator.reshape_ffm_to_matrix(ffm)
+        return ffm
+    
+    @staticmethod
+    def reshape_ffm_to_matrix(ffm):
+        """Reshape forward-field matrix (FFM) to a matrix of shape (3 * n_sensor, 3 * n_source)"""
+        n_sensors, n_sources, n_sensor_components, n_source_components = ffm.shape
+        
+        if n_sensor_components != 3 or n_source_components != 3:
+            raise ValueError("FFM must be of shape (n_sensors, n_sources, 3, 3), but got {}.".format(ffm.shape))
+        
+        ffm_matrix = torch.empty((n_sensors * 3, n_sources * 3))
+        
+        # Manually assign block values to the big matrix, by selecting corresponding components from the ffm tensor
+        ffm_matrix[0::3, 0::3] = ffm[:, :, 0, 0]
+        ffm_matrix[0::3, 1::3] = ffm[:, :, 0, 1]
+        ffm_matrix[0::3, 2::3] = ffm[:, :, 0, 2]
+        
+        ffm_matrix[1::3, 0::3] = ffm[:, :, 1, 0]
+        ffm_matrix[1::3, 1::3] = ffm[:, :, 1, 1]
+        ffm_matrix[1::3, 2::3] = ffm[:, :, 1, 2]
+        
+        ffm_matrix[2::3, 0::3] = ffm[:, :, 2, 0]
+        ffm_matrix[2::3, 1::3] = ffm[:, :, 2, 1]
+        ffm_matrix[2::3, 2::3] = ffm[:, :, 2, 2]
+        
+        return ffm_matrix
+    
+    @staticmethod
+    def reshape_to_vector(vec):
+        """Reshape magnetic field matrix to a vector of shape (3 * n_sensor)"""
+        return vec.view(-1)
+    
+    @staticmethod
+    def reshape_from_vector(vec):
+        """Given a vector of shape (3 * N), reshape it to a matrix of shape (N, 3). Assumes that 
+        the vector is ordered as [v_x_1, v_y_1, v_z_1, v_x_2, v_y_2, v_z_2, ...], i.e. the components varies first"""
+        return vec.view(-1, 3)
+    
+    def get_B_from_J(self, J):
+        """Shape of J is (n_pts, 3), J can be thought of as current dipoles located at 
+        n_pts and having 3 components that define the direction and amplitude of the current."""
+        return torch.einsum('smij,mj->si', self.ffm, J)
+    
+    @staticmethod
+    def get_B_at_pts_from_J_at_pts(J, r_source, r_sensor):
+        if isinstance(J, np.ndarray):
+            J = torch.from_numpy(J)
+        elif isinstance(J, list):
+            J = torch.tensor([J], dtype=torch.float32)
+            
+        if isinstance(r_source, np.ndarray):
+            r_source = torch.from_numpy(r_source)
+        elif isinstance(r_source, list):
+            r_source = torch.tensor([r_source], dtype=torch.float32)
+            
+        if isinstance(r_sensor, np.ndarray):    
+            r_sensor = torch.from_numpy(r_sensor)
+        elif isinstance(r_sensor, list):
+            r_sensor = torch.tensor([r_sensor], dtype=torch.float32)
+        
+        if J.shape == (3,) and r_source.shape == (3,):
+            J = J[None, :]
+            r_source = r_source[None, :]
+            
+        ffm = CurrentDipolePropagator.get_ffm(r_source, r_sensor)
+        return torch.einsum('smij,mj->si', ffm, J)
+    
+    def get_J_from_B(self, B, method="penrose"):
+        """Find the current dipole components J from the magnetic field components B using
+        the pseudo-inverse (Moore-Penrose inverse) of the forward-field matrix (FFM) if method is `penrose`,
+        otherwise use more stable `lstsq` method by torch."""
+        ffm = self.reshape_ffm_to_matrix(self.ffm)
+        B = self.reshape_to_vector(B)
+        if method == "penrose":
+            iffm = torch.pinverse(ffm)
+            s = torch.einsum('ji,i->j', iffm, B)
+        elif method == "lstsq":
+            s = torch.linalg.lstsq(ffm, B).solution
+        return self.reshape_from_vector(s)
+        
+    
 
 class AxisProjectionPropagator(object):
 
@@ -699,11 +840,44 @@ class AxisProjectionPropagator(object):
         self.n = SphericalUnitVectorKernel.define_unit_vector(theta, phi)
         self.keepdims = keepdims
 
-    def project(self, x):
+    def project(self, x, keepdims=None):
         res = torch.einsum('...cij,c->...ij', x, self.n.type(x.type()))
-        if self.keepdims:
+        keepdims = keepdims if keepdims else self.keepdims
+        if keepdims:
             res = res.unsqueeze(-3)
         return res
 
-    def __call__(self, x):
-        return self.project(x)
+    def __call__(self, x, keepdims=None):
+        return self.project(x, keepdims=keepdims)
+    
+    def plot_axis_projection(self, ax=None, **kwargs):
+        if ax is None:
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+        
+        # Setting the limits of axes
+        ax.set_xlim([-1, 1])
+        ax.set_ylim([-1, 1])
+        ax.set_zlim([-1, 1])
+        
+        x = self.n[0]
+        y = self.n[1]
+        z = self.n[2]
+                
+        # make the panes transparent
+        ax.xaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
+        ax.yaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
+        ax.zaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
+        
+        # make the grid lines transparent
+        ax.xaxis._axinfo["grid"]['color'] =  (1,1,1,0)
+        ax.yaxis._axinfo["grid"]['color'] =  (1,1,1,0)
+        ax.zaxis._axinfo["grid"]['color'] =  (1,1,1,0)
+        
+        # Set aspect ratio for cube to look like cube
+        ax.set_aspect('equal')
+
+        # Setting the viewpoint
+        ax.view_init(elev=20., azim=30)
+        
+        

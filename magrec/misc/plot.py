@@ -1,6 +1,7 @@
 import matplotlib
 import matplotlib.colors
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import numpy as np
 import torch
 from matplotlib import cm
@@ -13,6 +14,14 @@ plt.rcParams.update({
     "text.usetex": False,
     "font.family": "Helvetica"
 })
+
+      
+# PARAMS shared across plotting function. Allows consistant size of plots.   
+PAD_INCH = 0.5  # pad size around plots, in inches
+SIZE_INCH = 2   # base size of the plots, in inches, the base size is used to calculate width and height of 
+# individual plots using the ratio of number of pixels in x and y directions
+CBAR_PORTION = 0.05  # portion of the single plot size to give to colorbar
+        
 
 # TODO: add scaling factor, to be able to plot 2× component
 # TODO: add choice of label color, or heuristic to choose it automatically based on the colormap and background color
@@ -146,63 +155,15 @@ def plot_n_components(
         fig = axes[0].get_figure()
         cax = axes[0].cax
     else:
-        # fig = plt.figure()
-        # if alignment == "horizontal":
-        #     grid = ImageGrid(fig, rect=(0, 0, 1, 1),
-        #                     nrows_ncols=(n_maps, n_components),
-        #                     axes_pad=0.05,
-        #                     label_mode="1",
-        #                     share_all=True,
-        #                     cbar_location="right",
-        #                     cbar_mode="edge",
-        #                     cbar_size="10%",
-        #                     cbar_pad=0.05,
-        #                     direction="row",
-        #                     )
-        # elif alignment == "vertical":
-        #     grid = ImageGrid(fig, rect=(0, 0, 1, 1),
-        #                     nrows_ncols=(n_components, n_maps),
-        #                     axes_pad=0.05,
-        #                     label_mode="1",
-        #                     share_all=True,
-        #                     cbar_location="bottom",
-        #                     cbar_mode="edge",
-        #                     cbar_size="10%",
-        #                     cbar_pad=0.3,
-        #                     direction="column",
-        #                     )
-        # axes = grid.axes_all
-        
-        pad_inch = 0.2
-        size_inch = 2
-        cbar_portion = 0.05
-        
         # We need to approximately calculate the size of the figure according to the number of components and fields, and also the size of each
         # component. That is needed to match size of the colorbar, that is otherwise larger than the component maps instead.
-        if alignment == "horizontal":
-            fig_width = pad_inch + (size_inch + pad_inch) * n_components + cbar_portion * size_inch + pad_inch
-            fig_height = pad_inch + size_inch * n_maps + pad_inch             
-        elif alignment == "vertical":
-            gs = gridspec.GridSpec(ncols=n_maps, nrows=n_components + 1, height_ratios=[0.05] + [1] * n_components, 
-                                   hspace=pad_inch/size_inch, wspace=pad_inch/size_inch)
-            fig_width = pad_inch + size_inch * n_maps + pad_inch
-            fig_height = pad_inch + (size_inch + pad_inch) * n_components + cbar_portion * size_inch + pad_inch
-        else:
-            raise ValueError("Unknown alignment: `{}`. Should be either `horizontal` or `vertical`".format(alignment))
+        figsize = get_figsize(n_components, n_maps, alignment)
         
         # Create the figure according to the calculated size
-        fig = plt.figure(figsize=(fig_width, fig_height))  
-        
-        if alignment == "horizontal":
-            gs = gridspec.GridSpec(nrows=n_maps, ncols=n_components + 1, width_ratios=[1] * n_components + [cbar_portion], 
-                                   wspace=pad_inch/size_inch, hspace=pad_inch/size_inch)    
-        elif alignment == "vertical":
-            gs = gridspec.GridSpec(ncols=n_maps, nrows=n_components + 1, height_ratios=[0.05] + [1] * n_components, 
-                                   hspace=pad_inch/size_inch, wspace=pad_inch/size_inch)
+        fig = plt.figure(figsize=figsize)  
+        gs = get_gridspec(n_components=n_components, n_maps=n_maps, alignment=alignment)
         # Note to self: gs indexing is gs[row_index, column_index].
 
-        
-        
     # use default colormap if not specified
     c = get_color_map('viridis') if cmap is None else cmap
 
@@ -228,15 +189,6 @@ def plot_n_components(
             norm_dict[norm_group].vmin = min(norm_dict[norm_group].vmin, new_norm.vmin)
             norm_dict[norm_group].vmax = max(norm_dict[norm_group].vmax, new_norm.vmax)
 
-    def is_lower_left_axis(map_n, component_n):
-        if alignment == "vertical":
-            if map_n == 0 and component_n == n_components - 1:
-                return True
-        elif alignment == "horizontal":
-            if map_n == n_maps - 1 and component_n == 0:
-                return True
-        return False
-
     # for i, ax in enumerate(axes):
     for map_n in range(n_maps):
         for component_n in range(n_components):
@@ -245,25 +197,28 @@ def plot_n_components(
             elif alignment == "vertical":
                 subplot_spec = gs[1 + component_n, map_n]
             
-            ax = fig.add_subplot(subplot_spec)            
-            ax: plt.Axes 
-                            
+            if axes is None:
+                ax = fig.add_subplot(subplot_spec)            
+            else:
+                ax = axes[map_n * n_components + component_n]
+                
+            # Add title to the plot per component group, if title is a list of strings
+            if isinstance(title, list) and component_n == 0:
+                ax.set_title(title[map_n], fontsize=10)
+                # Increase the space between rows if there are titles
+                if alignment == "horizontal":
+                    gs.update(hspace=PAD_INCH * 1.1)
+                elif alignment == "vertical":
+                    gs.update(wspace=PAD_INCH * 1.1)
+            
+            ax: plt.Axes                 
             ax.set_aspect(aspect='equal', adjustable='box', anchor='NW')
 
-            # take // to get integer division to understand which row, and take % to get which component (column)
             # REMARK: Maybe I should report the problem with imshow that when the data is exactly 0, and the limits are smaller than 1e-9,
             # and the dtype of the data is float32 or smaller, then imshow shows wrong colors, as explained below:
             datum = np.float64(data[map_n][component_n]).T  # convert to float64 to avoid an issue with matplotlib and casting
             # the problems arises when vmin and vmax is small (< 1e-9) and the data is very close to or is exactly 0
             # in those cases the color is like it is 0 on the colormap, even though 0 should be mapped by norm to 0.5
-
-            # # do once at the very beginning for all axes
-            # if i == 0:
-            #     if norm_type == 'all':
-            #         norm = get_color_norm(datum, symmetric=symmetric) if norm is None else norm
-
-            # do at the beginning of row
-                
 
             norm = norm_dict[norm_type[map_n]]
 
@@ -292,6 +247,12 @@ def plot_n_components(
             else: 
                 ax.set_xticks([])
                 ax.set_yticks([])
+                
+        # Using datum, rescale figsize to match the aspect ratio of the data
+        x2y_ratio = datum.shape[1] / datum.shape[0]
+        # Calculate the width of the figure based on the height
+        figsize = get_figsize(n_components, n_maps, alignment, x2y_ratio)
+        fig.set_size_inches(figsize)
             
         # After going through all components, add a colorbar:    
         # get colormap for the map (collection of components) if colormap is given as a list | tuple (cmap1, cmap2, ...)
@@ -310,6 +271,9 @@ def plot_n_components(
             cax_gs = gs[map_n, component_n + 1].subgridspec(nrows=3, ncols=1, height_ratios=[0.1, 1, 0.2], wspace=0, hspace=0)[1]
             cax = fig.add_subplot(cax_gs)
             cbar = fig.colorbar(im, cax=cax, orientation='vertical')
+            if units: 
+                units = units.replace('u', '$\mu$')
+                cax.set_title(units, fontsize=9, loc='left')
         elif alignment == "vertical":
             # effectively pad the colorbar by 0.1 on each side
             cax_gs = gs[0, map_n].subgridspec(nrows=1, ncols=3, width_ratios=[0.1, 1, 0.2], wspace=0, hspace=0)[1]
@@ -317,10 +281,14 @@ def plot_n_components(
             cbar = fig.colorbar(im, cax=cax, orientation='horizontal')
             # locate ticks at the top of the colorbar
             cax.xaxis.tick_top()
+            if units:
+                units = units.replace('u', '$\mu$')
+                cax.set_ylabel(units, fontsize=9, rotation='horizontal', x=0, y=3.7)
+                # put label to the right of the colorbar
+                cax.yaxis.set_label_position('right')
         
         # If units have "u" prefix in it, replace it with micro symbol
-        units = units.replace('u', '$\mu$')
-        cbar.set_label(units)
+        # cbar.set_label(units)
 
             
     # Handle the inset: optionally display a zoomed-in region of the original plot
@@ -347,11 +315,7 @@ def plot_n_components(
     if title:
         if isinstance(title, str):
             # Use .annotate() method to add the title text at the top of the figure
-            axes[0].annotate(title, xy=(0.5, 1.1), xycoords='axes fraction',
-                             xytext=(0, 0), textcoords='offset points',
-                             ha='center', va='baseline')
-        elif isinstance(title, (list)):
-            raise NotImplementedError('Not implemented yet')
+            plt.suptitle(title)
 
     if not show:
         plt.close()
@@ -359,7 +323,9 @@ def plot_n_components(
     return fig
 
 
-def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, interpolation='none', cmap='plasma', units=None, title=None, show=False, num_arrows=20, zoom_in_region=None):
+def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, 
+                         interpolation='none', cmap='plasma', units=None,
+                         title=None, show=False, num_arrows=20, zoom_in_region=None):
     """
     Visualizes the current distribution in 2D as a heatmap of magnitudes and arrows representing the flow direction.
     Additionally, the function can render an inset region from the given current distribution with an arrow indicating 
@@ -415,15 +381,22 @@ def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, interpolatio
     >>> fig = plot_vector_field_2d(dist, interpolation='bilinear', cmap='inferno', show=True, num_arrows=30, inset_region=((20, 20), (40, 40)))
     """  
     # PARAMS
-    figsize = (8, 8)
+    # figsize = get_figsize(n_components=1, n_maps=1, alignment='horizontal')
     
     # Create a figure with an axis if none is provided
     if ax is None:
-        fig, ax = plt.subplots(figsize=figsize)
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes("right", size="5%", pad="4%")
+        fig = plt.figure(frameon=False)
+        gs = get_gridspec(n_components=1, n_maps=1, alignment='horizontal')
+        ax = fig.add_subplot(gs[0, 0])
+        cax_gs = gs[0, 1].subgridspec(nrows=3, ncols=1, height_ratios=[0.1, 1, 0.2], wspace=0, hspace=0)[1]
+        cax = fig.add_subplot(cax_gs)
     else:
         fig = ax.get_figure()
+        try:
+            cax = ax.cax
+        except AttributeError:
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes("right", size="5%", pad=0.05)
         
     if isinstance(current_distribution, torch.Tensor):
         current_distribution = current_distribution.detach().cpu().numpy()
@@ -458,7 +431,7 @@ def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, interpolatio
     
     cbar = fig.colorbar(im, cax=cax, orientation='vertical')
     if units:
-        cbar.set_label(units)
+        cax.set_title(units, fontsize=9, loc='left')
         
     if title:
         if isinstance(title, str):
@@ -492,49 +465,17 @@ def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, interpolatio
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.set_aspect('equal')
+    
+    if not show:
+        plt.close()
         
     return fig
-
-def plot_to_tensorboard(writer, fig, tag, step):
-    """
-    Takes a matplotlib figure handle and converts it using
-    canvas and string-casts to a numpy array that can be
-    visualized in TensorBoard using the add_image function
-
-    Parameters:
-        writer (tensorboard.SummaryWriter): TensorBoard SummaryWriter instance.
-        fig (matplotlib.pyplot.fig): Matplotlib figure handle.
-        tag (str): Name for the figure in TensorBoard.
-        step (int): counter usually specifying steps/epochs/time.
-    """
-
-    # Draw figure on canvas
-    matplotlib.use('Agg', force=True)
-    fig.canvas.draw_idle()  # Updates the canvas
-    fig.canvas.draw()
-    
-    renderer = fig.canvas.renderer
-    raw_data = renderer.tostring_rgb()
-    size = int(renderer.width), int(renderer.height)
-
-    # Convert the figure to numpy array, read the pixel values and reshape the array
-    pil_image = Image.frombytes('RGB', size, raw_data)
-    img = np.array(pil_image)
-
-    # Normalize into 0-1 range for TensorBoard(X). Swap axes for newer versions where API expects colors in first dim
-    # img = img / 255.0
-    img = np.swapaxes(img, 0, 2) # if your TensorFlow + TensorBoard version are >= 1.8
-    img = np.swapaxes(img, 1, 2) # if your TensorFlow + TensorBoard version are >= 1.8
-
-    # Add figure in numpy "image" to TensorBoard writer
-    writer.add_image(tag, img, step)
-    plt.close(fig)
     
 
-def get_color_norm(z=None, vmin=None, vmax=None,
+def get_color_norm(vals=None, vmin=None, vmax=None,
                    symmetric=False) -> matplotlib.colors.Normalize:
     """Returns a normalization object for the colorbar."""
-    if z is None:
+    if vals is None:
         if vmin is None and vmax is None:
             ValueError(
                 'Need to work with something to get the norm, instead vmax and xmin are None and z is None!')
@@ -542,8 +483,8 @@ def get_color_norm(z=None, vmin=None, vmax=None,
             ValueError(
                 f'Both vmin and vmax need to be provided, but {vmax=} and {vmin=}')
 
-    vmin = vmin if vmin is not None else z.min()
-    vmax = vmax if vmax is not None else z.max()
+    vmin = vmin if vmin is not None else vals.min()
+    vmax = vmax if vmax is not None else vals.max()
     if symmetric:
         # make 0 in the middle by specifying same amount of values above and below it
         bound = np.max(np.abs([vmin, vmax]))
@@ -567,9 +508,64 @@ def add_inner_title(ax: plt.Axes, title: str, loc, color=None, **kwargs):
     ax.add_artist(at)
     return at
 
+def plot_check_aligned_data(data_pts, data_vals):
+    """Plot `data_pts` and `data_vals` so that to check whether pts coordinates
+    correspond to correct vals, visually."""
+    fig, axs = plt.subplots(1, 3, figsize=(18, 6))
 
-def set_backend(backend):
-    matplotlib.use(backend=backend, force=True)
+    # Plot each component of data_vals
+    for i in range(3):
+        vals = data_vals[:, i]
+        norm = get_color_norm(vals, symmetric=True)
+        sc = axs[i].scatter(data_pts[:, 0], data_pts[:, 1], c=vals, cmap='RdBu_r', norm=norm)
+        axs[i].set_title(f'Component {i+1}')
+        axs[i].set_xlabel('X')
+        axs[i].set_ylabel('Y')
+        fig.colorbar(sc, ax=axs[i])
+
+    plt.show()
+
+def get_figsize(n_components, n_maps, alignment, x2y_ratio=1):
+    """Calculate the size of the figure based on the number of components and maps to be plotted."""
     
-def ion():
-    plt.ion()
+    if alignment == 'horizontal':
+        ratio = x2y_ratio
+    elif alignment == 'vertical':  
+        ratio = 1 / x2y_ratio
+    
+    big = PAD_INCH + (SIZE_INCH * ratio + PAD_INCH) * n_components + CBAR_PORTION * SIZE_INCH + PAD_INCH
+    short = PAD_INCH + SIZE_INCH / ratio * n_maps + PAD_INCH
+    if alignment == 'horizontal':
+        return (big, short)
+    elif alignment == 'vertical':
+        return (short, big)
+    
+    
+def get_gridspec(n_components, n_maps, alignment):
+    """Create matplotlib.gridspec.GridSpec object for the given number of components and maps.
+    Components and maps are to be plotted in rows/columns, depending on the alignment. Space for colorbar is added,
+    and is returned as a +1 column/row in the gridspec for each map.
+    
+    Spacing between plots is set proportional to colorbar size for visual balance.
+    """
+    # Make spacing proportional to colorbar size
+    spacing = CBAR_PORTION * 0.8  # Slightly smaller than colorbar for balance
+    
+    if alignment == "horizontal":
+        gs = gridspec.GridSpec(
+            nrows=n_maps, 
+            ncols=n_components + 1, 
+            width_ratios=[1] * n_components + [CBAR_PORTION],
+            wspace=spacing,
+            hspace=spacing
+        )
+    elif alignment == "vertical":
+        gs = gridspec.GridSpec(
+            ncols=n_maps, 
+            nrows=n_components + 1, 
+            height_ratios=[CBAR_PORTION] + [1] * n_components,
+            hspace=spacing,
+            wspace=spacing
+        )
+    return gs
+

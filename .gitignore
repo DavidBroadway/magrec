@@ -3,6 +3,7 @@ __pycache__/
 **/.ipynb_checkpoints/
 *.pth
 *.jpg
+*.egg-info/
 venv/
 .idea/
 wandb/

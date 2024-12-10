@@ -1675,7 +1675,6 @@ class PipelineEstimatorWithDivergence(PipelineEstimator):
                 
                 if loss is torch.nan:
                     raise RuntimeWarning("Loss is NaN at epoch {}".format(len(self.history)))
-                    break
 
                 self.history.record_batch("train_loss", step["loss"].item())
                 self.history.record("field_loss", step["field_loss"].item())

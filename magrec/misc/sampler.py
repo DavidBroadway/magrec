@@ -1,7 +1,93 @@
 import torch
+from typing import Tuple
 
 # needs to implement sample_points
 
+class NDGridPoints(object):
+    
+    @staticmethod
+    def get_grid_pts(*n_points: int, origin: Tuple[float, ...] = None, diagonal: Tuple[float, ...] = None) -> torch.Tensor:
+        """
+        Generate points in an N-dimensional space, arranged in a regular n-dimensional grid within a rectangular parallelepiped, 
+        represented as a PyTorch tensor. tensor's size will be determined by the product of the n_points integers 
+        and the length of the origin (or `diagonal`, as `diagonal` and origin should be of the same length)::
+        
+        shape = (n_points[0] * n_points[1] * ... * n_points[N-1], N)
+        
+        The order of the returned points is such that the first dimension is the fastest changing and the last dimension
+        is the slowest changing, i.e. pts[:, 0] will be the fastest changing (with period of n_points[0]), pts[:, 1] the 
+        second fastest (with period n_points[0] * n_points[1]), etc.
+
+        Args:
+            n_points (int):                 A variable number of arguments, each specifying the number of points in each dimension. If keyword
+                                            arguments for `origin` and `diagonal` are not provided, use the last two elements of `*n_points` as the
+                                            origin and diagonal coordinates, respectively.
+            origin (Tuple[float, ...]):     The origin coordinates of the rectangular parallelepiped. If None, assume that the last two 
+                                            elements of `*n_points` are the origin and diagonal coordinates, respectively. This allows to 
+                                            call the function without keyword arguments.
+            diagonal (Tuple[float, ...]):   The end coordinates (diagonal opposite to the origin) of the rectangular parallelepiped. If None,
+                                            attempt to extract the origin and diagonal coordinates from the last two elements of `*n_points`.
+
+        Returns:
+        torch.Tensor:   A tensor of points in the N-dimensional space. 
+                        The shape of the tensor is (product_of_n_points, len(origin)).
+
+        Example:
+        >>> get_grid_pts(2, 2, origin=(0.0, 0.0), diagonal=(1.0, 1.0))
+        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)]
+        """
+        
+        if origin is None and diagonal is None:
+            # If origin and diagonal are none, then the last two elements of n_points are the origin and diagonal, 
+            # and the rest are the number of points in each dimension. Then len(n_points) - 2 is the number of dimensions,
+            # and len(origin) and len(diagonal) should be len(n_points) - 2.
+            if len(n_points) <= 2:
+                raise ValueError("Not enough arguments to specify number of points, origin, and diagonal")
+            else: 
+                num_dims = len(n_points) - 2
+                if len(origin) != num_dims:
+                    raise ValueError("Number of dimensions specified by origin {} does not match number of dimensions \
+                                     for which number of points is given.".format(origin, len(n_points-2)))
+                if len(diagonal) != num_dims:
+                    raise ValueError("Number of dimensions specified by diagonal {} does not match number of dimensions \
+                                     for which number of points is given.".format(diagonal, len(n_points-2)))
+            
+            origin = n_points[-2]
+            diagonal = n_points[-1]
+            n_points = n_points[:-2]
+        elif origin is not None and diagonal is not None:
+            pass
+        else:
+            raise ValueError("Must provide either both origin and diagonal, or neither. But {}".format(
+                "origin is None, and diagonal is not" if diagonal is not None else "diagonal is None, and origin is not"
+            ))
+        
+        if len(origin) != len(diagonal):
+            raise ValueError(("Origin and diagonal must have the same number of dimensions, " + \
+                              "got origin {} of length {} and diagonal {} of length {}.").format(origin, len(origin), diagonal, len(diagonal)))
+        # Check that number of points specified is the same as the number of dimensions
+        if len(n_points) != len(origin):
+            raise ValueError(("Number of points specified must be the same as the number of dimensions, " + \
+                              "got {} point number specification and {} dimensions set by origin and diagonal" + \
+                              "provided.").format(len(n_points), len(origin)))
+
+        # Generate grid points
+        grids = [torch.linspace(origin[dim], diagonal[dim], n_points[dim]) for dim in range(len(n_points))]
+        # meshgrid returns the fastest changing dimension last in 'ij' indexing, but we want x, y, z, etc. 
+        # to be the changing faster from left to right, in that order
+        mesh = torch.meshgrid(*grids[::-1], indexing='ij')                       # run [::-1] in reverse order here and below 
+        flattened_mesh = torch.stack([m.flatten() for m in mesh[::-1]], dim=-1)  # to get the fastest changing dimension first
+
+        return flattened_mesh
+    
+    @staticmethod
+    def get_random_pts(n_points: int, origin: Tuple[float, ...], diagonal: Tuple[float, ...]) -> torch.Tensor:
+        num_dims = len(origin)
+        if len(diagonal) != num_dims:
+            raise ValueError("Origin and diagonal must have the same number of dimensions.")
+        coords = [torch.empty(n_points).uniform_(origin[dim], diagonal[dim]) for dim in range(num_dims)]
+        return torch.stack(coords, dim=1)
+        
 
 class Sampler(object):
     
@@ -83,18 +169,22 @@ class RectangleSampler(Sampler):
 class GridSampler(Sampler):
     
     @staticmethod
-    def sample_grid(nx_points, ny_points, origin, diagonal):
+    def sample_grid(nx_points, ny_points, origin, diagonal, z=None):
         """
-        Generate a regular rectangular grid in a rectangle.
+        Generate a regular rectangular grid in a rectangle as a list of points.
         
         Parameters:
             nx_points (int): Number of grid points in the x-direction, per unit rectangle.
             ny_points (int): Number of grid points in the y-direction, per unit rectangle.
+            origin (Tuple[float, float]): Coordinates of the origin vertex of the rectangle.
+            diagonal (Tuple[float, float]): Coordinates of the opposite, diagonal vertex of the rectangle.
+            z (float): Optional, the z-coordinate of the points. If None, the points are 2D. Otherwise, the points are 3D that
+                       lie in the plane z = z. Default is None. Note that with z != None, static method pts_to_grid will not work.
 
         Returns:
             torch.Tensor: A tensor containing the grid points, shape (ny_points * nx_points, 2).
         """
-        x1, y1 = origin  # Coordinates of the origin vertex
+        x1, y1 = origin    # Coordinates of the origin vertex
         x2, y2 = diagonal  # Coordinates of the opposite, diagonal vertex
         
         # Generate one-dimensional linspaces for x and y
@@ -108,6 +198,10 @@ class GridSampler(Sampler):
         flat_x = grid_x.reshape(-1, 1)
         flat_y = grid_y.reshape(-1, 1)
         grid_points = torch.cat((flat_x, flat_y), 1)
+        
+        if z is not None:
+            # If z is not None, the points are 3D, and the z-coordinate is set to z
+            grid_points = torch.cat((grid_points, z * torch.ones((nx_points * ny_points, 1))), 1)
         
         return grid_points
     
@@ -125,7 +219,22 @@ class GridSampler(Sampler):
         Returns:
             torch.Tensor, 
         """
+        if not isinstance(pts, torch.Tensor):
+            pts = torch.tensor(pts)   
+    
         pts = pts.reshape(ny_points, nx_points, -1)
         pts = pts.permute(2, 1, 0)
+        return pts
+    
+    @staticmethod
+    def grid_to_pts(grid):
+        """Given a tensor with a grid of points of shape (n, nx_points, ny_points), return a tensor
+        of shape (nx_points * ny_points, n) where first index iterates through points in the original
+        grid in the given indexing order to match torch.meshgrid(..., 'xy')
+        """
+        if not isinstance(grid, torch.Tensor):
+            grid = torch.tensor(grid)
+            
+        pts = grid.reshape(grid.shape[0], -1).permute(1, 0)
         return pts
 

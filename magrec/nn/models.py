@@ -1,13 +1,23 @@
+from typing import Union
+from abc import ABC, abstractmethod
+import sys
+
 import torch
 import numpy as np
-from abc import ABC, abstractmethod
 
-from magrec.nn.modules import GaussianFourierFeaturesTransform, ZeroDivTransform
+from magrec.nn.modules import GaussianFourierFeaturesTransform, DivergenceFreeTransform2d
 from magrec.prop.Propagator import CurrentPropagator2d
-from magrec.nn.utils import load_model_from_ckpt
+from magrec.nn.utils import load_model_from_ckpt, plot_ffs_params
+
+from magrec.misc.sampler import GridSampler
+
+import magpylib
+import matplotlib.pyplot as plt
+import math
 
 import pytorch_lightning as L
-
+        
+    
 class Fourier2dMagneticField(torch.nn.Module):
     """2d Fourier space representation of the magnetic field at a fixed measurement plane 
     distance z from a planar source distribution.
@@ -88,7 +98,7 @@ class FourierFeatures2dCurrent(torch.nn.Module):
             torch.nn.Sigmoid(),
             torch.nn.Linear(self.ff_features_n, 1),
         )
-        self.divless = ZeroDivTransform()
+        self.divless = DivergenceFreeTransform2d()
         self.requires_grad = True
         
     def forward(self, x):
@@ -107,7 +117,117 @@ class FourierFeatures2dCurrent(torch.nn.Module):
                                     folder_name=folder_name, type="ff_std_cond",
                                     ckpt=ckpt, ckpt_path=ckpt_path)
         
+        
+class FourierFeaturesNd(torch.nn.Module):
+    """N-d Fourier features encoded neural network.
+    """
+    def __init__(self, n_inputs, n_outputs, ff_stds=[(1, 10), (2, 10), (0.5, 10)]) -> None:
+        """
+        Args:
+            ff_stds: a list of standard deviations and the number of frequencies to sample for each std.
+                       Should be of the form [(std1, n1), (std2, n2), ...]
+        """
+        super().__init__()
+        self.ffs = torch.nn.ModuleList([GaussianFourierFeaturesTransform(n_inputs, n, std) for std, n in ff_stds])
+        self.ff_features_n = sum([n * 2 for _, n in ff_stds])
+        self.fcn = torch.nn.Sequential(
+            torch.nn.Linear(self.ff_features_n, self.ff_features_n),
+            torch.nn.Sigmoid(),
+            torch.nn.Linear(self.ff_features_n, n_outputs),
+        )
+        
+    def forward(self, x):
+        y = torch.cat([ff(x) for ff in self.ffs], dim=-1)  # -1 intended to allow for batched and single-pt calculations
+        y = self.fcn(y)
+        return y
     
+    def set_ffs(self, fourier_features: Union[torch.nn.Module, list, tuple], verbose=False):
+        """Sets the Fourier features to the given list of Fourier features modules. Can be used
+        to substitute e.g. GaussianFourierFeaturesTransform with UniformFourierFeaturesTransform, or 
+        a custom Fourier features module."""
+        
+        if not isinstance(fourier_features, (list, tuple)):
+            fourier_features = [fourier_features]
+        
+        if verbose:
+            # Prepare a plot of the Fourier features parameters if verbose
+            fig = plt.figure()
+            axs = fig.subplots(1, 2)
+            plot_ffs_params(self, axs[0])
+        
+        # Save current state
+        prev_ffs = self.ffs
+        prev_ff_features_n = self.ff_features_n
+        prev_fcn = self.fcn
+
+        # Update with new Fourier features
+        self.ffs = torch.nn.ModuleList(list(fourier_features))
+        self.ff_features_n = sum([ff.B.shape[1] * 2 for ff in fourier_features])
+        self.fcn = torch.nn.Sequential(
+            torch.nn.Linear(self.ff_features_n, self.ff_features_n),
+            torch.nn.Sigmoid(),
+            torch.nn.Linear(self.ff_features_n, self.fcn[-1].out_features),
+        )
+
+        print("The model has been initialized with new params.")
+        
+        if verbose:
+            plot_ffs_params(self, axs[1])
+            plt.show()
+            
+        print("If reinitializing the trained model is not intended, press undo.")
+
+        if 'ipykernel' in sys.modules:
+            from IPython.display import display
+            import ipywidgets as widgets
+
+            undo = widgets.Button(description="Undo")
+            output = widgets.Output()
+
+            def on_undo_clicked(_):
+                with output:
+                    output.clear_output()
+                    output.append_stdout("Undoing changes...\n")
+                    self.ffs = prev_ffs
+                    self.ff_features_n = prev_ff_features_n
+                    self.fcn = prev_fcn
+                    output.append_stdout("Changes undone.")
+
+            undo.on_click(on_undo_clicked)
+            display(undo, output)
+        else:
+            print("Confirm undo (y/n): ")
+            if input().lower() == 'y':
+                self.ffs = prev_ffs
+                self.ff_features_n = prev_ff_features_n
+                self.fcn = prev_fcn
+                print("Changes undone.")
+    
+# class FourierFeaturesNd(torch.nn.Module):
+#     """N-d Fourier features encoded neural network.
+#     """
+#     def __init__(self, n_inputs, n_outputs, ffs_module_class, **kwargs) -> None:
+#         """
+#         Args:
+#             ff_stds: a list of standard deviations and the number of frequencies to sample for each std.
+#                        Should be of the form [(std1, n1), (std2, n2), ...]
+#         """
+#         if ff_stds in kwargs:
+#             self.ffs = torch.nn.ModuleList([GaussianFourierFeaturesTransform(n_inputs, n, std) for std, n in ff_stds])
+#         else:
+#             self.ffs = torch.nn.ModuleList([ffs_module_class(n_inputs, n, std) for std, n in ff_stds])
+#         super().__init__()
+#         self.ff_features_n = sum([n * 2 for _, n in ff_stds])
+#         self.fcn = torch.nn.Sequential(
+#             torch.nn.Linear(self.ff_features_n, self.ff_features_n),
+#             torch.nn.Sigmoid(),
+#             torch.nn.Linear(self.ff_features_n, n_outputs),
+#         )
+        
+#     def forward(self, x):
+#         y = torch.cat([ff(x) for ff in self.ffs], dim=-1)  # -1 intended to allow for batched and single-pt calculations
+#         y = self.fcn(y)
+#         return y
 
 class FourierFeaturesPINN(L.LightningModule):
     
@@ -244,3 +364,128 @@ class UniformDirectionMagnetisation(GenericModel):
         return b
 
 
+class WireNet(L.LightningModule):
+    """A mapping s → (x, y) for recreating a path of a wire. Optional parameter is t`he current which
+    can be either learned from the reconstruction, or given as a constraint."""
+    
+    class WirePath(torch.nn.Module):
+            def __init__(self, I=0.0, learnable_I=False):
+                super().__init__()
+                self.I = I
+                if learnable_I:
+                    self.I = torch.nn.Parameter(torch.tensor(I))
+                ff_stds = [(1, 5), (2, 5), (0.5, 5)]
+                self.ffs = torch.nn.ModuleList([GaussianFourierFeaturesTransform(1, n, std) for std, n in (ff_stds)])
+                self.ff_features_n = sum([n * 2 for _, n in ff_stds])
+                self.fcn = torch.nn.Sequential(
+                    torch.nn.Linear(self.ff_features_n, self.ff_features_n),
+                    torch.nn.Sigmoid(),
+                    torch.nn.Linear(self.ff_features_n, 2),
+                )
+                
+            def forward(self, s):
+                r = torch.cat([ff(s) for ff in self.ffs], dim=1)
+                r = self.fcn(r)
+                return r
+        
+                
+    def __init__(self, I=0.0, learnable_I=False):
+        super().__init__()
+        self.net = self.WirePath(I, learnable_I)
+                    
+    def forward(self, s):
+        r = self.net(s)
+        return r
+    
+    def get_B(self, pos):
+        """Returns the magnetic field at the points r generated by the wire."""
+        # Sample the wire with s
+        n_pts = 100
+        r = self.net(torch.linspace(0, 1, n_pts).unsqueeze(1))
+        # Add z component to the wire with convention that it is at the plane z = 0
+        r = torch.cat([r, torch.zeros((n_pts, 1))], dim=1)
+        r = r.detach().numpy()  
+        B = magpylib.current.Polyline(position=(0, 0, 0), vertices=r, current=self.net.I).getB(pos)
+        return B
+    
+    def fit_to_field(self, field, n_points=None, max_epochs=1000):
+        """Fits the wire to a given magnetic field using the given optimizer setting.
+        
+        field (torch.Tensor or numpy.array): 2d field distribution to fit to. The field should be a 2d array
+            with shape (3, n, m) where n is the number of x points and m is the number of y points, and 3 
+            corresponds to the number of components of the magnetic field. 
+        
+        """
+        nx_points, ny_points = field.shape[-2:]
+        grid_pts = GridSampler.sample_grid(nx_points, ny_points, origin=[0, 0], diagonal=[1, 1])
+        train_dataset = torch.utils.data.TensorDataset(grid_pts, field)
+        # Use provided number of points or determine the batch size based on the number of points using a sane heuristic
+        batch_size = max(32, 2 ** int(math.log2(nx_points * ny_points) - 4)) if n_points is None else n_points
+        train_loader = torch.utils.data.DataLoader(train_dataset, 
+                                                   batch_size=batch_size,
+                                                   num_workers=4)
+        
+        val_dataset = torch.utils.data.TensorDataset(grid_pts, field)
+        # For validation, pass all points at once
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=nx_points * ny_points)
+        
+        self.training_step = self._field_training_step
+        
+        self.trainer = L.Trainer(max_epochs=max_epochs)
+        self.trainer.fit(model=self, train_dataloaders=train_loader, val_dataloaders=val_loader)
+        
+    def _field_training_step(self, batch, batch_idx):
+        pos, B = batch
+        B_pred = torch.tensor(self.get_B(pos))
+        loss = torch.nn.functional.mse_loss(B_pred, B)
+        return loss
+
+    def fit_to_path(self, path, n_points, max_epochs=1000):
+        """Fits the wire to a given path using the given optimizer setting.
+        
+        path: callable
+            A function that takes a torch.Tensor s and returns a torch.Tensor r that gives a n-dimensional
+            point of the path corresponding to the parametrization value s.
+        """
+        # First, get observed values for the path and prepare a dataset with them
+        uniform_s = torch.distributions.uniform.Uniform(0, 1).sample((n_points * 10,)).unsqueeze(1)
+        uniform_r = path(uniform_s)
+        train_dataset = torch.utils.data.TensorDataset(uniform_s, uniform_r)
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32)
+        
+        # Record the path that is learned
+        self.path = path
+        
+        ss = torch.linspace(0, 1, n_points).unsqueeze(1)
+        rr = path(ss)
+        val_dataset = torch.utils.data.TensorDataset(ss, rr)
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=50)
+        
+        self.training_step = self._path_training_step
+        
+        self.trainer = L.Trainer(max_epochs=max_epochs)
+        self.trainer.fit(model=self, train_dataloaders=train_loader, val_dataloaders=val_loader)
+        
+    def _path_training_step(self, batch, batch_idx):
+        s, r = batch
+        r_pred = self(s)
+        loss = torch.nn.functional.mse_loss(r_pred, r)
+        return loss
+        
+    def training_step(self, batch, batch_idx):
+        raise NotImplementedError("This method should be overriden.")
+
+    def configure_optimizers(self, lr=1e-3):
+        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+        return optimizer
+    
+    def plot_wire(self, s_range=[0, 1]):
+        """Create a plot illustrating the obtained solution from the net."""
+        fig = plt.figure()
+        ax = fig.subplots(1, 1)
+        ss = torch.linspace(*s_range, 100).unsqueeze(1)
+        self.net.eval()
+        rr = self(ss).detach()
+        ax.plot(*rr.T)
+        ax.plot(*self.path(ss).T, 'r--')
+        

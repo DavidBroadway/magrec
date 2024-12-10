@@ -6,6 +6,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 
+from magrec.prop.constants import twopi
 from magrec.prop.Fourier import FourierTransform2d
 
 
@@ -224,3 +225,87 @@ class DataFiltering(object):
         plt.imshow(torch.rot90(data_filtered.imag), cmap='bwr')
         plt.title('Filtered array imaginary component')
         plt.colorbar()
+        
+        
+class SmoothLowPassFilter(object):
+    def __init__(self, rect, cutoff, units, cutoff_type="cycles", real_signal=True):
+        """
+        k_matrix:  k-vectors in radians per unit length. 2π/dx is the maximal k-vector in the x direction.
+        cutoff:    cutoff can be specified as a wavelength, or as a cycle frequency (in cycles per unit length)
+        """
+        self.real_signal = real_signal
+        self.cutoff_type = cutoff_type
+        self.cutoff = cutoff
+
+        if cutoff_type == "wavelength":
+            # Calculate the cutoff in radians per unit length
+            cutoff = twopi / cutoff
+            self.cutoff_units = units["length"]
+        elif cutoff_type == "cycles":
+            # To obtain cutoff in radians per unit length, multiply by 2π
+            cutoff = twopi * cutoff
+        elif cutoff_type == "radians":
+            pass
+
+        dx = rect["dx"]
+        dy = rect["dy"]
+
+        self.ft = FourierTransform2d(
+            grid_shape=(rect["nx"], rect["ny"]),
+            dx=dx,
+            dy=dy,
+            real_signal=self.real_signal,
+        )
+
+        kx_vector = self.ft.kx_vector
+        ky_vector = self.ft.ky_vector
+        k_matrix = self.ft.k_matrix
+
+        self.filt = 0.5 * (1 + torch.cos(twopi * k_matrix / cutoff / 2))
+        self.filt[k_matrix > cutoff] = 0
+
+        # if self.real_signal:
+        #     self.filter = 0.5 * (1 + np.cos(k_matrix / 2))
+        # else:
+        #     self.filter = 0.5 * (1 + np.cos(kx_vector * cutoff / 2))[:, None] \
+        #                 * 0.5 * (1 + np.cos(ky_vector * cutoff / 2))[None, :]
+
+        # self.filt[(-twopi > k_matrix * cutoff) + (k_matrix * cutoff > twopi)] = 0
+        # self.filt[(-twopi > k_matrix * cutoff) + (k_matrix * cutoff > twopi)] = 0
+
+    def __call__(self, X, y=None):
+        if X.type() == 'torch.ComplexFloatTensor':
+            # Then we are dealing with Fourier transformed signal
+            return X * self.filt
+        elif X.type() == 'torch.FloatTensor':
+            # Then we are dealing with real signal
+            return self.ft.backward(
+                self.ft.forward(X, dim=(-2, -1)) * self.filt, dim=(-2, -1)
+            ).real
+        else:
+            raise ValueError("Unexpected input tensor type: {}".format(X.type()))
+
+    def show_filter(self, centered_zero_frequency=False):
+        """
+        Plots the filter in Fourier space.
+
+        Args:
+            centered (bool):    whether to center zero frequency in the middle of the plot. By default,
+                                the zero frequency is at the index [0, 0] of the filter. If centered, the
+                                zero frequency is at the index [N//2, N//2] where N is the size of the filter.
+                                The standard behavior is to have the zero frequency at the index [0, 0], positive
+                                frequencies to be at [i, j] and negative frequencies to be at [-i, -j] where
+                                i, j ∈ [1, N//2].
+        """
+        title = "Smooth Low-pass filter | cutoff = {:.2f} {} {}".format(
+            self.cutoff, self.cutoff_units, self.cutoff_type
+        )
+        fig = Filter.show_filter(
+            self.filt,
+            self.ft.kx_vector,
+            self.ft.ky_vector,
+            title=title,
+            centered_zero_frequency=centered_zero_frequency,
+            real_signal=self.real_signal,
+        )
+        return fig

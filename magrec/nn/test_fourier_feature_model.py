@@ -13,5 +13,5 @@ def test_basic_tensor():
     wtih 40 Fourier features coordinates (20 cosines and 20 sines).
     """
     x = torch.randn(50, 2, requires_grad=True)
-    y = FourierFeatures2dCurrent(ff_sigmas = [(1, 10), (2, 30), (3, 5)])(x)
+    y = FourierFeatures2dCurrent([(1, 10), (2, 30), (3, 5)])(x)
     assert y.shape == (50, 2)

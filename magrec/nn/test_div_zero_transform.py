@@ -1,10 +1,10 @@
-from magrec.nn.modules import ZeroDivTransform
+from magrec.nn.modules import DivergenceFreeTransform2d
 import deepxde as dde
 import torch
 
 def test_div_zero_shape():
     # Instantiate the DivZeroTransform module
-    div_zero_transform = ZeroDivTransform()
+    div_zero_transform = DivergenceFreeTransform2d()
 
     # Define the scalar function f(x)
     def scalar_function(x):
@@ -25,7 +25,7 @@ def test_div_zero_shape():
 
 def test_div_zero_transform():
     # Instantiate the DivZeroTransform module
-    div_zero_transform = ZeroDivTransform()
+    div_zero_transform = DivergenceFreeTransform2d()
 
     # Define the scalar function f(x)
     def scalar_function(x):
