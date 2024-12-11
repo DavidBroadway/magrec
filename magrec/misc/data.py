@@ -264,14 +264,21 @@ class MagneticFieldDataMixin:
     
     def __getattr__(self, name):
         """Dynamically expose field_data and point_data keys as attributes."""
-        if name in self.field_data:
-            return torch.tensor(self.field_data[name])
-        elif name in self.point_data:
-            return torch.tensor(self.point_data[name])
+        # Avoid recursion by using `object.__getattribute__`
         try:
-            return super().__getattr__(name)
-        except AttributeError:
-            raise AttributeError(f"'{self.__class__.__name__}' has no attribute '{name}'.")
+            # Check if the attribute is in `field_data`
+            field_data = object.__getattribute__(self, 'field_data')
+            if name in field_data:
+                return torch.tensor(field_data[name])
+            
+            # Check if the attribute is in `point_data`
+            point_data = object.__getattribute__(self, 'point_data')
+            if name in point_data:
+                return torch.tensor(point_data[name])
+
+        except AttributeError as e:
+            raise e
+        
         
     def map(self, func: callable, name):
         """Map a function over all points in the ImageData, assign the 
