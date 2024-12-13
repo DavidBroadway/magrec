@@ -1,5 +1,6 @@
 # Class and fucntions for handling the data and the parameters of the data.
 
+import scipy
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -260,7 +261,7 @@ class MagneticFieldDataMixin:
     """Mixin class to add common magnetic field data functionality.
     
     + Allows to access field_data and point_data keys as attributes and converts
-    them to torch.Tensor automatically."""
+    them to torch.Tensor automatically."""            
     
     def __getattr__(self, name):
         """Dynamically expose field_data and point_data keys as attributes."""
@@ -275,178 +276,36 @@ class MagneticFieldDataMixin:
             point_data = object.__getattribute__(self, 'point_data')
             if name in point_data:
                 return torch.tensor(point_data[name])
+            
+            return object.__getattribute__(self, name)
 
         except AttributeError as e:
             raise e
-        
         
     def map(self, func: callable, name):
         """Map a function over all points in the ImageData, assign the 
         result of the computation to a new `point_data` array."""
         self.point_data[name] = func(torch.tensor(self.points, dtype=torch.float32)).detach().numpy()
-        
+        return self
 
             
-class DataBlock(MagneticFieldDataMixin, pv.MultiBlock):
+class DataBlock(pv.MultiBlock):
     """Data structure for handling multiple data sets, i.e. that pertain 
     to different regions in space."""
+    
+    def append(self, dataset, name=None):
+        """Append a dataset to the block, same as in parent, but
+        enforce unique names."""
+        if name is None:
+            name = f"block_{len(self)}"
+        elif name in self.keys():
+            raise ValueError(f"A block with the name '{name}' already exists.")
+        return super().append(dataset, name)
 
     def __repr__(self):
         return self[0:len(self)].__repr__()
-
-
-class MagneticFieldImageData(MagneticFieldDataMixin, pv.ImageData):
-    """Class for handling magnetic field data on a regular grid."""
-    
-    def expand_bounds_3d(self, factor=1, name=None):
-        """Expand the bounds of the grid in x, y, amd z directions by a factor."""
-        if isinstance(factor, (list, tuple)):
-            if all((isinstance(f, (list, tuple)) and len(f) == 2) for f in factor) and len(factor == 3):
-                # treat this case as a list of factors [(a_factor, b_factor), ..., (e, f)]
-                a, b = factor[0]
-                c, d = factor[1]
-                e, f = factor[2]
-            elif all(isinstance(f, (float, int)) for f in factor) and len(factor) == 3:
-                # treat factors as symmetric of both sides of a dimension
-                # (2, 2, 2) will enlarge the field of view by 2 in each direction
-                a = b = factor[0]
-                c = d = factor[1]
-                e = f = factor[2]
-            else:
-                TypeError("Unsupported factor type {} in factor specification. If factor is an iterable, \
-                          it's elements should be either tuples of length 2, or numbers.")
-        elif isinstance(factor, (int, float)):
-            a = b = c = d = e = f = factor
-            
-        dims = self.dimensions
-        spacing = self.spacing
-        origin = self.origin
-        extent = self.extent
-        
-        expanded_dims = (dims[0] * (1 + a + b), dims[1] * (1 + c + d), dims[2] * (1 + e + f))
-        expanded_dims = (int(e_d) for e_d in expanded_dims)  # convert all to integers, how? idk
-        # now we calculate how much we need to shift the origin by to get the expansion
-        # in each direction by the appropriate factor
-        expanded_origin = (
-            origin[0] - spacing[0] * dims[0] * a, 
-            origin[1] - spacing[1] * dims[1] * c, 
-            origin[2] - spacing[2] * dims[2] * e
-            )
-        
-        expanded_grid = MagneticFieldImageData()
-        expanded_grid.dimensions = expanded_dims
-        expanded_grid.origin = expanded_origin
-        
-        blocks = DataBlock()
-        try:
-            blocks.append(self)  # you need to give blocks a name, in particular
-        except AttributeError as e:
-            blocks.append(self)
-        # in particular, each data object should have a name already
-        blocks.append(expanded_grid)
-        return blocks
-    
-    def expand_bounds_2d(self, factor=1, name=None):
-        """Expand the bounds of the grid in x and y directions by a factor."""
-        if isinstance(factor, (list, tuple)):
-            if all((isinstance(f, (list, tuple)) and len(f) == 2) for f in factor) and len(factor == 2):
-                # treat this case as a list of factors [(a_factor, b_factor), (c, d)]
-                a, b = factor[0]
-                c, d = factor[1]
-            elif all(isinstance(f, (float, int)) for f in factor) and len(factor) == 2:
-                # treat factors as symmetric of both sides of a dimension
-                # (2, 2) will enlarge the field of view by 2 in each direction
-                a = b = factor[0]
-                c = d = factor[1]
-            else:
-                TypeError("Unsupported factor type {} in factor specification. If factor is an iterable, \
-                          it's elements should be either tuples of length 2, or numbers.")
-        elif isinstance(factor, (int, float)):
-            a = b = c = d = factor
-            
-        dims = self.dimensions
-        spacing = self.spacing
-        origin = self.origin
-        extent = self.extent
-        
-        expanded_dims = (dims[0] * (1 + a + b), dims[1] * (1 + c + d), dims[2])
-        expanded_dims = (int(e_d) for e_d in expanded_dims)  # convert all to integers, how? idk
-        # now we calculate how much we need to shift the origin by to get the expansion
-        # in each direction by the appropriate factor
-        expanded_origin = (
-            origin[0] - spacing[0] * dims[0] * a, 
-            origin[1] - spacing[1] * dims[1] * c, 
-            origin[2]
-            )
-        
-        expanded_grid = MagneticFieldImageData()
-        expanded_grid.dimensions = expanded_dims
-        expanded_grid.origin = expanded_origin
-        expanded_grid.spacing = spacing
-        
-        blocks = DataBlock()
-        try:
-            blocks.append(self)  # you need to give blocks a name, in particular
-        except AttributeError as e:
-            blocks.append(self)
-        # in particular, each data object should have a name already
-        blocks.append(expanded_grid)
-        return blocks
-
-    
-    def get_as_grid(self, point_data_name):
-        """Return point data reshaped into a grid matching the mesh structure.
-        Only available for ImageData since it has a regular grid structure.
-        """
-        data = self.__getattr__(point_data_name)
-        # We need to cast data to a (nx, ny, nz) tensor. ImageData uses
-        # Fortran ordering, meaning that pts and their vals in point_data are
-        # stored in the following way: val[k] = val[i, j] and k = i + j*nx, so
-        # first index changes the fastest. If we want to reshape to (nx, ny, nz), 
-        # we need to view the tensor as (nz, ny, nx) and then permute the axes.
-        # Viewing guarantees that the data is contiguous in memory and the layout 
-        # is as expected.
-        nx, ny, nz = self.dimensions
-        shape = (nz, ny, nx, 3) if nz > 1 else (ny, nx, 3)
-        if nz > 1:
-            return data.reshape(*shape).permute(2, 1, 0, 3)
-        elif nz == 1:
-            return data.reshape(*shape).permute(2, 1, 0)
-        else:
-            raise ValueError("Invalid dimensions for the grid.")
-    
-    def interpolate(self, *args, **kwargs):
-        """Call the interpolate method of the superclass but ensure that the
-        output is a MagneticFieldImageData object."""
-        interpolated = super().interpolate(*args, **kwargs)
-        return MagneticFieldImageData(interpolated)
-    
-    def plot_n_components(self, point_data_name):
-        """Use `plot_n_components` function to extract a 2d image of a 
-        point data with name `point_data_name`."""
-        grid_data = self.get_as_grid(point_data_name=point_data_name)
-        return plot_n_components(data=grid_data)
     
     
-    def plot(self, only_points=False, point_data_name=None):
-        """Plot the point data with name `point_data_name`."""
-        if only_points:
-            plotter = pv.Plotter()
-            # Add points to the plot as spheres
-            plotter.add_mesh(self.points, point_size=5, render_points_as_spheres=True)
-            
-            plotter.add_bounding_box(color="black")
-            plotter.show_bounds(
-                grid="front",           # Display the grid on the front face
-                location="outer",       # Place the ruler outside the bounds
-                ticks="both",           # Display both major and minor ticks
-                color="black",          # Ruler color
-                font_size=10,           # Font size for labels
-            )
-            plotter.view_xy()  # Show the XY plane
-            return plotter.show()
-
-
 class MagneticFieldUnstructuredGrid(MagneticFieldDataMixin, pv.PolyData):
     """Class for handling magnetic field data on an unstructured grid.
     Used with experimental data (i.e. measurements) where coordinates of the
@@ -526,3 +385,215 @@ class MagneticFieldUnstructuredGrid(MagneticFieldDataMixin, pv.PolyData):
         pts = self.points[indices]
         vals = self.B[indices]
         return pts, vals
+    
+    def extend_data(self, source, source_name=None, strategy="closest_constant", target_name=None):
+        """Extend the data from `source` to `self` using a specific `strategy`."""
+        if strategy == "closest_constant":
+            # Find the closest point from the source and extend the data with the same value
+            tree = scipy.spatial.KDTree(source.points)
+            distances, indices = tree.query(self.points)
+            
+            if source_name is None and target_name is None:
+                # Extend the data by copying the values from the closest points in the source
+                for key in source.point_data.keys():
+                    self.point_data[key] = source.point_data[key][indices]
+            elif source_name is not None and target_name is None:
+                # if source_name is given and target_name is not, extend the data
+                # and copy the source_name
+                self.point_data[source_name] = source.point_data[source_name][indices]
+            elif source_name is not None and target_name is not None:
+                # if both source_name and target_name are given, use target_name 
+                # when extending the data
+                self.point_data[target_name] = source.point_data[source_name][indices]
+            else:
+                raise ValueError("""Invalid `source_name` ({} of type {})\
+                    and `target_name` ({} of type {}) combination.""".format(
+                    source_name, type(source_name), target_name, type(target_name)
+                    ))
+                
+        return self
+    
+
+class MagneticFieldImageData(MagneticFieldDataMixin, pv.ImageData):
+    """Class for handling magnetic field data on a regular grid."""
+    
+    def __sub__(self, other, threshold_distance=1e-2):
+        """Subtract points of one grid from another. Sub"""
+        if isinstance(other, MagneticFieldImageData):
+            # Get points from both datasets
+            points1 = np.array(self.points)
+            points2 = np.array(other.points)
+
+            # Build a KDTree for fast nearest-neighbor search
+            tree = scipy.spatial.KDTree(points2)
+
+            # Query distances to the nearest neighbor in points2 for each point in points1
+            distances, _ = tree.query(points1)
+
+            # Create a mask for points in self that are NOT close to any points in other
+            mask = (distances > threshold_distance)
+
+            # Extract points from self that are not close to any points in other, 
+            # that will be the difference
+            filtered_points = points1[mask]
+
+            # Create a new dataset with these points
+            # filtered_data = pv.UnstructuredGrid()
+            # filtered_data.points = filtered_points
+            filtered_data = MagneticFieldUnstructuredGrid(pv.PolyData(filtered_points))
+
+            # If you want to keep point data (e.g., scalars), extract those too
+            filtered_point_data = {key: value[mask] for key, value in self.point_data.items()}
+            for key, value in filtered_point_data.items():
+                filtered_data.point_data[key] = value
+
+            return filtered_data
+        else:
+            raise TypeError("Unsupported type {} to subtract from {}.".format(
+                type(other), type(self)))
+    
+    def expand_bounds_3d(self, factor=1, name=None):
+        """Expand the bounds of the grid in x, y, amd z directions by a factor."""
+        if isinstance(factor, (list, tuple)):
+            if all((isinstance(f, (list, tuple)) and len(f) == 2) for f in factor) and len(factor == 3):
+                # treat this case as a list of factors [(a_factor, b_factor), ..., (e, f)]
+                a, b = factor[0]
+                c, d = factor[1]
+                e, f = factor[2]
+            elif all(isinstance(f, (float, int)) for f in factor) and len(factor) == 3:
+                # treat factors as symmetric of both sides of a dimension
+                # (2, 2, 2) will enlarge the field of view by 2 in each direction
+                a = b = factor[0]
+                c = d = factor[1]
+                e = f = factor[2]
+            else:
+                TypeError("Unsupported factor type {} in factor specification. If factor is an iterable, \
+                          it's elements should be either tuples of length 2, or numbers.")
+        elif isinstance(factor, (int, float)):
+            a = b = c = d = e = f = factor
+            
+        dims = self.dimensions
+        spacing = self.spacing
+        origin = self.origin
+        extent = self.extent
+        
+        expanded_dims = (dims[0] * (1 + a + b), dims[1] * (1 + c + d), dims[2] * (1 + e + f))
+        expanded_dims = (int(e_d) for e_d in expanded_dims)  # convert all to integers, how? idk
+        # now we calculate how much we need to shift the origin by to get the expansion
+        # in each direction by the appropriate factor
+        expanded_origin = (
+            origin[0] - spacing[0] * dims[0] * a, 
+            origin[1] - spacing[1] * dims[1] * c, 
+            origin[2] - spacing[2] * dims[2] * e
+            )
+        
+        expanded_grid = MagneticFieldImageData()
+        expanded_grid.dimensions = expanded_dims
+        expanded_grid.origin = expanded_origin
+        
+        blocks = DataBlock()
+        try:
+            blocks.append(self)  # you need to give blocks a name, in particular
+        except AttributeError as e:
+            blocks.append(self)
+        # in particular, each data object should have a name already
+        blocks.append(expanded_grid)
+        return blocks
+    
+    def expand_bounds_2d(self, factor=1, name=None) -> DataBlock:
+        """Expand the bounds of the grid in x and y directions by a factor."""
+        if isinstance(factor, (list, tuple)):
+            if all([(isinstance(f, (list, tuple)) and len(f) == 2 for f in factor)]) and len(factor) == 2:
+                # treat this case as a list of factors [(a_factor, b_factor), (c, d)]
+                a, b = factor[0]
+                c, d = factor[1]
+            elif all(isinstance(f, (float, int)) for f in factor) and len(factor) == 2:
+                # treat factors as symmetric of both sides of a dimension
+                # (2, 2) will enlarge the field of view by 2 in each direction
+                a = b = factor[0]
+                c = d = factor[1]
+            else:
+                raise TypeError("Unsupported factor type {} in factor specification. If factor is an iterable,\n \
+                          it's elements should be either tuples of length 2, or numbers, and it length should\n \
+                              be 2 for `expand_bounds_2d`.".format(factor))
+        elif isinstance(factor, (int, float)):
+            a = b = c = d = factor
+        else:
+            raise TypeError("Unsupported factor {} in factor specification. If factor is an iterable,\n \
+                      it's elements should be either tuples of length 2, or numbers, and its length should\n \
+                      be 2 for `expand_bounds_2d`.".format(factor))
+            
+        dims = self.dimensions
+        spacing = self.spacing
+        origin = self.origin
+        extent = self.extent
+        
+        expanded_dims = (dims[0] * (1 + a + b), dims[1] * (1 + c + d), dims[2])
+        expanded_dims = (int(e_d) for e_d in expanded_dims)  # convert all to integers, how? idk
+        # now we calculate how much we need to shift the origin by to get the expansion
+        # in each direction by the appropriate factor
+        expanded_origin = (
+            origin[0] - spacing[0] * dims[0] * a, 
+            origin[1] - spacing[1] * dims[1] * c, 
+            origin[2]
+            )
+        
+        expanded_grid = MagneticFieldImageData()
+        expanded_grid.dimensions = expanded_dims
+        expanded_grid.origin = expanded_origin
+        expanded_grid.spacing = spacing
+        
+        return expanded_grid
+
+    
+    def get_as_grid(self, point_data_name):
+        """Return point data reshaped into a grid matching the mesh structure.
+        Only available for ImageData since it has a regular grid structure.
+        """
+        data = self.__getattr__(point_data_name)
+        # We need to cast data to a (nx, ny, nz) tensor. ImageData uses
+        # Fortran ordering, meaning that pts and their vals in point_data are
+        # stored in the following way: val[k] = val[i, j] and k = i + j*nx, so
+        # first index changes the fastest. If we want to reshape to (nx, ny, nz), 
+        # we need to view the tensor as (nz, ny, nx) and then permute the axes.
+        # Viewing guarantees that the data is contiguous in memory and the layout 
+        # is as expected.
+        nx, ny, nz = self.dimensions
+        shape = (nz, ny, nx, 3) if nz > 1 else (ny, nx, 3)
+        if nz > 1:
+            return data.reshape(*shape).permute(2, 1, 0, 3)
+        elif nz == 1:
+            return data.reshape(*shape).permute(2, 1, 0)
+        else:
+            raise ValueError("Invalid dimensions for the grid.")
+    
+    def interpolate(self, *args, **kwargs):
+        """Call the interpolate method of the superclass but ensure that the
+        output is a MagneticFieldImageData object."""
+        interpolated = super().interpolate(*args, **kwargs)
+        return MagneticFieldImageData(interpolated)
+    
+    def plot_n_components(self, point_data_name):
+        """Use `plot_n_components` function to extract a 2d image of a 
+        point data with name `point_data_name`."""
+        grid_data = self.get_as_grid(point_data_name=point_data_name)
+        return plot_n_components(data=grid_data)
+    
+    
+    # def plot(self, only_points=False, point_data_name=None):
+    #     """Plot the point data with name `point_data_name`."""
+    #     if only_points:
+    #         plotter = pv.Plotter()
+    #         # Add points to the plot as spheres
+    #         plotter.add_mesh(self.points, point_size=5, render_points_as_spheres=True)
+            
+    #         plotter.add_bounding_box(color="black")
+    #         plotter.show_bounds(
+    #             grid="front",           # Display the grid on the front face
+    #             location="outer",       # Place the ruler outside the bounds
+    #             ticks="both",           # Display both major and minor ticks
+    #             color="black",          # Ruler color
+    #             font_size=10,           # Font size for labels
+    #         )
+    #         plotter.view_xy()  # Show the XY plane
+    #         return plotter.show()
