@@ -17,6 +17,8 @@ import tqdm
 
 import pytorch_lightning as L
 
+from scipy.ndimage import gaussian_filter, median_filter
+
 from magrec.nn.modules import GaussianFourierFeaturesTransform, UniformFourierFeaturesTransform, RegularFourierFeaturesTransform
 from magrec.nn.models import FourierFeaturesNd, WireNet
 from magrec.nn.utils import batched_curl, batched_div, batched_grad, save_model_for_experiment, load_model_for_experiment
@@ -109,7 +111,10 @@ class JerschowExperimentConfig(ExperimentConfig):
         
         self.nx_points = field_grid.dimensions[0]
         self.ny_points = field_grid.dimensions[1]
+        # CHECK IF HEIGHT IS APPROPRIATE for sampling
         self.data = field_grid
+        self.field = field_grid.get_as_grid("B")
+        self.background = background_grid.get_as_grid("B")
         
         self.dx = field_grid.spacing[0]
         self.dy = field_grid.spacing[1]
@@ -291,7 +296,7 @@ class JerschowExperiment(PINNExperiment):
         """Plot the loaded data."""
         # Plot field, background, and data
         fig = plot_n_components(
-            [self.config.field, self.config.background, self.config.data], 
+            [self.config.field, self.config.background, self.config.data.get_as_grid("B")], 
             labels=[r"$B_x$", r"$B_y$", r"$B_z$"], 
             cmap="RdBu_r", 
             units=r"{}".format(self.config.units["magnetic_field"]))    
@@ -442,6 +447,7 @@ class JerschowExperimentLearnDecayB(JerschowExperimentLearnBRandomPts):
             "div": [],
         }
         self.is_trained = False
+        self.load_data()
         
         regions = DataBlock()
         regions["original"] = self.config.data
@@ -459,7 +465,7 @@ class JerschowExperimentLearnDecayB(JerschowExperimentLearnBRandomPts):
         list_of_indices = torch.randint(low=0, high=len(self.data_pts), size=(n,))
         return self.data_pts[list_of_indices], self.data_vals[list_of_indices]
 
-    def boundary_decay_sample(self, n):
+    def get_decay_sample(self, n):
         """Return n random points in the region where the solution should decay."""
         list_of_indices = torch.randint(low=0, high=len(self.outer_region_pts), size=(n,))
         # `pts` are points in the region where the decay is probed
@@ -473,6 +479,10 @@ class JerschowExperimentLearnDecayB(JerschowExperimentLearnBRandomPts):
     def train(self, n_iters=1000, **kwargs):
         data_batch_size = self.config.data_batch_size
         batch_size = self.config.batch_size
+        try:
+            decay_batch_size = self.config.decay_batch_size
+        except AttributeError:  # compatibility with the previous version, where decay_batch_size was not defined
+            decay_batch_size = self.config.batch_size
         eps_data = self.config.eps_data
         eps_curl = self.config.eps_curl
         eps_div = self.config.eps_div
@@ -488,7 +498,7 @@ class JerschowExperimentLearnDecayB(JerschowExperimentLearnBRandomPts):
                 train_pts, data_targets = self.get_data_sample(n=data_batch_size)
                 curl_pts, curl_targets = self.get_curl_sample(n=batch_size)
                 div_pts, div_targets = self.get_div_sample(n=batch_size)
-                bd_decay_pts, bd_decay_targets = self.boundary_decay_sample(n=batch_size)
+                bd_decay_pts, bd_decay_targets = self.get_decay_sample(n=decay_batch_size)
                 
                 data_est = self.model(train_pts)
                 data_loss = self.loss_fn(data_est, data_targets)
@@ -500,7 +510,7 @@ class JerschowExperimentLearnDecayB(JerschowExperimentLearnBRandomPts):
                 div_loss = self.loss_fn(div_vals, div_targets)
                 
                 bd_decay_vals = self.model(bd_decay_pts)
-                bd_decay_loss = torch.mean(torch.clamp(bd_decay_vals - bd_decay_targets, min=0) ** 2)
+                bd_decay_loss = self.loss_fn(bd_decay_vals, bd_decay_targets)
                 
                 loss = eps_data * data_loss + eps_curl * curl_loss + eps_div * div_loss + eps_decay * bd_decay_loss
                 
@@ -544,7 +554,7 @@ class ExperimentDenoise(JerschowExperimentLearnBRandomPts):  # names become like
         
         return fig
         
-    def plot_results(self, plot_comparison=False):
+    def plot_results(self, plot_original=False, plot_comparison=False, gaussian_sigma=1.5, median_size=5):
         """Plot the results of the experiment."""
         self.model.eval()
         res_vals = self.model(self.data_pts).detach().cpu().numpy()
@@ -553,44 +563,76 @@ class ExperimentDenoise(JerschowExperimentLearnBRandomPts):  # names become like
         data_vals = self.config.data.get_as_grid("B")
         noisy_data = self.config.data.get_as_grid("B_noisy")
         
-        if not plot_comparison:
-            # This ensures that the order of data values and space points matches 
-            fig = plot_n_components(
-                [data_vals, noisy_data, res_vals], 
-                title=["Input data", "Noisy data", "Fit results"],
+        data_list_to_plot = [noisy_data, res_vals]
+        title_list = ["Noisy data", "Fit results"]
+        
+        if plot_comparison:
+            # Apply Gaussian filter
+            gaussian_smoothed_data = gaussian_filter(noisy_data, sigma=gaussian_sigma, axes=(1,2))
+            data_list_to_plot.insert(1, gaussian_smoothed_data)
+            title_list.insert(1, "Gaussian smoothed")
+            
+            # Apply median filter
+            median_smoothed_data = median_filter(noisy_data, size=median_size, axes=(1,2))
+            data_list_to_plot.insert(2, median_smoothed_data)
+            title_list.insert(2, "Median smoothed")
+            
+        if plot_original:
+            data_list_to_plot.insert(0, data_vals)
+            title_list.insert(0, "Original data")    
+        
+        fig = plot_n_components(
+                data=data_list_to_plot, 
+                title=title_list,
                 labels=[r"$B_x$", r"$B_y$", r"$B_z$"], 
                 cmap="RdBu_r", 
                 units=r"{}".format(self.config.units["magnetic_field"]))
-        elif plot_comparison:
-            from scipy.ndimage import gaussian_filter, median_filter
-
-            # Apply Gaussian filter
-            gaussian_smoothed_data = gaussian_filter(noisy_data, sigma=1.5, axes=(1,2))
-
-            # Apply median filter
-            median_smoothed_data = median_filter(noisy_data, size=5, axes=(1,2))
-
-            # Plot the results
-            fig = plot_n_components(
-                [noisy_data, gaussian_smoothed_data, median_smoothed_data, res_vals], 
-                title=["Noisy data", "Gaussian smoothed data", "Median smoothed data", "Model smoothed data"],
-                labels=[r"$B_x$", r"$B_y$", r"$B_z$"], 
-                cmap="RdBu_r", 
-                units=r"{}".format(self.config.units["magnetic_field"])
-            )
-            fig
         
         return fig
         
-class JerschowExperimentDenoise(ExperimentDenoise):  # a dummy alias
+class JerschowExperimentDenoise(ExperimentDenoise):  # mostly dummy alias
     
     def plot_data(self):
         """Plot the loaded data."""
         # Plot field, background, and data
         fig = plot_n_components(
-            [self.config.field, self.config.background, self.config.data], 
+            [self.config.field, self.config.background, self.config.data.get_as_grid("B")], 
             labels=[r"$B_x$", r"$B_y$", r"$B_z$"], 
             cmap="RdBu_r", 
             units=r"{}".format(self.config.units["magnetic_field"]))    
         
         return fig
+    
+    
+def check_curl_div_at_rnd_pts(experiment):
+    """
+    Evaluate and print the mean squared error loss for curl and divergence values 
+    at random points within the experiment's grid.
+
+    Args:
+        experiment: An object containing the experiment configuration and methods 
+                    to compute curl and divergence values.
+    """
+    dx = experiment.config.dx
+    dy = experiment.config.dy
+    height = experiment.config.height
+    nx_points = experiment.config.nx_points
+    ny_points = experiment.config.ny_points
+    
+    rnd_pts = NDGridPoints.get_random_pts(1000, origin=(0, 0, 0), 
+        diagonal=(dx * nx_points, dy * ny_points, 2 * height))
+    
+    curl_vals = experiment.get_curl_vals(rnd_pts)
+    div_vals = experiment.get_div_vals(rnd_pts)
+    
+    print(
+        'Curl loss: ',
+        torch.nn.functional.mse_loss(
+        curl_vals, torch.zeros_like(curl_vals)).item(), 
+        ' vs ', 
+        experiment.losses["curl"][-1])
+    print(
+        'Div loss: ',
+        torch.nn.functional.mse_loss(div_vals, torch.zeros_like(div_vals)).item(),
+        ' vs ',
+        experiment.losses["div"][-1])
