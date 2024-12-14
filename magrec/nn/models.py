@@ -136,6 +136,14 @@ class FourierFeaturesNd(torch.nn.Module):
             torch.nn.Linear(self.ff_features_n, n_outputs),
         )
         
+    def get_ffs_as_vectors(self):
+        """Returns the Fourier features from .ffs modules as a list of vectors.
+        The shape of the returned data is (n_vectors, n_inputs) where n_vectors is 
+        the total number of vectors across all Fourier features modules.
+        """
+        ffs = torch.concat([ff.B for ff in self.ffs], dim=1)
+        return ffs.T.detach()
+        
     def forward(self, x):
         y = torch.cat([ff(x) for ff in self.ffs], dim=-1)  # -1 intended to allow for batched and single-pt calculations
         y = self.fcn(y)
