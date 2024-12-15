@@ -33,6 +33,7 @@ from magrec.misc.sampler import GridSampler, NDGridPoints
 from magrec.nn.utils import rotate_vector_field_2d, get_ckpt_path_by_regexp, load_model_from_ckpt, plot_ffs_params, \
     reshape_rect
 
+import vedo, k3d
 
 # Base configuration for all experiments
 class ExperimentConfig:
@@ -206,6 +207,16 @@ class NbWireConfig(JerschowExperimentConfig):
 #                                        EXPERIMENT classes                             #
 # -------------------------------------------------------------#
 
+def sample_debugger(func, label):
+    """Decorator to capture sample points during training."""
+    def wrapper(self, *args, **kwargs):
+        pts, vals = func(*args, **kwargs)
+        if hasattr(self, '_debug_enabled') and self._debug_enabled:
+            self.collect_debug_points(pts, label)
+        return pts, vals
+    wrapper._original = func  # Store reference to original function
+    return wrapper
+
 # Base Experiment class
 class Experiment:
     def __init__(self, config: ExperimentConfig):
@@ -215,6 +226,9 @@ class Experiment:
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.learning_rate)
         self.loss_fn = torch.nn.MSELoss()
         self.losses = self._initialize_losses()
+        self.debug_points = []
+        self._debug_enabled = False
+
     def _initialize_losses(self):
         """Initialize loss buffers based on get_*_sample methods."""
         losses = {'total': []}  # Always include total loss
@@ -228,6 +242,29 @@ class Experiment:
                 
         return losses
 
+    def enable_debug(self):
+        """Enable debug mode to collect sample points."""
+        self._debug_enabled = True
+        # Store original methods before wrapping
+        self._original_methods = {}
+        
+        # Dynamically wrap all get_*_sample methods with the debugger
+        for attr_name in dir(self):
+            if attr_name.startswith('get_') and attr_name.endswith('_sample'):
+                method = getattr(self, attr_name)
+                label = attr_name[len('get_'):-len('_sample')]  # Extract label from method name
+                if not hasattr(method, '_original'):  # Only wrap if not already wrapped
+                    self._original_methods[attr_name] = method
+                    setattr(self, attr_name, sample_debugger(method, label).__get__(self))
+
+    def disable_debug(self):
+        """Disable debug mode and restore original methods."""
+        self._debug_enabled = False
+        # Restore original methods
+        if hasattr(self, '_original_methods'):
+            for attr_name, original_method in self._original_methods.items():
+                setattr(self, attr_name, original_method)
+            del self._original_methods
 
     def build_model(self):
         # If a model is not provided, build a new one
@@ -251,10 +288,16 @@ class Experiment:
         # Implement evaluation logic if needed
         pass
 
-    def plot_losses(self, show=False):
+    def plot_losses(self, show=False, per_loss_average=False):
         # Create a plot with subplots for each loss in `self.losses`
         fig, axs = plt.subplots(len(self.losses), 1, figsize=(6, 12), sharex=True)
+        if per_loss_average:
+            num_losses = (len(self.losses) - 1) if 'total' in self.losses else len(self.losses)
         for i, (k, v) in enumerate(self.losses.items()):
+            if per_loss_average and k == 'total':
+                # if per loss average is enabled, display the total as the average of the other losses
+                v = np.array(v) / num_losses  
+                k = 'total average'
             axs[i].plot(v)
             axs[i].set_ylabel(k + ' loss')
         
@@ -264,7 +307,111 @@ class Experiment:
             plt.close()
             
         return fig
-    
+
+    def collect_debug_points(self, pts, label):
+        """Collect points for debugging purposes."""
+        self.debug_points.append((pts.cpu().numpy(), label))
+
+    def plot_debug_points(self):
+        """Plot debug points with step control using k3d and ipywidgets."""
+        from ipywidgets import IntSlider, Layout
+        from IPython.display import display
+        
+        # Initialize plot
+        plot = k3d.plot()
+        
+        # Organize points by label
+        labeled_pts = {}
+        for pts, label in self.debug_points:
+            if label not in labeled_pts:
+                labeled_pts[label] = []
+            labeled_pts[label].append((len(labeled_pts[label]), pts))
+        
+        # Create point clouds for each label
+        point_clouds = {}
+        
+        for label, points_data in labeled_pts.items():
+            # Concatenate all points for this label
+            all_points = np.concatenate([p[1] for p in points_data])
+            steps = [p[0] for p in points_data]
+            points_per_step = [len(p[1]) for p in points_data]
+            
+            # Create point cloud with opacities array
+            points = k3d.points(
+                positions=all_points,
+                point_size=2.0,
+                shader='3d',
+                color=0x3f6bc5,
+                opacities=np.ones(len(all_points), dtype=np.float32),  # Initialize all visible
+            )
+            
+            # Store metadata
+            point_clouds[label] = {
+                'cloud': points,
+                'steps': steps,
+                'points_per_step': points_per_step
+            }
+            plot += points
+        
+        # Create step slider and debug text
+        max_step = max_step = max([point_clouds[label]['steps'][-1] for label in point_clouds.keys()])
+        step_slider = IntSlider(
+            value=max_step,
+            min=0,
+            max=max_step,
+            step=1,
+            description='Step:',
+            layout=Layout(width='500px')
+        )
+        
+        def update_visibility(change):
+            step = change['new']
+            
+            # Update point cloud visibilities
+            for data in point_clouds.values():
+                cloud = data['cloud']
+                steps = data['steps']
+                points_per_step = data['points_per_step']
+                
+                # Calculate visibility mask
+                visible = np.zeros(sum(points_per_step), dtype=np.float32)
+                current_idx = 0
+                for i, n_points in enumerate(points_per_step):
+                    if steps[i] <= step:
+                        visible[current_idx:current_idx + n_points] = 1
+                    current_idx += n_points
+                
+                # Update point opacities
+                cloud.opacities = visible
+        
+        # Observe slider changes
+        step_slider.observe(update_visibility, names='value')
+        
+        # Display widgets
+        display(step_slider)
+        display(plot)
+
+    def debug(self, method_name="train", **method_kwargs):
+        """Run any method with debugging enabled.
+        
+        Args:
+            method_name: Name of the method to run with debugging
+            **method_kwargs: Arguments to pass to the method
+        """
+        method = getattr(self, method_name)
+        if not callable(method):
+            raise ValueError(f"{method_name} is not a callable method of the class.")
+
+        # Enable debugging before running method
+        self.enable_debug()
+        
+        try:
+            # Run the method with provided kwargs
+            method(**method_kwargs)
+        finally:
+            # Ensure debug is disabled even if method raises exception
+            self.disable_debug()
+
     
 class PINNExperiment(Experiment):
     def __init__(self, config):
@@ -639,3 +786,4 @@ def check_curl_div_at_rnd_pts(experiment):
         torch.nn.functional.mse_loss(div_vals, torch.zeros_like(div_vals)).item(),
         ' vs ',
         experiment.losses["div"][-1])
+    
