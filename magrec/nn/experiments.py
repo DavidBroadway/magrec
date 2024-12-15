@@ -214,7 +214,20 @@ class Experiment:
         self.model = self.build_model()
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.learning_rate)
         self.loss_fn = torch.nn.MSELoss()
-        self.losses = {'train': []}
+        self.losses = self._initialize_losses()
+    def _initialize_losses(self):
+        """Initialize loss buffers based on get_*_sample methods."""
+        losses = {'total': []}  # Always include total loss
+        
+        # Find all get_*_sample methods
+        for attr_name in dir(self):
+            if attr_name.startswith('get_') and attr_name.endswith('_sample'):
+                # Extract the middle part (e.g., 'data' from 'get_data_sample')
+                loss_name = attr_name[len('get_'):-len('_sample')]
+                losses[loss_name] = []
+                
+        return losses
+
 
     def build_model(self):
         # If a model is not provided, build a new one
@@ -329,12 +342,6 @@ class JerschowExperimentLearnB(JerschowExperiment):
     def __init__(self, config):
         super().__init__(config)
         # define extra loss terms to track
-        self.losses = {
-            "total": [],
-            "data": [],
-            "curl": [],
-            "div": [],
-        }
         self.is_trained = False
         
     def load_data(self):
@@ -440,22 +447,17 @@ class JerschowExperimentLearnDecayB(JerschowExperimentLearnBRandomPts):
     def __init__(self, config):
         super().__init__(config)
         # define extra loss terms to track
-        self.losses = {
-            "total": [],
-            "data": [],
-            "curl": [],
-            "div": [],
-        }
         self.is_trained = False
         self.load_data()
         
         regions = DataBlock()
         regions["original"] = self.config.data
         regions["original"]["B_norm"] = np.linalg.norm(regions["original"]["B"], axis=1)
-        regions["all_expanded"] = self.config.data.expand_bounds_2d([(1, 1), (1, 1)])
+        regions["all_expanded"] = self.config.data.expand_bounds_2d([(0.2, 0.2), (0.2, 0.2)])
         regions["y_expanded"] = regions["original"].expand_bounds_2d([(0, 0), (1, 1)])
         regions["sides_expanded"] = (regions["all_expanded"] - regions["y_expanded"])
         regions["sides_expanded"].extend_data(source=regions["original"], source_name="B", target_name="B_decay")
+        self.regions = regions
         self.outer_region_pts = torch.tensor(regions["sides_expanded"].points, dtype=torch.float)
         self.outer_region_vals = torch.tensor(regions["sides_expanded"]["B_decay"], dtype=torch.float)
                 
@@ -490,6 +492,7 @@ class JerschowExperimentLearnDecayB(JerschowExperimentLearnBRandomPts):
     
         if "lr" in kwargs:
             self.optimizer.lr = kwargs["lr"]
+    
         
         try:
             for i in tqdm.trange(n_iters):
@@ -517,7 +520,7 @@ class JerschowExperimentLearnDecayB(JerschowExperimentLearnBRandomPts):
                 self.losses["curl"].append(curl_loss.item())
                 self.losses["div"].append(div_loss.item())
                 self.losses["data"].append(data_loss.item())
-                self.losses["bd_decay"].append(bd_decay_loss.item())
+                self.losses["decay"].append(bd_decay_loss.item())
                 self.losses["total"].append(loss.item())
                 
                 loss.backward()
