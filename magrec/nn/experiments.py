@@ -30,7 +30,7 @@ from magrec.prop.constants import twopi
 from magrec.prop.Propagator import CurrentPropagator2d
 
 from magrec.misc.sampler import GridSampler, NDGridPoints
-from magrec.nn.utils import rotate_vector_field_2d, get_ckpt_path_by_regexp, load_model_from_ckpt, plot_ffs_params, \
+from magrec.nn.utils import rotate_vector_field_2d, get_ckpt_path_by_regexp, load_model_from_ckpt, \
     reshape_rect
 
 import vedo, k3d
@@ -231,7 +231,7 @@ class Experiment:
 
     def _initialize_losses(self):
         """Initialize loss buffers based on get_*_sample methods."""
-        losses = {'total': []}  # Always include total loss
+        losses = {}
         
         # Find all get_*_sample methods
         for attr_name in dir(self):
@@ -239,6 +239,9 @@ class Experiment:
                 # Extract the middle part (e.g., 'data' from 'get_data_sample')
                 loss_name = attr_name[len('get_'):-len('_sample')]
                 losses[loss_name] = []
+
+        if len(losses.keys()) > 1:
+            losses.update({'total': []})  # Always include total loss (if more than one loss)
                 
         return losses
 
@@ -288,9 +291,13 @@ class Experiment:
         # Implement evaluation logic if needed
         pass
 
-    def plot_losses(self, show=False, per_loss_average=False):
+    def plot_losses(self, show=False, per_loss_average=False, slice_to_plot=None):
         # Create a plot with subplots for each loss in `self.losses`
-        fig, axs = plt.subplots(len(self.losses), 1, figsize=(6, 12), sharex=True)
+        figsize = (6, 4 * len(self.losses))
+        fig, axs = plt.subplots(len(self.losses), 1, figsize=figsize, sharex=True)
+        if not isinstance(axs, list):
+            # Ensure axs is a list for consistency
+            axs = [axs]
         if per_loss_average:
             num_losses = (len(self.losses) - 1) if 'total' in self.losses else len(self.losses)
         for i, (k, v) in enumerate(self.losses.items()):
@@ -298,6 +305,8 @@ class Experiment:
                 # if per loss average is enabled, display the total as the average of the other losses
                 v = np.array(v) / num_losses  
                 k = 'total average'
+            if slice_to_plot is not None:
+                v = v[slice_to_plot]
             axs[i].plot(v)
             axs[i].set_ylabel(k + ' loss')
         
@@ -523,6 +532,7 @@ class JerschowExperimentLearnB(JerschowExperiment):
         eps_div = self.config.eps_div
     
         if "lr" in kwargs:
+            print("Setting learning rate to", kwargs["lr"])
             self.optimizer.lr = kwargs["lr"]
         
         try:
@@ -555,6 +565,9 @@ class JerschowExperimentLearnB(JerschowExperiment):
                 self.optimizer.zero_grad()
         except KeyboardInterrupt:
             print("Training interrupted.")
+        finally:
+            # Save the experiment model into a unique file
+            save_model_for_experiment(self.model, self.config, )
         
         self.is_trained = True
                 
@@ -600,7 +613,7 @@ class JerschowExperimentLearnDecayB(JerschowExperimentLearnBRandomPts):
         regions = DataBlock()
         regions["original"] = self.config.data
         regions["original"]["B_norm"] = np.linalg.norm(regions["original"]["B"], axis=1)
-        regions["all_expanded"] = self.config.data.expand_bounds_2d([(0.2, 0.2), (0.2, 0.2)])
+        regions["all_expanded"] = self.config.data.expand_bounds_2d([(1, 1), (1, 1)])
         regions["y_expanded"] = regions["original"].expand_bounds_2d([(0, 0), (1, 1)])
         regions["sides_expanded"] = (regions["all_expanded"] - regions["y_expanded"])
         regions["sides_expanded"].extend_data(source=regions["original"], source_name="B", target_name="B_decay")
@@ -753,6 +766,135 @@ class JerschowExperimentDenoise(ExperimentDenoise):  # mostly dummy alias
         
         return fig
     
+class JerschowExperimentLearnPot(JerschowExperiment):
+    def __init__(self, config):
+        super().__init__(config)
+        
+    def load_data(self):
+        # Define extra data points for curl and div calculations used in this experiment
+        super().load_data()
+        
+    def get_data_sample(self, n):
+        """Returns a tensor of shape (n, l) with n batched samples from an
+        l-d space where data is available."""
+        list_of_indices = torch.randint(low=0, high=len(self.data_pts), size=(n,))
+        return self.data_pts[list_of_indices], self.data_vals[list_of_indices]
+    
+    def get_B(self, pts: torch.Tensor):
+        """The magnetic field B is obtained by applying the gradient to the output of the model."""
+        pts.requires_grad_(True)
+        # compute grad of y wrto inputs (pts) at pts
+        return batched_grad(self.model)(pts)[:, 0, :]
+    
+    def plot_results(self):
+        """Plot the results of the experiment."""
+        self.model.eval()
+        res_vals = self.get_B(self.data_pts).detach().cpu().numpy()
+        self.config.data["B_fit"] = res_vals  # Store the fit results in the data object
+        # This ensures that the order of data values and space points matches 
+        res_vals = self.config.data.get_as_grid("B_fit")
+        data_vals = self.config.data.get_as_grid("B")
+        fig = plot_n_components(
+            [data_vals, res_vals], 
+            title=["Input data", "Fit results"],
+            labels=[r"$B_x$", r"$B_y$", r"$B_z$"], 
+            cmap="RdBu_r", 
+            units=r"{}".format(self.config.units["magnetic_field"]))
+        
+        return fig
+    
+    
+    def train(self, n_iters=1000, **kwargs):
+        data_batch_size = self.config.data_batch_size
+    
+        if "lr" in kwargs:
+            print("Setting learning rate to", kwargs["lr"])
+            self.optimizer.lr = kwargs["lr"]
+        
+        try:
+            self.model.train()
+            for i in tqdm.trange(n_iters):
+                # Implement the training loop specific to Jerschow Experiment
+                # sample data points 
+                train_pts, data_targets = self.get_data_sample(n=data_batch_size)
+                
+                data_est = self.get_B(train_pts)
+                data_loss = self.loss_fn(data_est, data_targets)
+                
+                loss = data_loss
+                self.losses["data"].append(data_loss.item())
+                
+                loss.backward()
+                self.optimizer.step()
+                # zero the gradients
+                self.optimizer.zero_grad()
+        except KeyboardInterrupt:
+            print("Training interrupted. Safely closing the experiment.")
+            self.model.is_trained = True
+            self.model.eval()
+            
+        return self
+    
+    
+class LearnJ(Experiment):
+    def __init__(self, config):
+        super().__init__(config)
+        self.is_trained = False
+        self.load_data()
+        
+    def load_data(self):
+        super().load_data()
+        
+    def get_data_sample(self, n):
+        """Returns a tensor of shape (n, l) with n batched samples from an
+        l-d space where data is available."""
+        list_of_indices = torch.randint(low=0, high=len(self.data_pts), size=(n,))
+        return self.data_pts[list_of_indices], self.data_vals[list_of_indices]
+    
+    def train(self, n_iters=1000, **kwargs):
+        data_batch_size = self.config.data_batch_size
+        batch_size = self.config.batch_size
+        eps_data = self.config.eps_data
+        eps_curl = self.config.eps_curl
+        eps_div = self.config.eps_div
+    
+        if "lr" in kwargs:
+            self.optimizer.lr = kwargs["lr"]
+        
+        try:
+            for i in tqdm.trange(n_iters):
+                # Implement the training loop specific to Jerschow Experiment
+                # sample data points 
+                train_pts, data_targets = self.get_data_sample(n=data_batch_size)
+                curl_pts, curl_targets = self.get_curl_sample(n=batch_size)
+                div_pts, div_targets = self.get_div_sample(n=batch_size)
+                
+                data_est = self.model(train_pts)
+                data_loss = self.loss_fn(data_est, data_targets)
+                
+                curl_vals = self.get_curl_vals(curl_pts)
+                curl_loss = self.loss_fn(curl_vals, curl_targets)
+                
+                div_vals = self.get_div_vals(div_pts)
+                div_loss = self.loss_fn(div_vals, div_targets)
+                
+                loss = eps_data * data_loss + eps_curl * curl_loss + eps_div * div_loss
+                
+                self.losses["curl"].append(curl_loss.item())
+                self.losses["div"].append(div_loss.item())
+                self.losses["data"].append(data_loss.item())
+                self.losses["total"].append(loss.item())
+                
+                loss.backward()
+                self.optimizer.step()
+                # zero the gradients
+                self.optimizer.zero_grad()
+        except KeyboardInterrupt:
+            print("Training interrupted.")
+        
+        self.is_trained = True
+        return self
+    
     
 def check_curl_div_at_rnd_pts(experiment):
     """
@@ -786,4 +928,3 @@ def check_curl_div_at_rnd_pts(experiment):
         torch.nn.functional.mse_loss(div_vals, torch.zeros_like(div_vals)).item(),
         ' vs ',
         experiment.losses["div"][-1])
-    

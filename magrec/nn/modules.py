@@ -3,8 +3,25 @@ import numpy as np
 from magrec.prop.constants import twopi
 import pyvista as pv
 
-import deepxde as dde
+# import deepxde as dde
 
+class FourierFeaturesTransform(torch.nn.Module):
+    """
+    A generic class for Fourier features transforms.
+    
+    Args:
+        B: Fourier wave-vectors tensor of shape (in_features, out_features)
+        short_name: Short name for the transform
+    """
+    def __init__(self, B: torch.Tensor, short_name: str) -> None:
+        super().__init__()
+        self.register_buffer("B", B)
+        self.register_buffer("m", torch.tensor(B.shape[1]))
+        self.short_name = short_name
+
+    def forward(self, x):
+        x = torch.einsum("...c,cj->...j", x, self.B.to(x.device))
+        return torch.cat([torch.cos(x), torch.sin(x)], dim=-1) / torch.sqrt(self.m)
 
 class GaussianFourierFeaturesTransform(torch.nn.Module):
     """
@@ -95,23 +112,23 @@ class LogarithmicFourierFeaturesTransform(torch.nn.Module):
         return torch.cat([torch.cos(x), torch.sin(x)], dim=-1) / torch.sqrt(self.m)
     
     
-class DivergenceFreeTransform2d(torch.nn.Module):
-    """
-    Obtains a 2d divergence-free vector field y(x) from a scalar function f(x):
+# class DivergenceFreeTransform2d(torch.nn.Module):
+#     """
+#     Obtains a 2d divergence-free vector field y(x) from a scalar function f(x):
 
-    y(x) = (∂f/∂y, -∂f/∂x)
+#     y(x) = (∂f/∂y, -∂f/∂x)
 
-    The result is a vector field that is divergence-free by construction.
-    """
+#     The result is a vector field that is divergence-free by construction.
+#     """
 
-    def __init__(self):
-        super().__init__()
+#     def __init__(self):
+#         super().__init__()
 
-    def forward(self, f, x):
-        # Calculate the curl of the field (f, 0):
-        df_dx = dde.grad.jacobian(f, x, i=0, j=0)
-        df_dy = dde.grad.jacobian(f, x, i=0, j=1)
-        return torch.cat([df_dy, -df_dx], dim=1)
+#     def forward(self, f, x):
+#         # Calculate the curl of the field (f, 0):
+#         df_dx = dde.grad.jacobian(f, x, i=0, j=0)
+#         df_dy = dde.grad.jacobian(f, x, i=0, j=1)
+#         return torch.cat([df_dy, -df_dx], dim=1)
     
 
 def uniform_sample_ball_nd(n_samples, n_dim, K, device='cpu'):

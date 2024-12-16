@@ -16,7 +16,9 @@
 twopi = 6.2831853071795862
 
 MU0: float = 1.25663706212  # [mT * mm / A]
-"""Magnetic permeability of free space, 4π * 1e-7 in [H/m = T * m / A]."""
+"""Magnetic permeability of free space, 4π * 1e-7 in [H/m = T * m / A].
+or 4π * 1e-1 [mT * mm / A]."""
+
 
 EPSILON0 = 8.854187817e-12
 

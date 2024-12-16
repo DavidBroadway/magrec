@@ -545,6 +545,29 @@ class MagneticFieldImageData(MagneticFieldDataMixin, pv.ImageData):
         
         return expanded_grid
 
+    @classmethod
+    def _get_as_grid(cls, grid, point_data_name):
+        """Return point data reshaped into a grid matching the mesh structure.
+        Only available for ImageData since it has a regular grid structure.
+        To be used as a class method. Called it `_get_as_grid` to avoid name 
+        clash, was tired of it. 
+        """
+        data = grid[point_data_name]
+        # We need to cast data to a (nx, ny, nz) tensor. ImageData uses
+        # Fortran ordering, meaning that pts and their vals in point_data are
+        # stored in the following way: val[k] = val[i, j] and k = i + j*nx, so
+        # first index changes the fastest. If we want to reshape to (nx, ny, nz), 
+        # we need to view the tensor as (nz, ny, nx) and then permute the axes.
+        # Viewing guarantees that the data is contiguous in memory and the layout 
+        # is as expected.
+        nx, ny, nz = grid.dimensions
+        shape = (nz, ny, nx, 3) if nz > 1 else (ny, nx, 3)
+        if nz > 1:
+            return torch.tensor(data.reshape(*shape)).permute(2, 1, 0, 3)
+        elif nz == 1:
+            return torch.tensor(data.reshape(*shape)).permute(2, 1, 0)
+        else:
+            raise ValueError("Invalid dimensions for the grid.")
     
     def get_as_grid(self, point_data_name):
         """Return point data reshaped into a grid matching the mesh structure.

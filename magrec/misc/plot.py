@@ -10,6 +10,8 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 from PIL import Image
 
+import vedo
+
 plt.rcParams.update({
     "text.usetex": False,
     "font.family": "Helvetica"
@@ -265,6 +267,10 @@ def plot_n_components(
                 c = get_color_map(cmap[map_n - 1])
         elif isinstance(c, (str, matplotlib.colors.Colormap)):
             c = get_color_map(c)
+            
+        if units:
+            if '\mu' not in units:
+                units = units.replace('u', '$\mu$')
         
         if alignment == "horizontal":
             # effectively pad the colorbar by 0.1 on each side
@@ -272,7 +278,6 @@ def plot_n_components(
             cax = fig.add_subplot(cax_gs)
             cbar = fig.colorbar(im, cax=cax, orientation='vertical')
             if units: 
-                units = units.replace('u', '$\mu$')
                 cax.set_title(units, fontsize=9, loc='left')
         elif alignment == "vertical":
             # effectively pad the colorbar by 0.1 on each side
@@ -282,7 +287,6 @@ def plot_n_components(
             # locate ticks at the top of the colorbar
             cax.xaxis.tick_top()
             if units:
-                units = units.replace('u', '$\mu$')
                 cax.set_ylabel(units, fontsize=9, rotation='horizontal', x=0, y=3.7)
                 # put label to the right of the colorbar
                 cax.yaxis.set_label_position('right')
@@ -569,3 +573,113 @@ def get_gridspec(n_components, n_maps, alignment):
         )
     return gs
 
+
+
+def plot_ffs_params(model, ax=None, in_3d=False):
+    """Plot Fourier features parameters using matplotlib (2D) or vedo (3D).
+    
+    Args:
+        model: Model containing Fourier features
+        ax: matplotlib axes (for 2D only)
+        in_3d: Force 3D visualization
+        backend: 'mpl' or 'vedo'
+    """
+    # Get vectors from model
+    try:
+        vectors = model.B.detach().T
+    except AttributeError:
+        vectors = model.get_ffs_as_vectors()  # Shape (N, dim)
+        
+    dim = vectors.shape[1]
+    
+    # Use vedo for 3D or when forced
+    if dim == 3 and in_3d:
+        # Initialize vedo plot
+        plotter = vedo.Plotter()
+        
+        axis_extent = np.abs(vectors).max() * 1.1 
+        
+        # Heuristics regarding the ball radius, to make it look proportional 
+        # to the viewport size
+        ball_radius = axis_extent / 20
+        
+        # Add balls at the vector end points with tooltips
+        for i, v in enumerate(vectors):
+            vector_norm = np.linalg.norm(v)
+            tooltip_text = f"Coords: {v}\nNorm: {vector_norm:.3f}"
+            
+            # Add a ball (sphere) at the vector's end point
+            ball = vedo.Sphere(pos=v, r=np.float32(ball_radius), c='red', alpha=0.7)
+            ball.name = f"Vector {i}"
+            plotter += ball            
+            
+        # Add central axes
+        axes = vedo.Axes(
+            xrange=(-axis_extent,axis_extent),
+            yrange=(-axis_extent,axis_extent),
+            zrange=(-axis_extent,axis_extent),
+            xtitle='x',
+            ytitle='y',
+            ztitle='z',
+            xyshift=0.5,
+            xshift_along_y=0.5,
+            yshift_along_x=0.5,
+            zshift_along_x=0.5,
+            zshift_along_y=0.5,
+            use_global=False,
+        )
+        plotter += axes
+        
+        
+        # Return plotter for display
+        return plotter
+        
+    else:
+        # Use existing matplotlib code for 2D
+        if ax is None:
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+        else:
+            fig = ax.get_figure()
+        
+        ext = 0
+        
+        if not hasattr(model, 'ffs'):
+            ffs = [model]
+        else:
+            ffs = model.ffs
+        
+        for i, ff in enumerate(ffs):
+            Bx = ff.B[0, :].numpy()
+            By = ff.B[1, :].numpy()
+            
+            try:
+                if hasattr(ff, 'std'):
+                    s = ff.std.item()
+                    s_label = "std"
+                    s_label = fr'{ff.short_name} {i} | {s_label} = {s:.3f}'
+                elif hasattr(ff, 'sigma'):
+                    s = ff.sigma.item()
+                    s_label = "$\sigma$"
+                    s_label = fr'{ff.short_name} {i} | {s_label} = {s:.3f}'
+                elif hasattr(ff, 'K'):
+                    s = ff.K
+                    s_label = "K"
+                    s_label = fr'{ff.short_name} {i} | {s_label} = {s:.0f}'
+                elif hasattr(ff, 'r_in') and hasattr(ff, 'r_out'):
+                    n_features = ff.B.shape[1]
+                    s_label = fr'{ff.short_name} {i} | {n_features} pts'
+                    
+                ax.plot(Bx, By, 'o', fillstyle='none', label=s_label)
+                ext = max(ext, np.max(np.abs(Bx)), np.max(np.abs(By)))
+                
+            except Exception as e:
+                print(f"Could not plot layer {i}: {e}")
+        
+        ax.set_aspect('equal')
+        ax.grid(True)
+        ax.set_xlim(-ext*1.1, ext*1.1)
+        ax.set_ylim(-ext*1.1, ext*1.1)
+        ax.legend()
+        
+        return ax

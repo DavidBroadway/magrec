@@ -1,13 +1,22 @@
+import pathlib
 from typing import Union
 from abc import ABC, abstractmethod
 import sys
 
 import torch
 import numpy as np
+import pyvista as pv
 
-from magrec.nn.modules import GaussianFourierFeaturesTransform, DivergenceFreeTransform2d
+from magrec.misc.data import MagneticFieldImageData
+from magrec.nn.modules import (GaussianFourierFeaturesTransform,) # DivergenceFreeTransform2d
 from magrec.prop.Propagator import CurrentPropagator2d
-from magrec.nn.utils import load_model_from_ckpt, plot_ffs_params
+from magrec.nn.utils import load_model_from_ckpt
+
+from magrec import __logpath__
+
+from magrec.misc.plot import plot_ffs_params, plot_n_components
+
+from magrec.prop.constants import MU0, twopi
 
 from magrec.misc.sampler import GridSampler
 
@@ -268,10 +277,6 @@ class FourierFeaturesPINN(L.LightningModule):
         loss = 0 
     
         for x, cond in batch:
-            # This becomes a convoluted logics of where we actually enable tracking
-            # of gradients for the input x. Should it be a responsibility of dataloader
-            # that returns the tensor x? Or should it be modules that operate on x that
-            # enable tracking the gradients? 
             x.requires_grad_(True)
             y_hat = self.soln(x)
             cond_loss = cond.loss(x, y_hat)
@@ -377,46 +382,140 @@ class WireNet(L.LightningModule):
     can be either learned from the reconstruction, or given as a constraint."""
     
     class WirePath(torch.nn.Module):
-            def __init__(self, I=0.0, learnable_I=False):
-                super().__init__()
-                self.I = I
-                if learnable_I:
-                    self.I = torch.nn.Parameter(torch.tensor(I))
-                ff_stds = [(1, 5), (2, 5), (0.5, 5)]
-                self.ffs = torch.nn.ModuleList([GaussianFourierFeaturesTransform(1, n, std) for std, n in (ff_stds)])
-                self.ff_features_n = sum([n * 2 for _, n in ff_stds])
-                self.fcn = torch.nn.Sequential(
-                    torch.nn.Linear(self.ff_features_n, self.ff_features_n),
-                    torch.nn.Sigmoid(),
-                    torch.nn.Linear(self.ff_features_n, 2),
-                )
+        def __init__(self, I=0.0, learnable_I=False, learnable_ffs=False, ff_stds=[(1, 5), (2, 5), (0.5, 5)]):
+            super().__init__()
+            self.learnable_I = learnable_I
+            self.learnable_ffs = learnable_ffs
+            if learnable_I:
+                self.I = torch.nn.Parameter(torch.tensor(I))
+            else:
+                self.register_buffer('I', torch.tensor(I))
                 
-            def forward(self, s):
-                r = torch.cat([ff(s) for ff in self.ffs], dim=1)
-                r = self.fcn(r)
-                return r
+            self.ffs = torch.nn.ModuleList([GaussianFourierFeaturesTransform(1, n, std) for std, n in (ff_stds)])
+            self.ff_features_n = sum([n * 2 for _, n in ff_stds])
+            self.fcn = torch.nn.Sequential(
+                torch.nn.Linear(self.ff_features_n, self.ff_features_n),
+                torch.nn.Sigmoid(),
+                torch.nn.Linear(self.ff_features_n, 2),
+            )
+            
+            self.set_ffs_trainable(learnable_ffs)
+            self.register_buffer('shift', torch.tensor([0., 0.]))
+            """A shift vector by which to move the output of the neural network, so that
+            (0, 0) output is closer to the middle of the input image."""
+            
+        def forward(self, s):
+            r = torch.cat([ff(s) for ff in self.ffs], dim=1)
+            r = self.fcn(r) + self.shift
+            return r
+        
+        def set_ffs_trainable(self, learnable_ffs):
+            for ff in self.ffs:
+                if learnable_ffs:
+                    ff.B = torch.nn.Parameter(ff.B)
+                else:
+                    ff.register_buffer('B', ff.B)
         
                 
-    def __init__(self, I=0.0, learnable_I=False):
+    def __init__(self, 
+                 I=0.0, 
+                 learnable_I=False, 
+                 learning_rate=0.1, 
+                 model_kwargs={}, 
+                 name="wirenet_model_v0",
+                 ):
         super().__init__()
-        self.net = self.WirePath(I, learnable_I)
+        self.net = self.WirePath(I, learnable_I, **model_kwargs)
+        self.learning_rate = learning_rate
+        self.training_step = self._field_training_step  # Default training step
+        self.validation_step = self._field_validation_step  
+        
+        tensorboard_logger = L.loggers.TensorBoardLogger(__logpath__, name=name)
+        self._logger = tensorboard_logger
+        self.log_dir = pathlib.Path(tensorboard_logger.log_dir)
+        
+        ckpt_callback = L.callbacks.ModelCheckpoint(
+            monitor='val_loss',
+            dirpath=self.log_dir / 'checkpoints',
+            filename='wirenet-{epoch:02d}-{val_loss:.2f}',
+            save_top_k=3,
+            mode='min',
+        )
+        
+        last_ckpt_callback = L.callbacks.ModelCheckpoint(
+            dirpath=self.log_dir / 'checkpoints',
+            filename='last',
+            save_top_k=1,
+            save_last=True,
+        )
+        
+        self.callbacks = [ckpt_callback, last_ckpt_callback]
+        
+        # Initialize and start the trainer
+        trainer = self.get_trainer(
+            max_epochs=1000, callbacks=self.callbacks,
+            logger=tensorboard_logger)
+        
+        self.trainer = trainer
                     
     def forward(self, s):
         r = self.net(s)
         return r
     
-    def get_B(self, pos):
+    def get_B_magpylib(self, pos):
         """Returns the magnetic field at the points r generated by the wire."""
         # Sample the wire with s
-        n_pts = 100
+        n_pts = 300
         r = self.net(torch.linspace(0, 1, n_pts).unsqueeze(1))
         # Add z component to the wire with convention that it is at the plane z = 0
         r = torch.cat([r, torch.zeros((n_pts, 1))], dim=1)
         r = r.detach().numpy()  
-        B = magpylib.current.Polyline(position=(0, 0, 0), vertices=r, current=self.net.I).getB(pos)
-        return B
+        B = magpylib.current.Polyline(position=(0, 0, 0), vertices=r, 
+                                      current=self.net.I.item()).getB(pos)
+        return B * 1e6  # to convert to mT and assume lengths are in mm
+
     
-    def fit_to_field(self, field, n_points=None, max_epochs=1000):
+    def get_B(self, pos):
+        """Get magnetic field at positions."""
+        # Convert inputs to tensors
+        if not isinstance(pos, torch.Tensor):
+            pos = torch.tensor(pos, dtype=torch.float32, device=self.device)
+        
+        # Sample wire points
+        n_pts = 300
+        # This tensor probably needs to be created elsewhere to avoid creating it at 
+        # each call of the function. Where does it need to be created? 
+        s = torch.linspace(0, 1, n_pts, device=self.device).unsqueeze(1)
+        r = self.net(s)  # (n_pts, 2)
+        
+        # Add z component
+        wire_points = torch.cat([r, torch.zeros(n_pts, 1, device=self.device)], dim=1)
+        current = self.net.I
+        
+        # Compute B field using scripted function
+        return compute_B_field(wire_points, pos, current)
+    
+    def set_datamodule(self, imagedata, field_name="B", n_points=None):
+        # Heuristically find a vector by which to shift the output of the neural network
+        # so that (0, 0) output of the neural network is in the middle of the input image.
+        center = imagedata.center[:2]  # Extract (x, y) coordinates of the center
+        self.net.shift = torch.tensor(center, dtype=torch.float32, device=self.device)
+
+        datamodule = MagneticFieldDataModule(
+            imagedata=imagedata,
+            field_name=field_name,
+            n_points=n_points,
+        )
+        
+        self.field_name = field_name
+        self.imagedata = imagedata
+        
+        datamodule.setup()
+        self.datamodule = datamodule
+        return self
+    
+    def fit_to_field(self, imagedata: Union[MagneticFieldImageData, pv.PolyData] = None, 
+                     field_name="B", n_points=None, max_epochs=1000):
         """Fits the wire to a given magnetic field using the given optimizer setting.
         
         field (torch.Tensor or numpy.array): 2d field distribution to fit to. The field should be a 2d array
@@ -424,29 +523,93 @@ class WireNet(L.LightningModule):
             corresponds to the number of components of the magnetic field. 
         
         """
-        nx_points, ny_points = field.shape[-2:]
-        grid_pts = GridSampler.sample_grid(nx_points, ny_points, origin=[0, 0], diagonal=[1, 1])
-        train_dataset = torch.utils.data.TensorDataset(grid_pts, field)
-        # Use provided number of points or determine the batch size based on the number of points using a sane heuristic
-        batch_size = max(32, 2 ** int(math.log2(nx_points * ny_points) - 4)) if n_points is None else n_points
-        train_loader = torch.utils.data.DataLoader(train_dataset, 
-                                                   batch_size=batch_size,
-                                                   num_workers=4)
+        if imagedata is None:
+            if not hasattr(self, "datamodule"):
+                raise ValueError("Datamodule is not set. Please call set_datamodule first or pass an imagedata.")
+        else:
+            self.set_datamodule(imagedata, field_name, n_points) 
         
-        val_dataset = torch.utils.data.TensorDataset(grid_pts, field)
-        # For validation, pass all points at once
-        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=nx_points * ny_points)
+        self.trainer.fit(self, datamodule=self.datamodule)
         
-        self.training_step = self._field_training_step
+    def train_dataloader(self):
+        """Initialize and return the training dataloader."""
+        if self.datamodule is None:
+            raise ValueError("Datamodule is not set. Please call fit_to_field first.")
+        return self.datamodule.train_dataloader()
+    
+    def val_dataloader(self):
+        if self.datamodule is None:
+            raise ValueError("Datamodule is not set.")
+        return self.datamodule.val_dataloader()
         
-        self.trainer = L.Trainer(max_epochs=max_epochs)
-        self.trainer.fit(model=self, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    def get_trainer(self, max_epochs=1000, callbacks=None, logger=None):
+        trainer = L.Trainer(
+            default_root_dir=__logpath__,
+            max_epochs=max_epochs, 
+            callbacks=callbacks if callbacks is not None else self.callbacks,
+            logger=logger if logger is not None else self._logger,
+            check_val_every_n_epoch=50)
+        self.trainer = trainer
+        return trainer
         
     def _field_training_step(self, batch, batch_idx):
         pos, B = batch
-        B_pred = torch.tensor(self.get_B(pos))
+        B_pred = self.get_B(pos).type_as(B)
         loss = torch.nn.functional.mse_loss(B_pred, B)
+        
+        self.log('loss', loss, prog_bar=False)
+        
         return loss
+    
+    def on_train_start(self):
+        super().on_train_start()
+        target_figure = plot_n_components(
+            self.imagedata.get_as_grid(self.field_name), 
+            labels=[r"$B_x$", r"$B_y$", r"$B_z$"], cmap="bwr"
+        )
+        self.logger.experiment.add_figure(tag="target", figure=target_figure)
+    
+    def _field_validation_step(self, batch, batch_idx):
+        """Validation step computes field at all points and logs MSE loss."""
+        pos, B = batch
+        B_pred = self.get_B(pos).type_as(B)
+        val_loss = torch.nn.functional.mse_loss(B_pred, B)
+        
+        # Log validation metrics
+        self.log('val_loss', val_loss, prog_bar=True)
+        
+        # Optional: Log component-wise losses
+        B_x_loss = torch.nn.functional.mse_loss(B_pred[:, 0], B[:, 0])
+        B_y_loss = torch.nn.functional.mse_loss(B_pred[:, 1], B[:, 1])
+        B_z_loss = torch.nn.functional.mse_loss(B_pred[:, 2], B[:, 2])
+        
+        self.log('val_Bx_loss', B_x_loss)
+        self.log('val_By_loss', B_y_loss)
+        self.log('val_Bz_loss', B_z_loss)
+        
+        self.imagedata[self.field_name + "_fit"] = B_pred.detach().cpu().numpy()
+        mag_fig = plot_n_components(
+            self.imagedata.get_as_grid(self.field_name + "_fit"),
+            labels=[r"$B_x$", r"$B_y$", r"$B_z$"],
+            cmap="bwr",
+        )
+        
+        self.logger.experiment.add_figure(
+            tag="val/magnetic_field",
+            figure=mag_fig,
+            global_step=self.global_step,
+        )
+        
+        if self.global_step > 50:
+            wire_fig = self.plot_wire()
+            self.logger.experiment.add_figure(
+                tag="val/wire_path",
+                figure=wire_fig,
+                global_step=self.global_step,
+            )
+        
+        return val_loss
+
 
     def fit_to_path(self, path, n_points, max_epochs=1000):
         """Fits the wire to a given path using the given optimizer setting.
@@ -474,6 +637,31 @@ class WireNet(L.LightningModule):
         self.trainer = L.Trainer(max_epochs=max_epochs)
         self.trainer.fit(model=self, train_dataloaders=train_loader, val_dataloaders=val_loader)
         
+    def set_path_once(self, test_path):
+        """Temporarily replace the network's forward pass with a test path.
+        
+        Args:
+            test_path: callable that takes tensor s and returns (x,y) coordinates
+            
+        Returns:
+            self for method chaining
+        """
+        # Store original forward method
+        self._original_forward = self.net.forward
+        
+        # Create wrapped forward call that restores original methods after call
+        def wrapped_forward(pos):
+            try:
+                return test_path(pos).detach()
+            finally:
+                # Restore original methods
+                self.net.forward = self._original_forward
+                
+        # Replace forward with wrapped version
+        self.net.forward = wrapped_forward
+        
+        return self
+        
     def _path_training_step(self, batch, batch_idx):
         s, r = batch
         r_pred = self(s)
@@ -482,18 +670,109 @@ class WireNet(L.LightningModule):
         
     def training_step(self, batch, batch_idx):
         raise NotImplementedError("This method should be overriden.")
+    
+    def validation_step(self, batch, batch_idx):
+        raise NotImplementedError("This method should be overriden depedning on the task.")
 
-    def configure_optimizers(self, lr=1e-3):
-        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         return optimizer
     
-    def plot_wire(self, s_range=[0, 1]):
+    def plot_wire(self, s_range=[0, 1], num_points=100):
         """Create a plot illustrating the obtained solution from the net."""
         fig = plt.figure()
         ax = fig.subplots(1, 1)
-        ss = torch.linspace(*s_range, 100).unsqueeze(1)
-        self.net.eval()
-        rr = self(ss).detach()
+        ss = torch.linspace(*s_range, num_points, device=self.device).unsqueeze(1)
+        try:
+            self.net.eval()
+        finally:
+            pass
+        rr = self(ss).detach().cpu()
         ax.plot(*rr.T)
-        ax.plot(*self.path(ss).T, 'r--')
+        x0, x1, y1, y0, *_ = self.imagedata.bounds
+        extent_x = max(np.abs([x0, x1])) * 1.2
+        extent_y = max(np.abs([y0, y1])) * 1.2
+        ax.set_xlim((-extent_x, extent_x))
+        ax.set_ylim((-extent_y, extent_y))
+        if hasattr(self, "path"):
+            ax.plot(*self.path(ss).T, 'r--')
+            
+        return fig
         
+class MagneticFieldDataModule(L.LightningDataModule):
+    def __init__(self, imagedata, field_name="B", batch_size=None, n_points=None):
+        """
+        PyTorch Lightning DataModule for managing magnetic field data.
+        """
+        super().__init__()
+        self.imagedata = imagedata
+        self.field_name = field_name
+        self.batch_size = batch_size
+        self.n_points = n_points
+
+    def setup(self, stage=None):
+        # Prepare data tensors
+        self.grid_pts = torch.tensor(self.imagedata.points, dtype=torch.float32)
+        self.field_vals = torch.tensor(self.imagedata[self.field_name], dtype=torch.float32)
+        
+        # Use all data for both train and val (can be updated if needed)
+        dataset = torch.utils.data.TensorDataset(self.grid_pts, self.field_vals)
+
+        # Determine batch size heuristically
+        batch_size = (
+            max(32, 2 ** int(math.log2(len(self.grid_pts)) - 4))
+            if self.n_points is None
+            else self.n_points
+        )
+        self.train_dataset = dataset
+        self.val_dataset = dataset
+        self.batch_size = batch_size
+
+    def train_dataloader(self):
+        return torch.utils.data.DataLoader(
+            self.train_dataset, 
+            batch_size=self.batch_size, 
+            num_workers=4,
+            persistent_workers=True,
+            shuffle=True
+            )
+
+    def val_dataloader(self):
+        return torch.utils.data.DataLoader(
+            self.val_dataset, 
+            batch_size=len(self.grid_pts), 
+            persistent_workers=True,
+            num_workers=4
+            )
+        
+        
+# First define scripted helper functions outside the class
+@torch.jit.script
+def compute_B_field(wire_points: torch.Tensor, pos: torch.Tensor, current: torch.Tensor, 
+                    mu0: float = MU0, twopi: float = twopi) -> torch.Tensor:
+    """Compute B field from wire segments at given positions.
+    
+    Args:
+        wire_points: Wire segment points, shape (n_pts, 3)
+        pos: Observation points, shape (n_pos, 3)
+        current: Wire current, scalar
+        
+    Returns:
+        B-field at each position, shape (n_pos, 3)
+    """
+    # Compute segments and midpoints
+    segments = wire_points[1:] - wire_points[:-1]  # (n_segments, 3)
+    midpoints = (wire_points[1:] + wire_points[:-1]) / 2  # (n_segments, 3)
+    
+    # For each segment and position, compute contribution to B field
+    r = pos.unsqueeze(1) - midpoints.unsqueeze(0)  # (n_pos, n_segments, 3)
+    r_norm = torch.norm(r, dim=2, keepdim=True)    # (n_pos, n_segments, 1)
+    r_hat = r / r_norm                             # (n_pos, n_segments, 3)
+    
+    # Biot-Savart law with broadcasting
+    segments_expanded = segments.unsqueeze(0)       # (1, n_segments, 3)
+    B = mu0 / (2 * twopi) * current * torch.cross(segments_expanded, r_hat, dim=2) / (r_norm ** 2)  # (n_pos, n_segments, 3)
+    
+    
+    # Returns the vector of the magnetic field in units of mT
+    return torch.sum(B, dim=1)  # Sum over segments: (n_pos, 3)
