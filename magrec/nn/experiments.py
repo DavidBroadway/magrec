@@ -245,30 +245,6 @@ class Experiment:
                 
         return losses
 
-    def enable_debug(self):
-        """Enable debug mode to collect sample points."""
-        self._debug_enabled = True
-        # Store original methods before wrapping
-        self._original_methods = {}
-        
-        # Dynamically wrap all get_*_sample methods with the debugger
-        for attr_name in dir(self):
-            if attr_name.startswith('get_') and attr_name.endswith('_sample'):
-                method = getattr(self, attr_name)
-                label = attr_name[len('get_'):-len('_sample')]  # Extract label from method name
-                if not hasattr(method, '_original'):  # Only wrap if not already wrapped
-                    self._original_methods[attr_name] = method
-                    setattr(self, attr_name, sample_debugger(method, label).__get__(self))
-
-    def disable_debug(self):
-        """Disable debug mode and restore original methods."""
-        self._debug_enabled = False
-        # Restore original methods
-        if hasattr(self, '_original_methods'):
-            for attr_name, original_method in self._original_methods.items():
-                setattr(self, attr_name, original_method)
-            del self._original_methods
-
     def build_model(self):
         # If a model is not provided, build a new one
         if not self.config.model:
@@ -399,6 +375,31 @@ class Experiment:
         # Display widgets
         display(step_slider)
         display(plot)
+        
+    def enable_debug(self):
+        """Enable debug mode to collect sample points."""
+        self._debug_enabled = True
+        # Store original methods before wrapping
+        self._original_methods = {}
+        
+        # Dynamically wrap all get_*_sample methods with the debugger
+        for attr_name in dir(self):
+            if attr_name.startswith('get_') and attr_name.endswith('_sample'):
+                method = getattr(self, attr_name)
+                label = attr_name[len('get_'):-len('_sample')]  # Extract label from method name
+                if not hasattr(method, '_original'):  # Only wrap if not already wrapped
+                    self._original_methods[attr_name] = method
+                    setattr(self, attr_name, sample_debugger(method, label).__get__(self))
+
+    def disable_debug(self):
+        """Disable debug mode and restore original methods."""
+        self._debug_enabled = False
+        # Restore original methods
+        if hasattr(self, '_original_methods'):
+            for attr_name, original_method in self._original_methods.items():
+                setattr(self, attr_name, original_method)
+            del self._original_methods
+
 
     def debug(self, method_name="train", **method_kwargs):
         """Run any method with debugging enabled.
