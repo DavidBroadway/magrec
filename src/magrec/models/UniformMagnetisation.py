@@ -4,6 +4,7 @@ import torch
 import matplotlib.pyplot as plt
 from magrec.models.generic_model import GenericModel
 from magrec.transformation.Mxy2Bsensor import Mxy2Bsensor
+from magrec.transformation.Ms2Bxyz import Ms2Bxyz
 from magrec.transformation.Fourier import FourierTransform2d
 from magrec.image_processing.Filtering import DataFiltering
 
@@ -27,7 +28,11 @@ class UniformMagnetisation(GenericModel):
         super().__init__(dataset, loss_type, scaling_factor)
 
         # Define the propagator so that this isn't performed during a loop.
-        self.magClass = Mxy2Bsensor(dataset, m_theta = m_theta, m_phi = m_phi)
+        # check if the dataset
+        if len(dataset.target.shape) > 2:
+            self.magClass = Ms2Bxyz(dataset, m_theta = m_theta, m_phi = m_phi)
+        else:
+            self.magClass = Mxy2Bsensor(dataset, m_theta = m_theta, m_phi = m_phi)
         self.std_loss_scaling = std_loss_scaling
         self.loss_weight = loss_weight
         self.source_weight = source_weight
@@ -35,6 +40,7 @@ class UniformMagnetisation(GenericModel):
         self.spatial_filter_width = spatial_filter_width
         self.spatial_filter_type = spatial_filter_type
         self.spatial_filter_kernal_size = spatial_filter_kernal_size
+        self.scaling_factor = scaling_factor
 
         self.positive_magnetisation = positive_magnetisation
 
@@ -99,7 +105,10 @@ class UniformMagnetisation(GenericModel):
         """ 
         # Define the number of targets and sources for the network. 
         self.require = dict()
-        self.require["num_targets"] = 1
+        if len(self.dataset.target.shape) > 2:
+            self.require["num_targets"] = 3
+        else:
+            self.require["num_targets"] = 1
         self.require["num_sources"] = 1
         if self.fit_m_theta or self.fit_m_phi:
             self.require["source_angles"] = True
@@ -112,8 +121,8 @@ class UniformMagnetisation(GenericModel):
         if self.fit_m_phi:
             self.m_phi = m_phi
 
-        if self.m_theta or self.m_phi:
-            self.magClass = Mxy2Bsensor(self.dataset, m_theta = self.m_theta, m_phi = self.m_phi)
+        # if self.m_theta or self.m_phi:
+            # self.magClass = Mxy2Bsensor(self.dataset, m_theta = self.m_theta, m_phi = self.m_phi)
 
         # Apply a spatial filter to the output of the NN
         if self.spatial_filter:
@@ -158,17 +167,20 @@ class UniformMagnetisation(GenericModel):
         Returns:
             results: The results of the neural network
         """
+
         self.results = dict()
         self.results["Magnetisation"] = final_output[0,0,::] / self.scaling_factor
-        self.results["Recon B"] = final_b[0,0, ::] / self.scaling_factor
         self.results["original B"] = self.original_target
-
+        if len(self.results["original B"].shape) > 2:
+            self.results["Recon B"] = final_b / self.scaling_factor
+        else:
+            self.results["Recon B"] = final_b[0,0, ::] / self.scaling_factor
         if remove_padding:
             self.remove_padding_from_results()
         return self.results
     
 
-    def plot_results(self, results):  
+    def plot_results(self, results, brange = None, srange = None):  
         """
         Args:
             nn_output: The output of the neural network
@@ -178,47 +190,121 @@ class UniformMagnetisation(GenericModel):
             None
         """
         
-        plt.figure()
-        plt.subplot(2, 2, 1)
-        plot_data = 1e3*results["original B"]
-        plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-        plt.xticks([])
-        plt.yticks([])
-        cb = plt.colorbar()
-        plt.title('original B')
-        cb.set_label("B (mT)")
+
+        self.recon_fig = plt.figure(figsize=(12, 12))
+
+        def plot_img_data(data, title, plot_range):
+            plt.imshow(data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+            plt.xticks([])
+            plt.yticks([])
+            cb = plt.colorbar()
+            plt.title(title)
+            cb.set_label("B (mT)")
+        
+
+        if len(results["original B"].shape) > 2:
+            # plot all three components of the magnetic field
+            plt.subplot(4, 3, 1)
+            plot_data = 1e3*results["original B"][0,::]
+            plot_range = abs(plot_data).max()
+            plot_img_data(plot_data, "original Bx", plot_range)
 
 
-        plt.subplot(2, 2, 2)
-        plot_data = 1e3*results["Recon B"]
-        plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-        plt.xticks([])
-        plt.yticks([])
-        cb = plt.colorbar()
-        plt.title('reconstructed B')
-        cb.set_label("B (mT)")
+            plt.subplot(4, 3, 2)
+            plot_data = 1e3*results["original B"][1,::]
+            plot_range = abs(plot_data).max()
+            plot_img_data(plot_data, "original By", plot_range)
 
-        plt.subplot(2, 2, 3)
-        plot_data = 1e3*results["original B"] - 1e3*results["Recon B"]
-        plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
-        plt.xticks([])
-        plt.yticks([])
-        cb = plt.colorbar()
-        plt.title('difference $\Delta B$')
-        cb.set_label("B (mT)")
 
-        plt.subplot(2,2,4)
-        plot_data = results["Magnetisation"]
-        plot_range = abs(plot_data).max()
-        plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
-        plt.xticks([])
-        plt.yticks([])
-        cb = plt.colorbar()
-        plt.title('reconstructed M')
-        cb.set_label("M ($\mu_b/nm^2$)")
+            plt.subplot(4, 3, 3)
+            plot_data = 1e3*results["original B"][2,::]
+            plot_range = abs(plot_data).max()
+            plot_img_data(plot_data, "original Bz", plot_range)
+
+
+            plt.subplot(4, 3, 4)
+            plot_data = 1e3*results["Recon B"][0,::]
+            plot_range = abs(plot_data).max()
+            plot_img_data(plot_data, "recon Bx", plot_range)
+
+            plt.subplot(4, 3, 5)
+            plot_data = 1e3*results["Recon B"][1,::]
+            plot_range = abs(plot_data).max()
+            plot_img_data(plot_data, "recon By", plot_range)
+
+            plt.subplot(4, 3, 6)
+            plot_data = 1e3*results["Recon B"][2,::]
+            plot_range = abs(plot_data).max()
+            plot_img_data(plot_data, "recon Bz", plot_range)
+
+            plt.subplot(4, 3, 7)
+            plot_data = 1e3*results["original B"][0,::] - 1e3*results["Recon B"][0,::]
+            plot_range = abs(plot_data).max()
+            plot_img_data(plot_data, "difference $\Delta Bx$", plot_range)
+
+            plt.subplot(4, 3, 8)
+            plot_data = 1e3*results["original B"][2,::] - 1e3*results["Recon B"][2,::]
+            plot_range = abs(plot_data).max()
+            plot_img_data(plot_data, "difference $\Delta By$", plot_range)
+
+            plt.subplot(4, 3, 9)
+            plot_data = 1e3*results["original B"][2,::] - 1e3*results["Recon B"][2,::]
+            plot_range = abs(plot_data).max()
+            plot_img_data(plot_data, "difference $\Delta Bz$", plot_range)
+
+            plt.subplot(4, 3, 10)
+            plot_data = results["Magnetisation"]
+            plot_range = abs(plot_data).max()
+            plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
+            plt.xticks([])
+            plt.yticks([])
+            cb = plt.colorbar()
+            plt.title('reconstructed M')
+            cb.set_label("M ($\mu_b/nm^2$)")
+
+            
+
+        else:
+            plt.subplot(2, 2, 1)
+            plot_data = 1e3*results["original B"]
+            plot_range = abs(plot_data).max()
+            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+            plt.xticks([])
+            plt.yticks([])
+            cb = plt.colorbar()
+            plt.title('original B')
+            cb.set_label("B (mT)")
+
+
+            plt.subplot(2, 2, 2)
+            plot_data = 1e3*results["Recon B"]
+            plot_range = abs(plot_data).max()
+            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+            plt.xticks([])
+            plt.yticks([])
+            cb = plt.colorbar()
+            plt.title('reconstructed B')
+            cb.set_label("B (mT)")
+
+            plt.subplot(2, 2, 3)
+            plot_data = 1e3*results["original B"] - 1e3*results["Recon B"]
+            plot_range = abs(plot_data).max()
+            plt.imshow(plot_data, cmap="bwr", vmin=-plot_range, vmax=plot_range)
+            plt.xticks([])
+            plt.yticks([])
+            cb = plt.colorbar()
+            plt.title('difference $\Delta B$')
+            cb.set_label("B (mT)")
+
+            plt.subplot(2,2,4)
+            plot_data = results["Magnetisation"]
+            plot_range = abs(plot_data).max()
+            plt.imshow(plot_data, cmap="PuOr", vmin=-plot_range, vmax=plot_range)
+            plt.xticks([])
+            plt.yticks([])
+            cb = plt.colorbar()
+            plt.title('reconstructed M')
+            cb.set_label("M ($\mu_b/nm^2$)")
 
 
 class LorentzianBlur(torch.nn.Module):

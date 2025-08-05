@@ -62,6 +62,8 @@ class FCNN(object):
                        n_channels_in=n_channels_in, 
                        n_channels_out=n_channels_out,
                        source_angles=self.source_angles).to(self.device)
+        
+        
 
         # Define the data for loading into the network.
         self.img_comp = torch.Tensor(training_target)
@@ -69,9 +71,14 @@ class FCNN(object):
         self.mask =np.where(self.img_input.numpy()  == 0,0,1) 
 
         # Expand the size of the tensors to include the batch size and channel size
-        self.img_comp = torch.FloatTensor(self.img_comp[np.newaxis, np.newaxis])
-        self.img_input = torch.FloatTensor(self.img_input[np.newaxis, np.newaxis])
-        self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
+        if n_channels_in > 1:
+            self.img_comp = torch.FloatTensor(self.img_comp[np.newaxis])
+            self.img_input = torch.FloatTensor(self.img_input[np.newaxis])
+            self.mask_t = torch.FloatTensor(self.mask[np.newaxis])
+        else:
+            self.img_comp = torch.FloatTensor(self.img_comp[np.newaxis, np.newaxis])
+            self.img_input = torch.FloatTensor(self.img_input[np.newaxis, np.newaxis])
+            self.mask_t = torch.FloatTensor(self.mask[np.newaxis,np.newaxis])
 
         self.train_data_cnn = TensorDataset(self.img_input, self.mask_t)
         self.train_loader = DataLoader(self.train_data_cnn)
@@ -135,7 +142,6 @@ class FCNN(object):
                     # Convert to magnetic field
                     b, outputs = self.model.transform(outputs)
 
-
                 # Compute the loss
                 loss = self.model.calculate_loss(b, self.img_comp, nn_output=outputs)
 
@@ -153,7 +159,6 @@ class FCNN(object):
 
         self.final_output = outputs.detach()
         self.final_Jxy = outputs.detach()
-        # self.final_Jxy = self.Jxy.detach()
         self.final_b = b.detach()
 
         if self.source_angles:
@@ -183,14 +188,14 @@ class FCNN(object):
                                                   self.final_b, 
                                                   remove_padding = remove_padding)
 
-    def plot_results(self, remove_padding = True):
+    def plot_results(self, remove_padding = True,  brange = None, srange = None):
         # Plot the results from the model.
 
         # check is results have been unpacked
         if not hasattr(self, "results"):
             self.results = self.model.extract_results(self.final_output, self.final_b, remove_padding = remove_padding)
 
-        self.model.plot_results(self.results)
+        self.model.plot_results(self.results, brange = brange, srange = srange)
 
     def plot_loss(self):
         # Plot the evolution of the loss function at the end of the train
@@ -220,8 +225,8 @@ class Net(nn.Module):
         self.input_size = len(torch.flatten(target))
 
         # Smaller network
-        self.enc1 = nn.Linear(in_features=self.input_size, out_features=128)
-        self.enc2 = nn.Linear(in_features=128, out_features=64)
+        self.enc1 = nn.Linear(in_features=self.input_size, out_features=256)
+        self.enc2 = nn.Linear(in_features=256, out_features=64)
         self.enc3 = nn.Linear(in_features=64, out_features=32)
         self.enc4 = nn.Linear(in_features=32, out_features=16)
         self.enc5 = nn.Linear(in_features=16, out_features=8)
@@ -230,7 +235,7 @@ class Net(nn.Module):
         self.dec2 = nn.Linear(in_features=16, out_features=32)
         self.dec3 = nn.Linear(in_features=32, out_features=64)
         self.dec4 = nn.Linear(in_features=64, out_features=128)
-        self.dec5 = nn.Linear(in_features=128, out_features= self.n_channels_out * self.input_size)
+        self.dec5 = nn.Linear(in_features=128, out_features= self.n_channels_out * self.output_size[-2] * self.output_size[-1])
 
         self.theta = nn.Linear(in_features=2, out_features=1)  # output layer for theta
         self.phi = nn.Linear(in_features=2, out_features=1)  # output layer for phi
@@ -253,10 +258,10 @@ class Net(nn.Module):
         enc4 = F.relu(self.enc4(enc3))
         enc5 = F.relu(self.enc5(enc4))
 
-        dec1 = F.relu(self.dec1(enc5))
-        dec2 = F.relu(self.dec2(dec1))
-        dec3 = F.relu(self.dec3(dec2))
-        dec4 = F.relu(self.dec4(dec3))
+        dec1 = F.leaky_relu(self.dec1(enc5))
+        dec2 = F.leaky_relu(self.dec2(dec1))
+        dec3 = F.leaky_relu(self.dec3(dec2))
+        dec4 = F.leaky_relu(self.dec4(dec3))
         out = self.dec5(dec4)
 
         final_output =  torch.reshape(out, (1, self.n_channels_out, self.output_size[-2], self.output_size[-1]))

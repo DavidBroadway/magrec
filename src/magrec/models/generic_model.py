@@ -130,7 +130,8 @@ class GenericModel(object):
 
             plt.figure()
             plt.subplot(2,2,1)
-            plt.imshow((self.dataset.target* self.source_weight), cmap='PuOr')
+            plot_data = (self.dataset.target* self.source_weight)
+            plt.imshow(plot_data, cmap='PuOr', vmin=-np.max(np.abs(plot_data)), vmax=np.max(np.abs(plot_data)))
             plt.title("Source weight region")
             plt.colorbar()
 

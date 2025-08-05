@@ -27,7 +27,10 @@ class MagneticFields(GenericTranformation):
             self.ft.kx_vector,
             self.ft.ky_vector,
             self.dataset.sensor_theta,
-            self.dataset.sensor_phi
+            self.dataset.sensor_phi,
+            self.dataset.height,
+            self.dataset.dx,
+            self.dataset.dy,
         )
     
     def transform(self):
