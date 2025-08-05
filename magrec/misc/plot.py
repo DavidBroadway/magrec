@@ -328,7 +328,7 @@ def plot_n_components(
 
 
 def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, 
-                         interpolation='none', cmap='plasma', units=None,
+                         interpolation='none', cmap='plasma', color='black', units=None,
                          title=None, show=False, num_arrows=20, zoom_in_region=None):
     """
     Visualizes the current distribution in 2D as a heatmap of magnitudes and arrows representing the flow direction.
@@ -347,6 +347,9 @@ def plot_vector_field_2d(current_distribution, ax: plt.Axes = None,
     cmap : str, optional
         The colormap to be used for the heatmap. Options are as provided by matplotlib's colormaps.
         Default is 'plasma'.
+        
+    color : str, optional
+        The color of the arrows. Default is 'black'.
             
     units : str, optional
         Show units on the colorbar. Default is None (no units).
@@ -452,7 +455,7 @@ def plot_vector_field_2d(current_distribution, ax: plt.Axes = None,
                                             # than the spacing between arrows blocks.  
     
     ax.quiver(
-        x_grid, y_grid, avg_u, avg_v, color='black',
+        x_grid, y_grid, avg_u, avg_v, color=color,
         pivot='mid', units='width', angles='uv',
         scale=scale, scale_units='width',
     )
