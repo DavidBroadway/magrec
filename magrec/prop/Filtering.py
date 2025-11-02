@@ -43,7 +43,7 @@ class HannFilter():
                                 frequencies to be at [i, j] and negative frequencies to be at [-i, -j] where
                                 i, j ∈ [1, N//2].
         """
-        from magrec.misc.plot import plot_n_components
+        from magrec.plot.plot import plot_n_components
 
         filter = self.filter
         kx_vector = self.ft.kx_vector

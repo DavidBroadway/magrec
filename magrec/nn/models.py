@@ -14,7 +14,7 @@ from magrec.nn.utils import load_model_from_ckpt
 
 from magrec import __logpath__
 
-from magrec.misc.plot import plot_ffs_params, plot_n_components
+from magrec.plot.plot import plot_ffs_params, plot_n_components
 
 from magrec.prop.constants import MU0, twopi
 

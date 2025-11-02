@@ -21,7 +21,7 @@ from skorch import History
 from skorch.callbacks import Callback, EpochTimer, PassthroughScoring, PrintLog
 from skorch.utils import open_file_like
 
-from magrec.misc.plot import plot_n_components
+from magrec.plot.plot import plot_n_components
 from magrec.prop.Fourier import FourierTransform2d
 
 from magrec.prop.Propagator import (AxisProjectionPropagator,
@@ -798,7 +798,7 @@ class HannFilter(Step):
         """
         import matplotlib.pyplot as plt
 
-        from magrec.misc.plot import plot_n_components
+        from magrec.plot.plot import plot_n_components
 
         filter = self.filter
         kx_vector = self.ft.kx_vector

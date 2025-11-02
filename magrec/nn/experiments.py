@@ -25,7 +25,7 @@ from magrec.nn.utils import batched_curl, batched_div, batched_grad, save_model_
 
 from magrec.misc.data import DataBlock, MagneticFieldUnstructuredGrid, MagneticFieldImageData
 
-from magrec.misc.plot import plot_n_components, plot_vector_field_2d, plot_check_aligned_data
+from magrec.plot.plot import plot_n_components, plot_vector_field_2d, plot_check_aligned_data
 from magrec.prop.constants import twopi
 from magrec.prop.Propagator import CurrentPropagator2d
 

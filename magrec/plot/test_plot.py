@@ -5,7 +5,7 @@ from magrec.misc.test_helpers import auto_reference_plot
 @auto_reference_plot
 def test_vector_field_2d():
     """Tests that the function visualize_vector_field_2d works as expected."""
-    from magrec.misc.plot import plot_vector_field_2d
+    from magrec.plot.plot import plot_vector_field_2d
 
     # Create a diverging flow field
     W, H = 30, 20
@@ -31,7 +31,7 @@ def test_vector_field_2d():
 def test_vector_field_2d_sampled():
     """Tests that the function visualize_vector_field_2d works as expected for the case of
     sampled input vector field."""
-    from magrec.misc.plot import plot_vector_field_2d
+    from magrec.plot.plot import plot_vector_field_2d
 
     # Create a diverging flow field
     W, H = 30, 20

@@ -274,7 +274,7 @@ def test_grid_sampler_gridder_ungridder():
     """
     from magrec.misc.sampler import GridSampler
     from magrec.prop.constants import twopi
-    from magrec.misc.plot import plot_n_components
+    from magrec.plot.plot import plot_n_components
     nx = 30
     ny = 60
     pts = GridSampler.sample_grid(nx, ny, [0, 0], [2, 2 * twopi])

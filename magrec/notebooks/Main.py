@@ -32,7 +32,7 @@ from magrec.nn.utils import batched_curl, batched_div, batched_grad
 
 from magrec.misc.data import MagneticFieldUnstructuredGrid
 
-from magrec.misc.plot import plot_n_components, plot_vector_field_2d, plot_check_aligned_data
+from magrec.plot.plot import plot_n_components, plot_vector_field_2d, plot_check_aligned_data
 from magrec.prop.constants import twopi
 from magrec.prop.Propagator import CurrentPropagator2d
 
@@ -229,7 +229,7 @@ class JerschowExperiment(PINNExperiment):
 
     def plot_data(self):
         """Plot the loaded data."""
-        from magrec.misc.plot import plot_n_components
+        from magrec.plot.plot import plot_n_components
 
         # Plot field, background, and data
         fig = plot_n_components(

@@ -5,7 +5,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from magrec.misc.plot import plot_n_components
+from magrec.plot.plot import plot_n_components
 
 import pyvista as pv
 
