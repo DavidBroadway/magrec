@@ -12,6 +12,7 @@ from types import MethodType
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+from numba import jit
 
 from magrec.prop.Fourier import FourierTransform2d
 from magrec.prop.constants import DEFAULT_UNITS, MU0, get_exponent_from_unit
@@ -701,6 +702,249 @@ class InverseCurrentPropagator2d(object):
             J = J.real
         return J
     
+class MagneticDipolePropagator(object):
+    """Propagator to take from magnetic dipoles at location locs ("r_source") 
+    to magnetic field at points pts ("r_sensor").
+    
+    Supports two modes:
+    - use_torch=True: All operations use PyTorch (for autograd/optimization)
+    - use_torch=False: Pre-compiles optimized numba functions (for speed)
+    
+    Example:
+        >>> r_source = torch.tensor([[0., 0., 0.]])  # dipole at origin
+        >>> r_sensor = torch.tensor([[1., 0., 0.]])  # measure at x=1
+        >>> # For optimization with torch gradients
+        >>> prop = MagneticDipolePropagator(r_source, r_sensor, use_torch=True)
+        >>> m = torch.tensor([[0., 0., 1.]], requires_grad=True)
+        >>> B = prop(m)  # uses torch, supports autograd
+        >>> # For fast inference with numba
+        >>> prop = MagneticDipolePropagator(r_source, r_sensor, use_torch=False)
+        >>> m = np.array([[0., 0., 1.]])
+        >>> B = prop(m)  # uses pre-compiled numba
+    """
+    
+    def __init__(self, r_source, r_sensor, use_torch=False):
+        """Initialize the propagator.
+        
+        Args:
+            r_source: (n_source, 3) array of dipole positions
+            r_sensor: (n_sensor, 3) array of sensor positions
+            use_torch: If True, use torch operations (slower but supports autograd).
+                      If False, pre-compile numba functions (faster for inference).
+        """
+        self.use_torch = use_torch
+        
+        # Store as torch tensors
+        if isinstance(r_source, list):
+            r_source = torch.tensor(r_source, dtype=torch.float32)
+        elif isinstance(r_source, np.ndarray):
+            r_source = torch.from_numpy(r_source).float()
+        
+        if isinstance(r_sensor, list):
+            r_sensor = torch.tensor(r_sensor, dtype=torch.float32)
+        elif isinstance(r_sensor, np.ndarray):
+            r_sensor = torch.from_numpy(r_sensor).float()
+        
+        self.r_source = r_source
+        self.r_sensor = r_sensor
+        
+        if use_torch:
+            # Keep everything as torch tensors
+            self.ffm = self.get_ffm(r_source=r_source, r_sensor=r_sensor)
+        else:
+            # Pre-compute and store as numpy for numba
+            self.r_source_np = r_source.numpy()
+            self.r_sensor_np = r_sensor.numpy()
+            
+            # Pre-compile the optimized numba function with actual data
+            # This triggers JIT compilation once during initialization
+            self._compiled_func = self._get_compiled_function(
+                self.r_source_np, self.r_sensor_np
+            )
+    
+    @staticmethod
+    def get_ffm(r_source, r_sensor):
+        """Get forward-field matrix (FFM) for a magnetic dipole propagator.
+        
+        Computes the 3x3 matrix G that relates dipole moment m to field B:
+        B_i(r_sensor) = G_ij(r_sensor, r_source) * m_j(r_source)
+        
+        For a magnetic dipole at r_source with moment m, the field at r_sensor is:
+        B(r) = (μ₀/4π) * [3(m·r̂)r̂ - m] / |r|³
+        
+        where r = r_sensor - r_source, r̂ = r/|r|
+        
+        This gives: G_ij = (μ₀/4π) * [3*r̂_i*r̂_j - δ_ij] / |r|³
+        
+        Args:
+            r_source: (n_source, 3) tensor of dipole positions
+            r_sensor: (n_sensor, 3) tensor of sensor positions
+            
+        Returns:
+            ffm: (n_sensor, n_source, 3, 3) tensor where ffm[i,j] is the 3x3 
+                 matrix relating dipole j to field at sensor i
+        """
+        if isinstance(r_source, list):
+            r_source = torch.tensor(r_source, dtype=torch.float32)
+        
+        if isinstance(r_sensor, list):
+            r_sensor = torch.tensor(r_sensor, dtype=torch.float32)
+        
+        n_sensor = r_sensor.shape[0]
+        n_source = r_source.shape[0]
+        
+        # Compute displacement vectors: r = r_sensor - r_source
+        # Shape: (n_sensor, n_source, 3)
+        r = r_sensor[:, None, :] - r_source[None, :, :]
+        
+        # Compute distances
+        # Shape: (n_sensor, n_source)
+        r_norm = torch.norm(r, dim=-1, keepdim=True)
+        
+        # Compute unit vectors r̂
+        # Shape: (n_sensor, n_source, 3)
+        r_hat = r / (r_norm + 1e-10)  # add small epsilon to avoid division by zero
+        
+        # Compute the 3x3 matrix for each source-sensor pair
+        # G_ij = (μ₀/4π) * [3*r̂_i*r̂_j - δ_ij] / |r|³
+        # Shape: (n_sensor, n_source, 3, 3)
+        
+        # Outer product: r̂_i * r̂_j
+        r_hat_outer = r_hat[:, :, :, None] * r_hat[:, :, None, :]
+        
+        # Identity matrix
+        eye = torch.eye(3, dtype=torch.float32, device=r.device)
+        
+        # Combine terms
+        G = 3.0 * r_hat_outer - eye[None, None, :, :]
+        
+        # Scale by (μ₀/4π) / |r|³
+        prefactor = MU0 / (4 * torch.pi) / (r_norm[:, :, :, None] ** 3 + 1e-30)
+        ffm = prefactor * G
+        
+        # Handle cases where r = 0 (dipole at sensor location)
+        mask = r_norm[:, :, 0, None, None] < 1e-10
+        ffm = torch.where(mask, torch.tensor(float('inf')), ffm)
+        
+        return ffm
+    
+    @staticmethod
+    def _get_compiled_function(r_source, r_sensor):
+        """Create and pre-compile optimized numba function for this geometry.
+        
+        Args:
+            r_source: (n_source, 3) numpy array
+            r_sensor: (n_sensor, 3) numpy array
+            
+        Returns:
+            Compiled function that computes B from m
+        """
+        # Trigger compilation with dummy data
+        n_source = r_source.shape[0]
+        dummy_m = np.zeros((n_source, 3), dtype=np.float32)
+        _ = _compute_dipole_field_optimized(r_source, r_sensor, dummy_m)
+        
+        # Return the compiled function bound to these specific positions
+        def compute_field(m):
+            return _compute_dipole_field_optimized(r_source, r_sensor, m)
+        
+        return compute_field
+    
+    def __call__(self, m):
+        """Compute magnetic field from dipole moments.
+        
+        Args:
+            m: (n_source, 3) array of dipole moments (numpy or torch tensor)
+            
+        Returns:
+            B: (n_sensor, 3) magnetic field (same type as input)
+        """
+        if self.use_torch:
+            # Use torch operations (supports autograd)
+            if isinstance(m, np.ndarray):
+                m = torch.from_numpy(m).float()
+            
+            # FFM has shape (n_sensor, n_source, 3, 3)
+            # m has shape (n_source, 3)
+            # B[i, k] = sum_j sum_l FFM[i, j, k, l] * m[j, l]
+            B = torch.einsum('ijkl,jl->ik', self.ffm, m)
+            
+            return B
+        else:
+            # Use pre-compiled numba function (fast)
+            was_torch = isinstance(m, torch.Tensor)
+            if was_torch:
+                m_np = m.detach().cpu().numpy()
+            else:
+                m_np = m
+            
+            B_np = self._compiled_func(m_np)
+            
+            # Return same type as input
+            if was_torch:
+                return torch.from_numpy(B_np)
+            else:
+                return B_np
+
+
+@jit(nopython=True, cache=True, fastmath=True, parallel=True)
+def _compute_dipole_field_optimized(r_source, r_sensor, m):
+    """Optimized numba function to compute magnetic dipole field.
+    
+    Computes the field directly from positions and dipole moments,
+    avoiding storage of large FFM matrices. Uses parallel loops for speed.
+    
+    For a magnetic dipole at r_source with moment m, field at r_sensor is:
+    B(r) = (μ₀/4π) * [3(m·r̂)r̂ - m] / |r|³
+    
+    Args:
+        r_source: (n_source, 3) array of dipole positions
+        r_sensor: (n_sensor, 3) array of sensor positions  
+        m: (n_source, 3) array of dipole moments
+        
+    Returns:
+        B: (n_sensor, 3) array of magnetic field
+    """
+    n_sensor = r_sensor.shape[0]
+    n_source = r_source.shape[0]
+    B = np.zeros((n_sensor, 3), dtype=np.float32)
+    
+    mu0_4pi = 1e-7  # μ₀/(4π) in SI units
+    
+    # Parallel loop over sensors
+    for i in range(n_sensor):
+        # Accumulate contributions from all source dipoles
+        for j in range(n_source):
+            # Displacement vector r = r_sensor - r_source
+            rx = r_sensor[i, 0] - r_source[j, 0]
+            ry = r_sensor[i, 1] - r_source[j, 1]
+            rz = r_sensor[i, 2] - r_source[j, 2]
+            
+            # Distance |r|
+            r_norm = np.sqrt(rx*rx + ry*ry + rz*rz)
+            
+            # Skip if too close (avoid singularity)
+            if r_norm < 1e-10:
+                continue
+            
+            # Unit vector r̂
+            r_norm_inv = 1.0 / r_norm
+            rx_hat = rx * r_norm_inv
+            ry_hat = ry * r_norm_inv
+            rz_hat = rz * r_norm_inv
+            
+            # Dot product m·r̂
+            m_dot_rhat = m[j, 0]*rx_hat + m[j, 1]*ry_hat + m[j, 2]*rz_hat
+            
+            # Prefactor: (μ₀/4π) / |r|³
+            prefactor = mu0_4pi / (r_norm * r_norm * r_norm)
+            
+            # B = (μ₀/4π) * [3(m·r̂)r̂ - m] / |r|³
+            B[i, 0] += prefactor * (3.0 * m_dot_rhat * rx_hat - m[j, 0])
+            B[i, 1] += prefactor * (3.0 * m_dot_rhat * ry_hat - m[j, 1])
+            B[i, 2] += prefactor * (3.0 * m_dot_rhat * rz_hat - m[j, 2])
+    
+    return B
     
     
 class CurrentDipolePropagator(object):
@@ -879,5 +1123,8 @@ class AxisProjectionPropagator(object):
 
         # Setting the viewpoint
         ax.view_init(elev=20., azim=30)
+        
+# TODO: Implement MagneticFieldComponentsPropagator using the kernel
+# 
         
         
