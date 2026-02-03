@@ -27,9 +27,79 @@ from magrec.prop.Kernel import (
 
 from magrec.misc.sampler import GridSampler
 
+class Propagator(object):
+    def __init__(self, *args, **kwargs):
+        pass
+    
+    def __call__(self, *args, **kwargs):
+        pass
+    
+    def to(self, device: torch.device | str):
+        pass
+    
+    def set_units(self, *units):
+        """Set the units of the propagator and rescale the unit-dependent matrix.
+        
+        Expects subclasses to define:
+            self.units: dict with keys {"current", "length", "magnetic_field"}
+            self._units_matrix_attr: name of matrix attribute to rescale
+        """
+        if not hasattr(self, "units"):
+            self.units = DEFAULT_UNITS.copy()
+        
+        if not hasattr(self, "_units_matrix_attr"):
+            raise RuntimeError("Units matrix attribute not defined on this propagator.")
+        
+        matrix = getattr(self, self._units_matrix_attr, None)
+        if matrix is None:
+            raise RuntimeError(f"Units matrix `{self._units_matrix_attr}` not found on this propagator.")
+        
+        updated_units = self.units.copy()
+        
+        if len(units) == 1 and isinstance(units[0], dict):
+            updated_units.update(units[0])
+        else:
+            for unit in units:
+                if isinstance(unit, dict):
+                    raise ValueError("If dict is provided, it must be the only argument.")
+                if not isinstance(unit, str):
+                    raise ValueError(f"Units must be strings or a dict, got {type(unit)}.")
+                if unit[-1] == "m":
+                    updated_units["length"] = unit
+                elif unit[-1] == "A":
+                    updated_units["current"] = unit
+                elif unit[-1] == "T":
+                    updated_units["magnetic_field"] = unit
+                else:
+                    raise ValueError(f"Units must end with 'm', 'A', or 'T', got `{unit}`.")
+        
+        updated_exponents = {}
+        default_exponents = {}
+        for key in updated_units.keys():
+            default_exponents[key] = get_exponent_from_unit(self.units[key])
+            updated_exponents[key] = get_exponent_from_unit(updated_units[key])
+        
+        base_exponent = \
+            (default_exponents["magnetic_field"] - updated_exponents["magnetic_field"]) + \
+            (default_exponents["length"] - updated_exponents["length"]) - \
+            (default_exponents["current"] - updated_exponents["current"])
+        sign = getattr(self, "_units_prefactor_sign", 1)
+        prefactor_exponent = sign * base_exponent
+        
+        matrix = matrix * (10 ** prefactor_exponent)
+        setattr(self, self._units_matrix_attr, matrix)
+        self.units = updated_units
+        return self
+    
+    def get_units(self):
+        return self.units
+    
+    def get_units_dict(self):
+        return self.units.copy()
+
 
 # CurrentFourierPropagtor3d
-class CurrentFourierPropagator3d(object):
+class CurrentFourierPropagator3d(Propagator):
     def __init__(
         self,
         shape,
@@ -245,7 +315,7 @@ class CurrentFourierPropagator3d(object):
         return B
 
 
-class MagnetizationPropagator2d(object):
+class MagnetizationPropagator2d(Propagator):
 
     def __init__(self, source_shape, dx, dy, height, layer_thickness):
         """
@@ -398,7 +468,7 @@ class MagnetizationPropagator2d(object):
         return filter
 
 
-class CurrentPropagator2d(object):
+class CurrentPropagator2d(Propagator):
     def __init__(self, source_shape, dx, dy, height, layer_thickness, real_signal=True, units=None):
         """
         Create a propagator for a 2d current density that computes the magnetic field at `height` above
@@ -418,6 +488,8 @@ class CurrentPropagator2d(object):
         self.j_to_b_matrix = CurrentLayerFourierKernel2d\
             .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, height, layer_thickness)
         """Forward field matrix that connects sources to the measured field"""
+        self._units_matrix_attr = "j_to_b_matrix"
+        self._units_prefactor_sign = 1
 
         # Take into the account provided units, if any, otherwise use default `DEFAULT_UNITS`
         self.units = DEFAULT_UNITS.copy()
@@ -457,86 +529,6 @@ class CurrentPropagator2d(object):
         b = torch.einsum("...ijkl,...jkl->...ikl", self.j_to_b_matrix, j)
         return b
     
-    def set_units(self, *units):
-        """Set the units of the propagator if they are different from the default units.
-        
-        `units` can be a dict with some of the keys `current`, `length` and `magnetic_field` that 
-        specify the units of the current, length, and magnetic field, respectively, to be updated. 
-        Example:
-        
-        units = {
-            "current": "A",
-            "length": "mm",
-            "magnetic_field": "mT"
-        } <--- default units
-        
-        units = {
-            "current": "mA",
-            "length": "um",  # micrometers
-            "magnetic_field": "uT"  # microtesla
-        } <--- modified units that warrant changing `self.j_to_b_matrix` 
-        
-        Also `set_units` accepts up to three positional arguments that specify the units of the current, 
-        length, and magnetic field, respectively, as string. Order of the arguments is not important, 
-        and will be figured out from the major units of the provided strings "T" for magnetic field, 
-        "A" for current, and "m" for length.
-        
-        Values assumed to be affected by the units are the following (from magrec.prop.constants):
-        
-            MU0: float = 1.25663706212  # [mT * mm / A]
-            
-        Other values with units as assumed to be already in the proper units, e.g. 
-        
-            `height`, `layer_thickness`, `dx`, `dy`         units["length"]
-            `J`                                             units["current"] / units["length"]^2
-            `j` (Fourier image of J)                        units["current"]
-            
-        To get the proper units for the magnetic field, we modify MU0 to account for the change in units.
-        Since MU0 is already contained as a multiplicative factor in `self.j_to_b_matrix`, we modify it by
-        the factor we calculate from the change of units from the default to the provided units.
-        """
-        # copy the default units and update them with the provided units
-        updated_units = self.units.copy()
-        
-        for unit in units:
-            if isinstance(unit, dict):
-                updated_units.update(unit)
-                if len(units) > 1:
-                    raise ValueError("If dict is provided as an argument, it must be the only argument, \
-                        but got {} arguments in {}.".format(len(units), units))
-            elif not isinstance(unit, str):
-                raise ValueError("Provided arguments must be must be one or more strings or a dict, \
-                    but got type `{}` instead for {} in {}.".format(type(unit), unit, units))
-            elif unit[-1] == "m":
-                updated_units["length"] = unit
-            elif unit[-1] == "A":
-                updated_units["current"] = unit
-            elif unit[-1] == "T":
-                updated_units["magnetic_field"] = unit
-            else:
-                raise ValueError("Units specification have one of 'm', 'A', or 'T' endings for length, \
-                                    current, and magnetic field, respectively, got `{}`.".format(unit))
-    
-        # Prepare dicts with exponents of the units, to calculate the multiplicative prefactor
-        updated_exponents = {}
-        default_exponents = {}
-        # Iterate throught the keys of the units dict and get the exponents of the units, 
-        # and obtain the exponents of the  already set units
-        for key in updated_units.keys():
-            default_exponents[key] = get_exponent_from_unit(self.units[key])
-            updated_exponents[key] = get_exponent_from_unit(updated_units[key])
-        # Prefactor exponent is the order by which the multiplicative factor differs in set units from the updated units
-        prefactor_exponent = \
-            (default_exponents["magnetic_field"] - updated_exponents["magnetic_field"]) + \
-            (default_exponents["length"] - updated_exponents["length"]) - \
-            (default_exponents["current"] - updated_exponents["current"])
-        # The reason to update the prefactor of this matrix, is that this is the only unit conversion point, which is not
-        # supplied by the user, and it uses the constant which connects a new quantity (magnetic field) to those supplied 
-        # by the user (current and length). 
-        self.j_to_b_matrix = self.j_to_b_matrix * (10 ** (prefactor_exponent))
-        self.units = updated_units
-        return self
-
     def B_from_J(self, J):
         if isinstance(J, np.ndarray):
             J = torch.from_numpy(J)
@@ -549,7 +541,7 @@ class CurrentPropagator2d(object):
         return B
     
     
-class InverseCurrentPropagator2d(object):
+class InverseCurrentPropagator2d(Propagator):
     def __init__(self, source_shape, dx, dy, height, 
                  layer_thickness, real_signal=True, units=None,
                  filters=None
@@ -572,6 +564,8 @@ class InverseCurrentPropagator2d(object):
         self.b_to_j_matrix = InverseCurrentLayerFourierKernel2d\
             .define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, height, layer_thickness)
         """Inverse field matrix that connects the measured field to sources in 2d case"""
+        self._units_matrix_attr = "b_to_j_matrix"
+        self._units_prefactor_sign = -1
 
         # Take into the account provided units, if any, otherwise use default `DEFAULT_UNITS`
         self.units = DEFAULT_UNITS.copy()
@@ -609,88 +603,6 @@ class InverseCurrentPropagator2d(object):
         j = torch.einsum("...ijkl,...jkl->...ikl", self.b_to_j_matrix, b)
         return j
     
-    def set_units(self, *units):
-        """Set the units of the propagator if they are different from the default units.
-        
-        `units` can be a dict with some of the keys `current`, `length` and `magnetic_field` that 
-        specify the units of the current, length, and magnetic field, respectively, to be updated. 
-        Example:
-        
-        units = {
-            "current": "A",
-            "length": "mm",
-            "magnetic_field": "mT"
-        } <--- default units
-        
-        units = {
-            "current": "mA",
-            "length": "um",  # micrometers
-            "magnetic_field": "uT"  # microtesla
-        } <--- modified units that warrant changing `self.j_to_b_matrix` 
-        
-        Also `set_units` accept up to three positional arguments that specify the units of the current, 
-        length, and magnetic field, respectively, as string. Order of the arguments is not important, 
-        and will be figured out from the major units of the provided strings "T" for magnetic field, 
-        "A" for current, and "m" for length.
-        
-        Values assumed to be affected by the units are the following (from magrec.prop.constants):
-        
-            MU0: float = 1.25663706212  # [mT * mm / A]
-            
-        Other values with units as assumed to be already in the proper units, e.g. 
-        
-            `height`, `layer_thickness`, `dx`, `dy`         units["length"]
-            `J`                                             units["current"] / units["length"]^2
-            `j` (Fourier image of J)                        units["current"]
-            
-        To get the proper units for the magnetic field, we modify MU0 to account for the change in units.
-        Since MU0 is already contained as a multiplicative factor in `self.j_to_b_matrix`, we modify it by
-        the factor we calculate from the change of units from the default to the provided units.
-        """
-        # copy the default units and update them with the provided units
-        updated_units = self.units.copy()
-        
-        if len(units) == 1:
-            if isinstance(units[0], dict):
-                units = units[0]
-                updated_units.update(units)
-            else:
-                raise ValueError("If only one argument is provided, it must be a dict with the units to be updated.")
-        elif len(units) > 1:
-            for unit in units:
-                if not isinstance(unit, str):
-                    raise ValueError("If more than one argument is provided, they must be strings, \
-                        but got type `{}` instead for {}.".format(type(unit), unit))
-                if unit[-1] == "m":
-                    updated_units["length"] = unit
-                elif unit[-1] == "A":
-                    updated_units["current"] = unit
-                elif unit[-1] == "T":
-                    updated_units["magnetic_field"] = unit
-                else:
-                    raise ValueError("Units specification have one of 'm', 'A', or 'T' endings for length, \
-                                     current, and magnetic field, respectively, got `{}`.".format(unit))
-        
-        # Prepare dicts with exponents of the units, to calculate the multiplicative prefactor
-        updated_exponents = {}
-        default_exponents = {}
-        # Iterate throught the keys of the units dict and get the exponents of the units, 
-        # and obtain the exponents of the  already set units
-        for key in updated_units.keys():
-            default_exponents[key] = get_exponent_from_unit(self.units[key])
-            updated_exponents[key] = get_exponent_from_unit(updated_units[key])
-        # Prefactor exponent is the order by which the multiplicative factor differs in set units from the updated units
-        prefactor_exponent = \
-          - (default_exponents["magnetic_field"] - updated_exponents["magnetic_field"]) - \
-            (default_exponents["length"] - updated_exponents["length"]) + \
-            (default_exponents["current"] - updated_exponents["current"])
-        # The reason to update the prefactor of this matrix, is that this is the only unit conversion point, which is not
-        # supplied by the user, and it uses the constant which connects a new quantity (magnetic field) to those supplied 
-        # by the user (current and length). 
-        self.b_to_j_matrix = self.b_to_j_matrix * (10 ** (prefactor_exponent))
-        self.units = updated_units
-        return self
-
     def J_from_B(self, B):
         if isinstance(B, np.ndarray):
             B = torch.from_numpy(B)
@@ -702,65 +614,138 @@ class InverseCurrentPropagator2d(object):
             J = J.real
         return J
     
-class MagneticDipolePropagator(object):
-    """Propagator to take from magnetic dipoles at location locs ("r_source") 
-    to magnetic field at points pts ("r_sensor").
+class MagneticDipolePropagator(Propagator):
+    """Propagator from magnetic dipoles at r_source to magnetic field at r_sensor.
     
-    Supports two modes:
-    - use_torch=True: All operations use PyTorch (for autograd/optimization)
-    - use_torch=False: Pre-compiles optimized numba functions (for speed)
-    
-    Example:
-        >>> r_source = torch.tensor([[0., 0., 0.]])  # dipole at origin
-        >>> r_sensor = torch.tensor([[1., 0., 0.]])  # measure at x=1
-        >>> # For optimization with torch gradients
-        >>> prop = MagneticDipolePropagator(r_source, r_sensor, use_torch=True)
-        >>> m = torch.tensor([[0., 0., 1.]], requires_grad=True)
-        >>> B = prop(m)  # uses torch, supports autograd
-        >>> # For fast inference with numba
-        >>> prop = MagneticDipolePropagator(r_source, r_sensor, use_torch=False)
-        >>> m = np.array([[0., 0., 1.]])
-        >>> B = prop(m)  # uses pre-compiled numba
+    Two backends: 'torch' for autograd/optimization, 'numba' for fast inference.
+    The implementation is bound at construction time to avoid branches in __call__.
     """
     
-    def __init__(self, r_source, r_sensor, use_torch=False):
-        """Initialize the propagator.
+    MAX_FFM_SIZE_IN_MB = 100
+    
+    def __init__(self, r_source, r_sensor, backend='torch', method='matrix', dtype=torch.float32, device='cpu'):
+        """Initialize the propagator. Builds data structures and binds forward to the chosen implementation.
         
         Args:
             r_source: (n_source, 3) array of dipole positions
             r_sensor: (n_sensor, 3) array of sensor positions
-            use_torch: If True, use torch operations (slower but supports autograd).
-                      If False, pre-compile numba functions (faster for inference).
+            backend: 'torch' or 'numba'. Torch for autograd, numba for speed.
+            method: 'matrix' or 'fourier'. If 'matrix', precompute FFM. Fourier not implemented here.
+            dtype: torch dtype for tensors (torch.float32 or torch.float64)
+            device: 'cpu' or 'cuda' (only for torch backend)
         """
-        self.use_torch = use_torch
+        if len(r_source.shape) != 2:
+            raise RuntimeError(f"r_source must be 2D, got shape {r_source.shape}")
+        if len(r_sensor.shape) != 2:
+            raise RuntimeError(f"r_sensor must be 2D, got shape {r_sensor.shape}")
         
-        # Store as torch tensors
-        if isinstance(r_source, list):
-            r_source = torch.tensor(r_source, dtype=torch.float32)
-        elif isinstance(r_source, np.ndarray):
-            r_source = torch.from_numpy(r_source).float()
+        if r_source.shape[1] > r_source.shape[0]:
+            warnings.warn(f"r_source expected (N, 3), got {r_source.shape}. Transposing.")
+            r_source = r_source.T
+        if r_sensor.shape[1] > r_sensor.shape[0]:
+            warnings.warn(f"r_sensor expected (N, 3), got {r_sensor.shape}. Transposing.")
+            r_sensor = r_sensor.T
         
-        if isinstance(r_sensor, list):
-            r_sensor = torch.tensor(r_sensor, dtype=torch.float32)
-        elif isinstance(r_sensor, np.ndarray):
-            r_sensor = torch.from_numpy(r_sensor).float()
-        
-        self.r_source = r_source
-        self.r_sensor = r_sensor
-        
-        if use_torch:
-            # Keep everything as torch tensors
-            self.ffm = self.get_ffm(r_source=r_source, r_sensor=r_sensor)
-        else:
-            # Pre-compute and store as numpy for numba
-            self.r_source_np = r_source.numpy()
-            self.r_sensor_np = r_sensor.numpy()
-            
-            # Pre-compile the optimized numba function with actual data
-            # This triggers JIT compilation once during initialization
-            self._compiled_func = self._get_compiled_function(
-                self.r_source_np, self.r_sensor_np
+        expected_size_in_MB = MagneticDipolePropagator.get_expected_ffm_size(r_source, r_sensor)
+        if expected_size_in_MB > self.MAX_FFM_SIZE_IN_MB:
+            raise RuntimeError(
+                "Expected size of the forward-field matrix is {:.2f} MB, which is larger than {:.2f} MB. "
+                "This is not feasible.".format(expected_size_in_MB, self.MAX_FFM_SIZE_IN_MB)
             )
+        
+        self.dtype = dtype
+        self.device = device
+        self.r_source = self._as_tensor(r_source)
+        self.r_sensor = self._as_tensor(r_sensor)
+        self.n_source = self.r_source.shape[0]
+        self.n_sensor = self.r_sensor.shape[0]
+        
+        if backend == 'torch':
+            if method == 'matrix':
+                self.ffm = self.get_ffm(self.r_source, self.r_sensor).to(dtype=dtype, device=device)
+                self.forward = self._forward_torch_matrix
+            elif method == 'fourier':
+                raise NotImplementedError("Fourier method not yet implemented")
+            else:
+                raise ValueError(f"Unknown method: {method}")
+        elif backend == 'numba':
+            r_source_np = self.r_source.cpu().numpy().astype(np.float32)
+            r_sensor_np = self.r_sensor.cpu().numpy().astype(np.float32)
+            self._compiled_func = self._get_compiled_function(r_source_np, r_sensor_np)
+            self.forward = self._forward_numba
+        else:
+            raise ValueError(f"Unknown backend: {backend}")
+    
+    def _as_tensor(self, x):
+        """Convert to torch tensor with instance dtype/device."""
+        if isinstance(x, torch.Tensor):
+            return x.to(dtype=self.dtype, device=self.device)
+        return torch.tensor(x, dtype=self.dtype, device=self.device)
+    
+    def _forward_torch_matrix(self, m):
+        """FFM-based forward. m: (n_source, 3) -> B: (n_sensor, 3)."""
+        return torch.einsum('ijkl,jl->ik', self.ffm, m)
+    
+    def _forward_numba(self, m):
+        """Numba-compiled forward. Accepts torch or numpy, returns same type."""
+        was_torch = isinstance(m, torch.Tensor)
+        m_np = m.detach().cpu().numpy() if was_torch else m
+        B_np = self._compiled_func(m_np.astype(np.float32))
+        return torch.from_numpy(B_np).to(self.dtype) if was_torch else B_np
+    
+    def __call__(self, m):
+        """Compute B field from dipole moments m. Shape: (n_source, 3) -> (n_sensor, 3)."""
+        return self.forward(m)
+    
+    @staticmethod
+    def get_expected_ffm_size(source=None, sensor=None, type="float32", out_units="MB", as_float=False, print_result=False):
+        """Get the expected size of the forward-field matrix in MB."""
+        if type == "float32":
+            element_size = 32
+        elif type == "float64":
+            element_size = 64
+        elif type == "float16":
+            element_size = 16
+        else:
+            element_size = 32
+        
+        if isinstance(source, (list, np.ndarray)):
+            source = torch.tensor(source, dtype=torch.float32)
+            M = source.shape[0]
+        elif isinstance(source, torch.Tensor):
+            M = source.shape[0]
+        elif isinstance(source, int):
+            M = source
+        else:
+            raise AttributeError(f"Unexpected type for source: {type(source)}.")
+        
+        if isinstance(sensor, (list, np.ndarray)):
+            sensor = torch.tensor(sensor, dtype=torch.float32)
+            N = sensor.shape[0]
+        elif isinstance(sensor, torch.Tensor):
+            N = sensor.shape[0]
+        elif isinstance(sensor, int):
+            N = sensor
+        else:
+            raise AttributeError(f"Unexpected type for sensor: {type(sensor)}.")
+        
+        if out_units == "KB":
+            r = 3 * M * 3 * N * element_size / 8 / 1024
+        elif out_units == "MB":
+            r = 3 * M * 3 * N * element_size / 8 / 1024 / 1024
+        elif out_units == "GB":
+            r = 3 * M * 3 * N * element_size / 8 / 1024 / 1024 / 1024
+        else:
+            raise ValueError("Invalid output units, must be one of 'KB', 'MB', 'GB'")
+        
+        if as_float:
+            r = r.float()
+            return r
+        else:
+            if print_result:
+                print(f"{r:.2f} {out_units}")
+            else:
+                return r
     
     @staticmethod
     def get_ffm(r_source, r_sensor):
@@ -801,9 +786,16 @@ class MagneticDipolePropagator(object):
         # Shape: (n_sensor, n_source)
         r_norm = torch.norm(r, dim=-1, keepdim=True)
         
+        # Handle cases where r = 0 (dipole at sensor location)
+        # Check where r_norm is close to 0:
+        if torch.any(r_norm < 1e-30):
+            j_idx, i_idx = torch.where(r_norm < 1e-30)
+            raise ValueError(f"r_norm < 1e-30 in {j_idx.shape, i_idx.shape}, j_idx: {j_idx}, i_idx: {i_idx}.")
+      
+        
         # Compute unit vectors r̂
         # Shape: (n_sensor, n_source, 3)
-        r_hat = r / (r_norm + 1e-10)  # add small epsilon to avoid division by zero
+        r_hat = r / r_norm  # add small epsilon to avoid division by zero
         
         # Compute the 3x3 matrix for each source-sensor pair
         # G_ij = (μ₀/4π) * [3*r̂_i*r̂_j - δ_ij] / |r|³
@@ -813,19 +805,15 @@ class MagneticDipolePropagator(object):
         r_hat_outer = r_hat[:, :, :, None] * r_hat[:, :, None, :]
         
         # Identity matrix
-        eye = torch.eye(3, dtype=torch.float32, device=r.device)
+        eye = torch.eye(3, dtype=r.dtype, device=r.device)
         
         # Combine terms
         G = 3.0 * r_hat_outer - eye[None, None, :, :]
         
         # Scale by (μ₀/4π) / |r|³
-        prefactor = MU0 / (4 * torch.pi) / (r_norm[:, :, :, None] ** 3 + 1e-30)
+        prefactor = MU0 / (4 * torch.pi) / (r_norm[:, :, :, None] ** 3)
         ffm = prefactor * G
-        
-        # Handle cases where r = 0 (dipole at sensor location)
-        mask = r_norm[:, :, 0, None, None] < 1e-10
-        ffm = torch.where(mask, torch.tensor(float('inf')), ffm)
-        
+          
         return ffm
     
     @staticmethod
@@ -947,7 +935,7 @@ def _compute_dipole_field_optimized(r_source, r_sensor, m):
     return B
     
     
-class CurrentDipolePropagator(object):
+class CurrentDipolePropagator(Propagator):
         
     def __init__(self, r_source, r_sensor):
         self.ffm = self.get_ffm(r_source=r_source, r_sensor=r_sensor)
@@ -1078,7 +1066,7 @@ class CurrentDipolePropagator(object):
         
     
 
-class AxisProjectionPropagator(object):
+class AxisProjectionPropagator(Propagator):
 
     def __init__(self, theta, phi, keepdims=False):
         self.n = SphericalUnitVectorKernel.define_unit_vector(theta, phi)
