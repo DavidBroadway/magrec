@@ -8,6 +8,7 @@ magnetization distribution m.
 # used for base class methods that need to be implemented
 from abc import abstractmethod
 from types import MethodType
+import warnings
 
 import torch
 import numpy as np
@@ -789,8 +790,9 @@ class MagneticDipolePropagator(Propagator):
         # Handle cases where r = 0 (dipole at sensor location)
         # Check where r_norm is close to 0:
         if torch.any(r_norm < 1e-30):
-            j_idx, i_idx = torch.where(r_norm < 1e-30)
-            raise ValueError(f"r_norm < 1e-30 in {j_idx.shape, i_idx.shape}, j_idx: {j_idx}, i_idx: {i_idx}.")
+            _t, _ = torch.nonzero(r_norm < 1e-30, as_tuple=True)
+            num_small_els = _t.shape[0]
+            raise ValueError("r_norm < 1e-30 in {} elements.".format(num_small_els))
       
         
         # Compute unit vectors r̂
@@ -816,6 +818,152 @@ class MagneticDipolePropagator(Propagator):
           
         return ffm
     
+    def plot_ffm_value_distribution(self, ffm=None, source_location=None, sensor_location=None, 
+                                       method="histogram", show=False, max_points=50000):
+        """Plot the value distribution of the forward-field matrix.
+        
+        Args:
+            ffm: Forward-field matrix. If None, uses self.ffm.
+            source_location: Which source indices to include (None = all).
+            sensor_location: Which sensor indices to include (None = all).
+            method: "histogram" for bar chart with symlog axes, "jitter" for strip plot with density-based alpha.
+            show: If True, call plt.show(). Otherwise return the figure.
+            max_points: For jitter mode, subsample to this many points for performance.
+        """
+        if ffm is None:
+            ffm = self.ffm
+        
+        if source_location is None:
+            source_location = np.arange(ffm.shape[1])
+        elif isinstance(source_location, int):
+            source_location = np.array([source_location])
+        elif isinstance(source_location, list):
+            source_location = np.array(source_location)
+        elif isinstance(source_location, torch.Tensor):
+            source_location = source_location.cpu().numpy()
+        elif isinstance(source_location, float):
+            source_location = np.array([int(source_location * ffm.shape[1])])
+        else:
+            raise ValueError(f"Unexpected type for source_location: {type(source_location)}.")
+        
+        if sensor_location is None:
+            sensor_location = np.arange(ffm.shape[0])
+        elif isinstance(sensor_location, int):
+            sensor_location = np.array([sensor_location])
+        elif isinstance(sensor_location, list):
+            sensor_location = np.array(sensor_location)
+        elif isinstance(sensor_location, torch.Tensor):
+            sensor_location = sensor_location.cpu().numpy()
+        elif isinstance(sensor_location, float):
+            sensor_location = np.array([int(sensor_location * ffm.shape[0])])
+        else:
+            raise ValueError(f"Unexpected type for sensor_location: {type(sensor_location)}.")
+        
+        ffm_values = ffm[sensor_location, :, :, :][:, source_location, :, :]
+        if isinstance(ffm_values, torch.Tensor):
+            ffm_values = ffm_values.detach().cpu().numpy()
+        values = ffm_values.flatten()
+        values = values[values != 0]
+        
+        if values.size == 0:
+            fig, ax = plt.subplots()
+            ax.set_title("FFM value distribution (no nonzero values)")
+            if show:
+                plt.show()
+            return fig
+        
+        max_abs = np.abs(values).max()
+        min_abs = np.abs(values[values != 0]).min()
+        linthresh = min_abs
+        
+        if method == "histogram":
+            return self._plot_ffm_histogram(values, max_abs, min_abs, linthresh, show)
+        elif method == "jitter":
+            return self._plot_ffm_jitter(values, max_abs, linthresh, max_points, show)
+        else:
+            raise ValueError(f"Unknown method: {method}. Use 'histogram' or 'jitter'.")
+    
+    def _plot_ffm_histogram(self, values, max_abs, min_abs, linthresh, show):
+        """Histogram mode: symlog x and y axes with bar chart."""
+        n_decades = int(np.ceil(np.log10(max_abs))) - int(np.floor(np.log10(min_abs))) + 1
+        n_bins_per_decade = 5
+        
+        pos_edges = np.logspace(np.log10(linthresh), np.log10(max_abs), n_decades * n_bins_per_decade + 1)
+        neg_edges = -pos_edges[::-1]
+        bin_edges = np.concatenate([neg_edges, pos_edges])
+        
+        counts, edges = np.histogram(values, bins=bin_edges)
+        centers = (edges[:-1] + edges[1:]) / 2
+        
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.bar(centers, counts, width=np.diff(edges), align="center", edgecolor="none", alpha=0.7, color="steelblue")
+        
+        ax.set_xscale("symlog", linthresh=linthresh)
+        ax.set_yscale("symlog", linthresh=1)
+        ax.set_xlabel("FFM value (symlog)")
+        ax.set_ylabel("Count (symlog)")
+        ax.set_title("FFM value distribution (histogram)")
+        ax.axvline(0, color="gray", ls="--", lw=0.8)
+        ax.grid(True, which="both", ls="--", alpha=0.3)
+        
+        if show:
+            plt.show()
+        return fig
+    
+    def _plot_ffm_jitter(self, values, max_abs, linthresh, max_points, show):
+        """Jitter mode: strip plot with density-based opacity. X is value (symlog), Y is random jitter."""
+        # Subsample if too many points
+        if values.size > max_points:
+            idx = np.random.choice(values.size, max_points, replace=False)
+            values = values[idx]
+        
+        # Estimate density in symlog-transformed space for alpha calculation
+        def symlog_transform(x, linthresh):
+            sign = np.sign(x)
+            abs_x = np.abs(x)
+            return sign * np.where(abs_x <= linthresh, abs_x / linthresh, 1 + np.log10(abs_x / linthresh))
+        
+        transformed = symlog_transform(values, linthresh)
+        
+        # Bin-based density estimate in transformed space
+        n_bins = 100
+        counts, bin_edges = np.histogram(transformed, bins=n_bins)
+        bin_idx = np.digitize(transformed, bin_edges[:-1]) - 1
+        bin_idx = np.clip(bin_idx, 0, n_bins - 1)
+        densities = counts[bin_idx]
+        
+        # Normalize density to alpha: high density = low alpha, low density = high alpha
+        max_density = densities.max()
+        alpha = 0.02 + 0.5 * (1 - densities / max_density)  # range [0.02, 0.52]
+        
+        # Random y jitter
+        y_jitter = np.random.uniform(-1, 1, size=values.size)
+        
+        fig, ax = plt.subplots(figsize=(12, 4))
+        
+        # Scatter with per-point alpha via RGBA colors
+        colors = np.zeros((values.size, 4))
+        colors[:, 0] = 0.2  # R
+        colors[:, 1] = 0.4  # G
+        colors[:, 2] = 0.8  # B
+        colors[:, 3] = alpha
+        
+        ax.scatter(values, y_jitter, c=colors, s=1, rasterized=True)
+        
+        ax.set_xscale("symlog", linthresh=linthresh)
+        ax.set_xlabel("FFM value (symlog)")
+        ax.set_ylabel("Jitter (random)")
+        ax.set_title(f"FFM value distribution (jitter, n={values.size})")
+        ax.axvline(0, color="gray", ls="--", lw=0.8)
+        ax.set_yticks([])
+        ax.set_ylim(-1.5, 1.5)
+        ax.grid(True, axis="x", which="both", ls="--", alpha=0.3)
+        
+        if show:
+            plt.show()
+        else:
+            return fig
+        
     @staticmethod
     def _get_compiled_function(r_source, r_sensor):
         """Create and pre-compile optimized numba function for this geometry.
@@ -837,43 +985,6 @@ class MagneticDipolePropagator(Propagator):
             return _compute_dipole_field_optimized(r_source, r_sensor, m)
         
         return compute_field
-    
-    def __call__(self, m):
-        """Compute magnetic field from dipole moments.
-        
-        Args:
-            m: (n_source, 3) array of dipole moments (numpy or torch tensor)
-            
-        Returns:
-            B: (n_sensor, 3) magnetic field (same type as input)
-        """
-        if self.use_torch:
-            # Use torch operations (supports autograd)
-            if isinstance(m, np.ndarray):
-                m = torch.from_numpy(m).float()
-            
-            # FFM has shape (n_sensor, n_source, 3, 3)
-            # m has shape (n_source, 3)
-            # B[i, k] = sum_j sum_l FFM[i, j, k, l] * m[j, l]
-            B = torch.einsum('ijkl,jl->ik', self.ffm, m)
-            
-            return B
-        else:
-            # Use pre-compiled numba function (fast)
-            was_torch = isinstance(m, torch.Tensor)
-            if was_torch:
-                m_np = m.detach().cpu().numpy()
-            else:
-                m_np = m
-            
-            B_np = self._compiled_func(m_np)
-            
-            # Return same type as input
-            if was_torch:
-                return torch.from_numpy(B_np)
-            else:
-                return B_np
-
 
 @jit(nopython=True, cache=True, fastmath=True, parallel=True)
 def _compute_dipole_field_optimized(r_source, r_sensor, m):
