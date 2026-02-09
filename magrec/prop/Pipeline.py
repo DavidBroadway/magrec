@@ -9,6 +9,9 @@ from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 import warnings
 
+from magrec.misc.data import Dataset
+from magrec.prop.Propagator import MagneticDipolePropagator, AxisProjectionPropagator
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -26,31 +29,6 @@ try:
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
-
-# Lazy imports for heavy dependencies
-Dataset = None
-MagneticDipolePropagator = None
-AxisProjectionPropagator = None
-
-def _ensure_dataset():
-    """Lazy import of Dataset."""
-    global Dataset
-    if Dataset is None:
-        from magrec.misc.data import Dataset as _Dataset
-        Dataset = _Dataset
-    return Dataset
-
-def _ensure_propagators():
-    """Lazy import of propagators."""
-    global MagneticDipolePropagator, AxisProjectionPropagator
-    if MagneticDipolePropagator is None:
-        from magrec.prop.Propagator import (
-            MagneticDipolePropagator as _MDP,
-            AxisProjectionPropagator as _APP
-        )
-        MagneticDipolePropagator = _MDP
-        AxisProjectionPropagator = _APP
-    return MagneticDipolePropagator, AxisProjectionPropagator
 
 
 class Step:
@@ -414,13 +392,12 @@ class DatasetStep(Step):
     
     def run(self, datadict: Dict[str, Any], dataset=None) -> Dict[str, Any]:
         """Create Dataset and set pipeline reference."""
-        _Dataset = _ensure_dataset()
         
         # Create Dataset
         if self.datadict is not None:
-            ds = _Dataset.from_dict(self.datadict, rename_map=self.rename_map)
+            ds = Dataset.from_dict(self.datadict, rename_map=self.rename_map)
         else:
-            ds = _Dataset()
+            ds = Dataset()
         
         # Store as pipeline's dataset (will be set by Pipeline)
         # This is a bit of a hack - we need the pipeline reference
@@ -878,10 +855,9 @@ class Propagator(Step):
     
     def fit(self, datadict: Dict[str, Any] = None, dataset=None):
         """Create propagator from dipole locations and sensor positions."""
-        _MDP, _ = _ensure_propagators()
         
         if datadict is None or dataset is None:
-            return self
+            return self # TODO: raise error
         
         # Get dipole positions
         r_source = datadict.get('dipole_pts')
@@ -893,7 +869,7 @@ class Propagator(Step):
         r_sensor = dataset.points
         
         # Create propagator
-        self._propagator = _MDP(r_source, r_sensor, use_torch=True)
+        self._propagator = MagneticDipolePropagator(r_source, r_sensor, use_torch=True)
         
         return self
     
@@ -937,7 +913,6 @@ class Projection(Step):
     
     def run(self, datadict: Dict[str, Any], dataset=None) -> Dict[str, Any]:
         """Project field to NV axis."""
-        _, _APP = _ensure_propagators()
         
         # Get field
         B_field = self._get_input(datadict)
@@ -947,7 +922,7 @@ class Projection(Step):
         phi = self.phi if not isinstance(self.phi, str) else datadict[self.phi]
         
         # Use AxisProjectionPropagator
-        projector = _APP(theta=theta, phi=phi)
+        projector = AxisProjectionPropagator(theta=theta, phi=phi)
         B_projected = projector(B_field)
         
         return self._set_output(datadict, B_projected)

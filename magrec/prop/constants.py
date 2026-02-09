@@ -45,23 +45,23 @@ def get_exponent_from_unit(unit: str) -> int:
     
     unit_prefix = unit[0]
     
-    if unit_prefix == "f":                          # femto
+    if unit_prefix == "f":                              # femto
         return -15
-    elif unit_prefix == "p":                        # pico
+    elif unit_prefix == "p":                            # pico
         return -12
-    elif unit_prefix == "n":                        # nano
+    elif unit_prefix == "n":                            # nano
         return -9
-    elif unit_prefix == "u" or unit_prefix == "μ":  # micro
+    elif unit_prefix == "u" or unit_prefix == "μ":   # micro
         return -6
-    elif unit_prefix == "m":                        # milli
+    elif unit_prefix == "m":                            # milli
         return -3
-    elif unit_prefix == "k":                        # kilo
+    elif unit_prefix == "k":                            # kilo
         return 3
-    elif unit_prefix == "M":                        # mega
+    elif unit_prefix == "M":                            # mega
         return 6
-    elif unit_prefix == "G":                        # giga
+    elif unit_prefix == "G":                            # giga
         return 9
-    elif unit_prefix == "T":                        # tera
+    elif unit_prefix == "T":                            # tera
         return 12
     else:
         raise ValueError(f"Unknown unit prefix: {unit_prefix}")

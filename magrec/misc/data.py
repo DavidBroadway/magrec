@@ -720,6 +720,248 @@ class Dataset(MagneticFieldDataMixin, pv.ImageData):
             raise ValueError(f"Points must be shape (n, 3), got {points.shape}")
         self.field_data[name] = points
         return self
+    
+import pyvista as pv
+
+class Pipeset(pv.MultiBlock):
+    """
+    Pipeline + Dataset hybrid built on PyVista MultiBlock. Each named block is a point set.
+    
+    Setting a PyTorch tensor with last dim 2 or 3 auto-creates a PolyData block.
+    Scalars can be added to existing blocks via pipe['name.scalar'] = values.
+    
+    Usage:
+        pipe = Pipeset()
+        pipe['sensor'] = r_sensor          # (N, 3) tensor -> PolyData with N points
+        pipe['sensor.B_NV'] = B_NV         # adds scalar to existing 'sensor' block
+        pipe['source'] = r_source          # another point set
+        
+        pipe.region('sensor', 'roi', Region2D(...))  # creates 'sensor.roi' sub-block
+    """
+    
+    def _looks_like_points(self, value):
+        """Check if value is array-like with last dimension 2 or 3 (coordinates)."""
+        if isinstance(value, torch.Tensor):
+            return value.ndim >= 1 and value.shape[-1] in (2, 3)
+        if isinstance(value, np.ndarray):
+            return value.ndim >= 1 and value.shape[-1] in (2, 3)
+        if isinstance(value, (pv.PolyData, pv.UnstructuredGrid, pv.StructuredGrid)):
+            # Assume that PolyData is always a point set
+            return True
+        return False
+    
+    def _to_polydata(self, value):
+        """Convert points array to PolyData, padding 2D to 3D if needed."""
+        if isinstance(value, torch.Tensor):
+            value = value.detach().cpu().numpy()
+        pts = value.reshape(-1, value.shape[-1])
+        if pts.shape[-1] == 2:
+            pts = np.hstack([pts, np.zeros((pts.shape[0], 1))])
+        return pv.PolyData(pts)
+    
+    def __setitem__(self, key, value):
+        # PyVista internally uses integer indices during append, pass through
+        if isinstance(key, int):
+            return super().__setitem__(key, value)
+        
+        # Convert torch to numpy for non-points values
+        if isinstance(value, torch.Tensor) and not self._looks_like_points(value):
+            value = value.detach().cpu().numpy()
+        
+        parts = key.split('.', 1)
+        first_part = parts[0]
+        
+        # Case 1: value looks like points -> create/replace a block
+        if self._looks_like_points(value):
+            # Check if first_part is an existing MultiBlock we should recurse into
+            if first_part in self.keys() and len(parts) > 1:
+                existing = super().__getitem__(first_part)
+                if isinstance(existing, pv.MultiBlock):
+                    # Recurse: pipe['sensor.roi'] where sensor is MultiBlock -> sensor['roi'] = pts
+                    existing[parts[1]] = value
+                    return
+            # Otherwise use full key as literal block name (e.g., 'sensor.roi' as one name)
+            if not isinstance(value, (pv.PolyData, pv.UnstructuredGrid, pv.StructuredGrid)):
+                block = self._to_polydata(value)
+            else:
+                block = value
+                
+            super().__setitem__(key, block)
+            return
+        
+        # Case 2: value is a scalar -> find the block and add point_data
+        # Walk the dot path to find the deepest block, last part is scalar name
+        if '.' not in key:
+            # No dot, just setting a non-points value directly
+            super().__setitem__(key, value)
+            return
+        
+        # Split off the last part as scalar name, rest is block path
+        *block_parts, scalar_name = key.split('.')
+        block_path = '.'.join(block_parts)
+        
+        # Get the block (this handles nested MultiBlocks via __getitem__)
+        block = self[block_path]
+        arr = value.flatten() if isinstance(value, np.ndarray) else np.asarray(value).flatten()
+        block.point_data[scalar_name] = arr
+        
+    def __getitem__(self, key):
+        # PyVista internally uses integer indices during iteration, pass through
+        if isinstance(key, int):
+            return super().__getitem__(key)
+        
+        # First try: full key as literal block name (e.g., 'sensor.roi' is a block)
+        if key in self.keys():
+            return super().__getitem__(key)
+        
+        # Second try: dot notation for nested blocks or scalars
+        parts = key.split('.', 1)
+        if len(parts) == 1:
+            # No dot and not found above -> error
+            return super().__getitem__(key)  # will raise KeyError
+        
+        first_part, rest = parts
+        block = super().__getitem__(first_part)
+        
+        # If block is MultiBlock, recurse
+        if isinstance(block, pv.MultiBlock):
+            return block[rest]
+        
+        # Otherwise rest must be a scalar name
+        if rest in block.point_data:
+            return torch.tensor(block.point_data[rest])
+        else:
+            raise KeyError(f"'{rest}' not found as scalar in '{first_part}' or as nested block")
+    
+    def add_region(self, region, inp, name=None):
+        """Create a sub-block from points in parent that fall within region."""
+        if inp is None:
+            raise ValueError("`inp` is required for adding Region2D")
+        
+        if isinstance(inp, str):
+            pts = region.select(self[inp])[0]
+            self[inp + "." + name] = pts
+        elif isinstance(inp, tuple):
+            for i in inp:
+                self[i + "." + name] = region.select(self[i])[0]
+
+    
+    def plot(self, scalar,  ax=None, **kwargs):
+        """Plot a scalar from a block. scalar is 'block.scalar_name'."""
+        if ax is None:
+            fig, ax = plt.subplots()
+        
+        parts = scalar.rsplit('.', 1)
+        if len(parts) != 2:
+            raise ValueError(f"scalar must be 'block.scalar_name', got '{scalar}'")
+        block_name, scalar_name = parts[0], parts[1]
+        
+        block = self[block_name]
+        pts = np.asarray(block.points)
+        values = block.point_data[scalar_name]
+        
+        sc = ax.scatter(pts[:, 0], pts[:, 1], c=values, **kwargs)
+        ax.set_aspect('equal')
+        return sc
+    
+    def to_image_data(self, block_name, tol=1e-5):
+        """
+        Convert a PolyData block to ImageData if points form a regular rectangular grid.
+        
+        Checks: uniform spacing in x and y (within tol * range), and n_x * n_y == n_points.
+        If valid, replaces the block with ImageData and copies all scalars.
+        """
+        block = self[block_name]
+        pts = np.asarray(block.points)
+        
+        x_unique = np.unique(pts[:, 0])
+        y_unique = np.unique(pts[:, 1])
+        n_x, n_y = len(x_unique), len(y_unique)
+        
+        # Check completeness: grid should have exactly n_x * n_y points
+        if n_x * n_y != len(pts):
+            raise ValueError(f"Not a complete grid: {n_x} x {n_y} = {n_x * n_y} != {len(pts)} points")
+        
+        # Check uniform spacing in x
+        if n_x > 1:
+            dx = np.diff(x_unique)
+            x_range = x_unique[-1] - x_unique[0]
+            if x_range > 0 and np.max(np.abs(dx - dx[0])) > tol * x_range:
+                raise ValueError(f"Non-uniform x spacing: max deviation {np.max(np.abs(dx - dx[0])):.2e}")
+            spacing_x = dx[0] if len(dx) > 0 else 1.0
+        else:
+            spacing_x = 1.0
+        
+        # Check uniform spacing in y
+        if n_y > 1:
+            dy = np.diff(y_unique)
+            y_range = y_unique[-1] - y_unique[0]
+            if y_range > 0 and np.max(np.abs(dy - dy[0])) > tol * y_range:
+                raise ValueError(f"Non-uniform y spacing: max deviation {np.max(np.abs(dy - dy[0])):.2e}")
+            spacing_y = dy[0] if len(dy) > 0 else 1.0
+        else:
+            spacing_y = 1.0
+        
+        # Create ImageData. Origin is the min corner, dimensions are n_x, n_y, 1
+        z_val = pts[0, 2] if pts.shape[1] > 2 else 0.0
+        origin = (x_unique[0], y_unique[0], z_val)
+        
+        img = pv.ImageData(dimensions=(n_x, n_y, 1), spacing=(spacing_x, spacing_y, 1.0), origin=origin)
+        
+        # Map scalars: need to reorder from arbitrary point order to grid order (x varies fastest in ImageData)
+        # Build index map: for each point, find its (ix, iy) and compute flat index ix + iy * n_x
+        x_to_ix = {v: i for i, v in enumerate(x_unique)}
+        y_to_iy = {v: i for i, v in enumerate(y_unique)}
+        
+        # Find closest match for each point (handles floating point)
+        def find_idx(val, unique_arr):
+            return np.argmin(np.abs(unique_arr - val))
+        
+        reorder = np.array([find_idx(pts[i, 0], x_unique) + find_idx(pts[i, 1], y_unique) * n_x 
+                           for i in range(len(pts))])
+        
+        # Copy scalars with reordering
+        for name in block.point_data.keys():
+            data = block.point_data[name]
+            reordered = np.empty_like(data)
+            reordered[reorder] = data
+            img.point_data[name] = reordered
+        
+        # Replace block
+        super().__setitem__(block_name, img)
+        return self
+    
+    def __repr__(self):
+        lines = ["Pipeset:"]
+        for name in self.keys():
+            block = super().__getitem__(name)
+            n_pts = block.n_points
+            scalars = list(block.point_data.keys())
+            btype = type(block).__name__
+            lines.append(f"  '{name}': {btype}, {n_pts} pts, scalars={scalars}")
+        return "\n".join(lines)
+    
+    def add(self, obj, name=None, **kwargs):
+        if name is None:
+            name = obj.__class__.__name__
+            
+        if isinstance(obj, Region2D):
+            inp = kwargs.get("inp", None)
+            if inp is None:
+                raise ValueError("`inp` is required for adding Region2D")
+            self.add_region(obj, inp, name)
+                    
+        elif isinstance(obj, str):
+            pts = kwargs.get("pts", None)
+            pts = kwargs.get("points", None)
+            if pts is None:
+                raise ValueError(f"`pts` or `points` argument is required for adding a named block with name {name}")
+            self[name] = pts
+            
+            # Check if rest of kwargs is a valid scalar
+            for k, v in kwargs.items():
+                if isinstance(v, (np.ndarray, torch.Tensor)) and v.ndim == 1:
+                    self[name + "." + k] = v
 
 
 # Backwards compatibility aliases
