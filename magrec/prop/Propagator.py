@@ -1193,37 +1193,128 @@ class AxisProjectionPropagator(Propagator):
     def __call__(self, x, keepdims=None):
         return self.project(x, keepdims=keepdims)
     
-    def plot_axis_projection(self, ax=None, **kwargs):
+    def plot_axis_projection(self, ax=None, arc_radius=0.4, elev=None, azim=None, **kwargs):
+        """Visualize the projection axis n relative to the xyz coordinate frame.
+        
+        Camera is auto-positioned so that n lies in the screen plane (maximizes its projected length).
+        The azimuth is set perpendicular to n's xy projection, elevation matches n's polar angle.
+        Labels are placed away from the camera to avoid overlap with arrows.
+        """
         if ax is None:
-            fig = plt.figure()
+            fig = plt.figure(figsize=(5, 5))
             ax = fig.add_subplot(111, projection='3d')
         
-        # Setting the limits of axes
+        nx, ny, nz = float(self.n[0]), float(self.n[1]), float(self.n[2])
+        theta_rad = np.arccos(np.clip(nz, -1, 1))
+        phi_rad = np.arctan2(ny, nx)
+        theta_deg = np.degrees(theta_rad)
+        phi_deg = np.degrees(phi_rad)
+        
+        # Camera angle: look perpendicular to the plane containing z and n,
+        # so n appears fully in the screen plane with maximum visual length.
+        # azim = phi + 90 makes the camera look from the side of n's xy projection.
+        # elev slightly above to see depth.
+        if azim is None:
+            azim = phi_deg + 90
+        if elev is None:
+            elev = max(15, min(35, 90 - theta_deg * 0.5))
+        
+        # Set view early so we can compute screen-space directions for label placement
+        ax.view_init(elev=elev, azim=azim)
+        
+        # Camera direction in 3D (unit vector pointing from scene toward camera).
+        # matplotlib uses azim measured from -y toward +x, elev from xy plane toward +z.
+        azim_r = np.radians(azim)
+        elev_r = np.radians(elev)
+        cam = np.array([
+            np.cos(elev_r) * np.cos(azim_r),
+            np.cos(elev_r) * np.sin(azim_r),
+            np.sin(elev_r)
+        ])
+        
+        def label_offset(tip, scale=0.15):
+            """Push label away from camera so it doesn't sit on top of the arrow.
+            Offset = outward from origin + slightly toward camera for depth clarity."""
+            outward = np.array(tip)
+            norm = np.linalg.norm(outward)
+            if norm > 1e-10:
+                outward = outward / norm
+            return np.array(tip) + outward * scale
+        
+        # xyz basis arrows
+        arrow_kw = dict(arrow_length_ratio=0.08, linewidth=1.5)
+        ax.quiver(0, 0, 0, 1, 0, 0, color='tab:red', alpha=0.6, **arrow_kw)
+        ax.quiver(0, 0, 0, 0, 1, 0, color='tab:green', alpha=0.6, **arrow_kw)
+        ax.quiver(0, 0, 0, 0, 0, 1, color='tab:blue', alpha=0.6, **arrow_kw)
+        
+        lx = label_offset([1, 0, 0])
+        ly = label_offset([0, 1, 0])
+        lz = label_offset([0, 0, 1])
+        ax.text(*lx, '$x$', color='tab:red', fontsize=13, ha='center', va='center')
+        ax.text(*ly, '$y$', color='tab:green', fontsize=13, ha='center', va='center')
+        ax.text(*lz, '$z$', color='tab:blue', fontsize=13, ha='center', va='center')
+        
+        # Projection axis n
+        ax.quiver(0, 0, 0, nx, ny, nz, color='black', linewidth=2.8, arrow_length_ratio=0.1)
+        ln = label_offset([nx, ny, nz], 0.18)
+        ax.text(*ln, r'$\hat{n}$', color='black', fontsize=14, fontweight='bold', ha='center', va='center')
+        
+        # Dashed drop lines
+        dash_kw = dict(color='gray', linestyle='--', linewidth=0.8, alpha=0.4)
+        ax.plot([nx, nx], [ny, ny], [0, nz], **dash_kw)
+        ax.plot([0, nx], [0, ny], [0, 0], **dash_kw)
+        
+        # Theta arc: z-axis toward n, in the plane spanned by z_hat and n's xy projection
+        r = arc_radius
+        n_xy = np.sqrt(nx**2 + ny**2)
+        if n_xy > 1e-10:
+            u_xy = np.array([nx, ny, 0]) / n_xy
+            t = np.linspace(0, theta_rad, 40)
+            arc_theta = np.column_stack([r * np.sin(t) * u_xy[0],
+                                         r * np.sin(t) * u_xy[1],
+                                         r * np.cos(t)])
+            ax.plot(arc_theta[:, 0], arc_theta[:, 1], arc_theta[:, 2],
+                    color='tab:blue', linewidth=1.5, alpha=0.8)
+            # Place theta label at the outer edge of the arc midpoint, pushed away from camera
+            mid = len(t) // 2
+            mid_pt = arc_theta[mid]
+            mid_outward = mid_pt / (np.linalg.norm(mid_pt) + 1e-10)
+            lbl = mid_pt + mid_outward * r * 0.5
+            ax.text(*lbl, f'$\\theta={theta_deg:.1f}°$', color='tab:blue', fontsize=10, ha='center', va='center')
+        
+        # Phi arc: x-axis toward n's xy projection, in the xy plane
+        if n_xy > 1e-10:
+            p = np.linspace(0, phi_rad, 40)
+            rp = r * 0.7
+            arc_phi = np.column_stack([rp * np.cos(p), rp * np.sin(p), np.zeros_like(p)])
+            ax.plot(arc_phi[:, 0], arc_phi[:, 1], arc_phi[:, 2],
+                    color='tab:red', linewidth=1.5, alpha=0.8)
+            mid = len(p) // 2
+            mid_pt = arc_phi[mid]
+            mid_outward = mid_pt / (np.linalg.norm(mid_pt) + 1e-10)
+            lbl = mid_pt + mid_outward * rp * 0.7
+            ax.text(*lbl, f'$\\phi={phi_deg:.1f}°$', color='tab:red', fontsize=10, ha='center', va='center')
+        
+        # Remove all axis chrome
         ax.set_xlim([-1, 1])
         ax.set_ylim([-1, 1])
         ax.set_zlim([-1, 1])
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_zticks([])
+        ax.xaxis.set_pane_color((1, 1, 1, 0))
+        ax.yaxis.set_pane_color((1, 1, 1, 0))
+        ax.zaxis.set_pane_color((1, 1, 1, 0))
+        ax.xaxis.line.set_color((1, 1, 1, 0))
+        ax.yaxis.line.set_color((1, 1, 1, 0))
+        ax.zaxis.line.set_color((1, 1, 1, 0))
+        ax.xaxis._axinfo["grid"]['color'] = (1, 1, 1, 0)
+        ax.yaxis._axinfo["grid"]['color'] = (1, 1, 1, 0)
+        ax.zaxis._axinfo["grid"]['color'] = (1, 1, 1, 0)
         
-        x = self.n[0]
-        y = self.n[1]
-        z = self.n[2]
-                
-        # make the panes transparent
-        ax.xaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
-        ax.yaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
-        ax.zaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
-        
-        # make the grid lines transparent
-        ax.xaxis._axinfo["grid"]['color'] =  (1,1,1,0)
-        ax.yaxis._axinfo["grid"]['color'] =  (1,1,1,0)
-        ax.zaxis._axinfo["grid"]['color'] =  (1,1,1,0)
-        
-        # Set aspect ratio for cube to look like cube
         ax.set_aspect('equal')
+        ax.set_title(f'$\\hat{{n}}=({nx:.3f},\\, {ny:.3f},\\, {nz:.3f})$', fontsize=11, pad=0)
+        
+        return ax
 
-        # Setting the viewpoint
-        ax.view_init(elev=20., azim=30)
-        
 # TODO: Implement MagneticFieldComponentsPropagator using the kernel
-# 
-        
-        

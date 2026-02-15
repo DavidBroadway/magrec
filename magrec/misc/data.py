@@ -92,22 +92,134 @@ class DataBlock(pv.MultiBlock):
 
     def __repr__(self):
         return self[0:len(self)].__repr__()
+    
+
+# TODO: move to magrec.prop 
+class Scaler(object):
+    """Scaler class to scale data to have values with mean 0 and std 1."""
+    def __init__(self, data):
+        self.data = data
+        self.mean = data.mean()
+        self.std = data.std()
+
+    def scale(self, data):
+        return (data - self.mean) / self.std
+    
+    def unscale(self, data):
+        return data * self.std + self.mean
 
 
-class Dataset(MagneticFieldDataMixin, pv.ImageData):
-    """Primary interface for spatial magnetic field data.
+class Region2D:
+    """
+    A rectangular region in 2D (x, y) space. The z-coordinate is intentionally excluded since
+    selection/containment is always in the x-y plane. For points at a specific z, use region.at(z).
     
-    Dataset is a flexible container that handles:
-    - **Structured grids**: Regular ImageData with dimensions, origin, spacing
-    - **Unstructured data**: Arbitrary point clouds (internally uses PolyData)
-    - **Point data**: Field values at each point (e.g., magnetic field B)
-    - **Field data**: Metadata (e.g., dipole locations, grid parameters)
+    Example:
+        roi = Region(0.9e-5, 1.15e-5, 1.1e-5, 1.35e-5)
+        sensor_pts, idx = roi.select(r_sensor)       # select by x,y, preserves original z
+        
+        sensor_layer = roi.at(z=0)                   # sensor plane at z=0
+        source_layer = roi.at(z=-100e-9)             # source plane 100nm below
+        sensor_grid = sensor_layer.grid(100, 100)    # (10000, 3) at z=0
+        source_grid = source_layer.grid(50, 50)      # (2500, 3) at z=-100nm
+    """
     
-    Key Differences from DataBlock:
-    - **Dataset**: Single spatial structure (one grid or point cloud)
-    - **DataBlock**: Multiple Datasets combined (different regions/resolutions)
+    def __init__(self, x_min, x_max, y_min, y_max, z=0):
+        self.x_min, self.x_max = x_min, x_max
+        self.y_min, self.y_max = y_min, y_max
+        self.z = z
     
-    Methods for structured grids only:
+    @classmethod
+    def from_center(cls, cx, cy, dx, dy):
+        """Construct from center (cx, cy) and half-widths (dx, dy)."""
+        return cls(cx - dx, cx + dx, cy - dy, cy + dy)
+    
+    @classmethod
+    def from_points(cls, pts, pad=0.0):
+        """Construct bounding box around given points (ignores z) with optional padding."""
+        x_min, y_min = pts[:, 0].min(), pts[:, 1].min()
+        x_max, y_max = pts[:, 0].max(), pts[:, 1].max()
+        return cls(x_min - pad, x_max + pad, y_min - pad, y_max + pad)
+    
+    def at(self, z):
+        """Return a Layer: this region at a specific z-height. Use for grid generation."""
+        return Region2D(self, z=z)
+    
+    @property
+    def bounds(self):
+        return (self.x_min, self.x_max, self.y_min, self.y_max)
+    
+    @property
+    def center(self):
+        return ((self.x_min + self.x_max) / 2, (self.y_min + self.y_max) / 2)
+    
+    @property
+    def size(self):
+        return (self.x_max - self.x_min, self.y_max - self.y_min)
+    
+    def contains(self, pts):
+        """Returns boolean mask for points inside region (x,y only, ignores z)."""
+        if isinstance(pts, (torch.Tensor, np.ndarray)):
+            x, y = pts[:, 0], pts[:, 1]
+        elif isinstance(pts, (pv.PolyData, pv.UnstructuredGrid)):
+            x, y = pts.points[:, 0], pts.points[:, 1]
+        else:
+            raise ValueError(f"Unsupported type: {type(pts)}")
+            
+        return (x > self.x_min) & (x < self.x_max) & (y > self.y_min) & (y < self.y_max)
+    
+    def select(self, pts):
+        """Select points inside region by x,y. Returns (selected_points, indices). Original z preserved."""
+        mask = self.contains(pts)
+        indices = np.argwhere(mask).flatten()
+        # Handle separately selection from PyVista PolyData
+        if isinstance(pts, (pv.PolyData, pv.UnstructuredGrid)):
+            return pts.extract_points(mask), indices
+        
+        return pts[mask], indices
+    
+    def grid(self, nx, ny, z=None):
+        """Generate (nx * ny, 3) grid at height z. Shorthand for region.at(z).grid(nx, ny)."""
+        if z is None:
+            z = self.z
+        return self.grid(nx, ny)
+    
+    def __mul__(self, factor):
+        """Scale region bounds by a numeric factor."""
+        if not isinstance(factor, (int, float)):
+            return NotImplemented
+        return Region2D(
+            self.x_min * factor,
+            self.x_max * factor,
+            self.y_min * factor,
+            self.y_max * factor,
+            z=self.z * factor,
+        )
+    
+    def __rmul__(self, factor):
+        return self.__mul__(factor)
+    
+    def __repr__(self):
+        return f"Region2D(x=[{self.x_min:.2e}, {self.x_max:.2e}], y=[{self.y_min:.2e}, {self.y_max:.2e}])"
+    
+
+class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
+    """
+    Pipeline + Dataset hybrid built on PyVista MultiBlock. Each named block is a point set,
+    which can be a structured grid or an unstructured point cloud.
+    
+    Setting a PyTorch tensor with last dim 2 or 3 auto-creates a PolyData block.
+    Scalars can be added to existing blocks via pipe['name.scalar'] = values.
+    
+    Usage:
+        pipe = Pipeset()
+        pipe['sensor'] = r_sensor          # (N, 3) tensor -> PolyData with N points
+        pipe['sensor.B_NV'] = B_NV         # adds scalar to existing 'sensor' block
+        pipe['source'] = r_source          # another point set
+        
+        pipe.region('sensor', 'roi', Region2D(...))  # creates 'sensor.roi' sub-block
+    
+    If any of the blocks is a structured grids, has the following methods:
     - expand_bounds_2d(), expand_bounds_3d()
     - pts_as_grid()
     
@@ -119,20 +231,47 @@ class Dataset(MagneticFieldDataMixin, pv.ImageData):
     Examples
     --------
     Structured grid:
-    >>> ds = Dataset()
-    >>> ds.dimensions = (50, 50, 1)
-    >>> ds.origin = (0, 0, 0)
-    >>> ds.spacing = (0.1, 0.1, 1.0)
-    >>> ds.point_data['B'] = field_values
+    >>> pipe = Pipeset()
+    >>> pipe.dimensions = (50, 50, 1)
+    >>> pipe.origin = (0, 0, 0)
+    >>> pipe.spacing = (0.1, 0.1, 1.0)
+    >>> pipe.point_data['B'] = field_values
     
     From dictionary:
     >>> data = {'xs': x_coords, 'ys': y_coords, 'B': field_values}
-    >>> ds = Dataset.from_dict(data)
+    >>> pipe = Pipeset.from_dict(data)
     
     From grid data:
     >>> data = {'xs': x_grid, 'ys': y_grid, 'B': field_values}
-    >>> ds = Dataset.from_dict(data, x_grid=True, y_grid=True)
+    >>> pipe = Pipeset.from_dict(data, x_grid=True, y_grid=True)
+    
+    Create Pipeset, add points and scalars
+    >>> pipe = Pipeset()
+    >>> pipe['sensor'] = r_sensor                    # creates PolyData from (N,3) tensor
+    >>> pipe['sensor.B_NV'] = B_NV.flatten()         # adds scalar
+    >>> pipe['source'] = r_source                    # another point set
+    >>> pipe.region('sensor', 'roi', subregion)      # creates 'sensor.roi' sub-block
+
+    After training (training is done by the pipeline)
+    >>> pipe['sensor.roi.B_NV_pred'] = predicted     # add prediction to subregion
+    
+    Plotting the results
+    >>> fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(12, 4))
+    >>> pipe.plot(ax=ax1, scalar='sensor.B_NV', cmap='viridis', s=1)
+    >>> pipe.plot(ax=ax2, scalar='sensor.roi.B_NV', cmap='viridis', s=1)
+    >>> pipe.plot(ax=ax3, scalar='sensor.roi.B_NV_pred', cmap='viridis', s=1)
+
+    Print the pipeline
+    >>> print(pipe)
     """
+    
+    def __init__(self, *args, **kwargs):
+        pv.MultiBlock.__init__(self, *args, **kwargs)
+        # Store plot objects for colorbar synchronization: {'name': {'sc': mappable, 'ax': ax, 'clim': (vmin, vmax)}}
+        self._plots = {}
+        # Steps connect blocks: propagators, trainers, etc.
+        # Each step is a dict with 'source', 'target', 'fn', and optional extra state.
+        self._steps = {}
     
     @classmethod
     def from_dict(cls, datadict, rename_map=None, x_grid=False, y_grid=False, 
@@ -696,49 +835,6 @@ class Dataset(MagneticFieldDataMixin, pv.ImageData):
         grid_data = self.get_as_grid(point_data_name=point_data_name)
         return plot_n_components(data=grid_data)
     
-    def add_dipole_locations(self, points, name='dipole_locations'):
-        """Store dipole locations in field_data for later use.
-        
-        Parameters
-        ----------
-        points : array_like, shape (n, 3)
-            Dipole locations as (x, y, z) coordinates
-        name : str, optional
-            Storage key name
-        
-        Returns
-        -------
-        self : Dataset
-            For method chaining
-        
-        Examples
-        --------
-        >>> ds.add_dipole_locations(np.array([[0, 0, 0], [1, 1, 1]]))
-        """
-        points = np.asarray(points)
-        if points.ndim != 2 or points.shape[1] != 3:
-            raise ValueError(f"Points must be shape (n, 3), got {points.shape}")
-        self.field_data[name] = points
-        return self
-    
-import pyvista as pv
-
-class Pipeset(pv.MultiBlock):
-    """
-    Pipeline + Dataset hybrid built on PyVista MultiBlock. Each named block is a point set.
-    
-    Setting a PyTorch tensor with last dim 2 or 3 auto-creates a PolyData block.
-    Scalars can be added to existing blocks via pipe['name.scalar'] = values.
-    
-    Usage:
-        pipe = Pipeset()
-        pipe['sensor'] = r_sensor          # (N, 3) tensor -> PolyData with N points
-        pipe['sensor.B_NV'] = B_NV         # adds scalar to existing 'sensor' block
-        pipe['source'] = r_source          # another point set
-        
-        pipe.region('sensor', 'roi', Region2D(...))  # creates 'sensor.roi' sub-block
-    """
-    
     def _looks_like_points(self, value):
         """Check if value is array-like with last dimension 2 or 3 (coordinates)."""
         if isinstance(value, torch.Tensor):
@@ -764,74 +860,227 @@ class Pipeset(pv.MultiBlock):
         if isinstance(key, int):
             return super().__setitem__(key, value)
         
-        # Convert torch to numpy for non-points values
-        if isinstance(value, torch.Tensor) and not self._looks_like_points(value):
+        # Convert torch tensors to numpy
+        if isinstance(value, torch.Tensor):
             value = value.detach().cpu().numpy()
+        elif not isinstance(value, (np.ndarray, pv.PolyData, pv.UnstructuredGrid, pv.StructuredGrid, pv.ImageData)):
+            value = np.asarray(value)
         
-        parts = key.split('.', 1)
-        first_part = parts[0]
+        # If value is already a block with points, it must be set directly to the multiblock, 
+        # without checking what are the values from the points. 
+        if isinstance(value, (pv.PolyData, pv.UnstructuredGrid, pv.StructuredGrid, pv.ImageData)):
+            super().__setitem__(key, value)
+            return
         
-        # Case 1: value looks like points -> create/replace a block
+        # For dotted keys like 'sensor.roi.B_NV', we need to figure out what's the block name
+        # and what's the scalar name. Could be: block='sensor.roi', scalar='B_NV' (flat naming),
+        # or block='sensor' with nested block 'roi' with scalar 'B_NV'. We prefer flat naming:
+        # first check if 'sensor.roi' exists as a block, if yes, 'B_NV' is the scalar.
+        # If 'sensor.roi' doesn't exist but 'sensor' does and is a MultiBlock containing 'roi',
+        # that's nesting. If both exist, warn and use flat (the literal block name wins).
+        
+        elif '.' in key:
+            parts = key.split('.')
+            # Try flat naming first: all-but-last is block name, last is scalar
+            flat_block_name = '.'.join(parts[:-1])
+            attr_name = parts[-1]
+            flat_exists = flat_block_name in self.keys()
+            
+            # Check for nested ambiguity: does parts[0] exist and could contain parts[1]?
+            nested_exists = False
+            if len(parts) >= 2 and parts[0] in self.keys():
+                first_block = super().__getitem__(parts[0])
+                if isinstance(first_block, pv.MultiBlock):
+                    nested_exists = True
+            
+            if flat_exists and nested_exists:
+                import warnings
+                warnings.warn(
+                    f"Ambiguous key '{key}': both '{flat_block_name}' exists as block and "
+                    f"'{parts[0]}' is a MultiBlock. Using flat naming ('{flat_block_name}' + '{attr_name}')."
+                )
+            
+            # Prefer flat naming if that block exists
+            if flat_exists:
+                parent_block = self[flat_block_name]
+            elif nested_exists:
+                # Fall back to nested: recurse into parts[0], let it handle the rest
+                first_block = super().__getitem__(parts[0])
+                first_block['.'.join(parts[1:])] = value
+                return
+            else:
+                # Neither exists, fall through to create new block
+                parent_block = None
+            
+            if parent_block is not None and hasattr(parent_block, 'n_points'):
+                # Value can be (N,), (N, n), (W, H), or (W, H, n). n is components, usually <= 3.
+                shape = value.shape
+                if len(shape) == 1:
+                    if shape[0] == parent_block.n_points:
+                        parent_block.point_data[attr_name] = value
+                        return
+                elif len(shape) == 2:
+                    if shape[0] == parent_block.n_points:
+                        parent_block.point_data[attr_name] = value.reshape(parent_block.n_points, -1).squeeze()
+                        return
+                    else:
+                        W, H = shape
+                        if W * H == parent_block.n_points:
+                            # Ambiguous (nx, ny) vs (ny, nx). Assume 'yx' (image convention).
+                            # Use set_point_data() for explicit control.
+                            parent_block.point_data[attr_name] = value.T.flatten('F')
+                            return
+                        else:
+                            raise ValueError(f"Unsupported shape {shape} for assignment to {parent_block.n_points} points of {parent_block}")
+                elif len(shape) == 3:
+                    n, W, H = shape
+                    if n > 3: 
+                        W, H, n = shape
+                        value = value.transpose(1, 2, 0)
+                    if W * H == parent_block.n_points:
+                        parent_block.point_data[attr_name] = value.reshape(W * H, n)
+                        return
+                else: 
+                    raise ValueError(f"Unsupported shape {shape} for assignment to {parent_block.n_points} points of {parent_block}")
+        
+        # No valid parent block or length mismatch: treat as new point set or literal value
         if self._looks_like_points(value):
+            parts = key.split('.', 1)
+            first_part = parts[0]
             # Check if first_part is an existing MultiBlock we should recurse into
             if first_part in self.keys() and len(parts) > 1:
                 existing = super().__getitem__(first_part)
                 if isinstance(existing, pv.MultiBlock):
-                    # Recurse: pipe['sensor.roi'] where sensor is MultiBlock -> sensor['roi'] = pts
                     existing[parts[1]] = value
                     return
-            # Otherwise use full key as literal block name (e.g., 'sensor.roi' as one name)
+            # Use full key as literal block name
             if not isinstance(value, (pv.PolyData, pv.UnstructuredGrid, pv.StructuredGrid)):
                 block = self._to_polydata(value)
             else:
                 block = value
-                
             super().__setitem__(key, block)
-            return
-        
-        # Case 2: value is a scalar -> find the block and add point_data
-        # Walk the dot path to find the deepest block, last part is scalar name
-        if '.' not in key:
-            # No dot, just setting a non-points value directly
+        else:
+            # Non-points, non-matching value: store directly
             super().__setitem__(key, value)
-            return
+            
+    def set_point_data(self, name, attr_or_value, value_or_order=None, order='xy'):
+        """
+        Set point data on a block, handling 2D array reshaping for ImageData grids.
         
-        # Split off the last part as scalar name, rest is block path
-        *block_parts, scalar_name = key.split('.')
-        block_path = '.'.join(block_parts)
+        Accepts either dot notation or separate arguments:
+            pipe.set_point_data('sensor.B_NV', data)
+            pipe.set_point_data('sensor.B_NV', data, order='yx')
+            pipe.set_point_data('sensor', 'B_NV', data)
+            pipe.set_point_data('sensor', 'B_NV', data, order='yx')
         
-        # Get the block (this handles nested MultiBlocks via __getitem__)
-        block = self[block_path]
-        arr = value.flatten() if isinstance(value, np.ndarray) else np.asarray(value).flatten()
-        block.point_data[scalar_name] = arr
+        For ImageData, points are ordered with x varying fastest: flat_idx = ix + iy * nx.
+        
+        order='xy': value shape is (nx, ny) where value[ix, iy] -> point at (x[ix], y[iy])
+        order='yx': value shape is (ny, nx) where value[iy, ix] -> point at (x[ix], y[iy])
+                    This is typical image/matrix convention (rows=y, cols=x).
+        """
+        # Parse arguments: either (name_with_dot, value, [order]) or (block, attr, value, [order])
+        if isinstance(attr_or_value, str):
+            # Two-string form: (block_name, attr_name, value, [order])
+            block_name, attr_name = name, attr_or_value
+            value = value_or_order
+            # order stays as default or was passed as 4th arg
+        else:
+            # Dot notation form: (name.attr, value, [order])
+            if '.' not in name:
+                raise ValueError(f"Name must contain '.' for dot notation, got '{name}'")
+            *parts, attr_name = name.split('.')
+            block_name = '.'.join(parts)
+            value = attr_or_value
+            if value_or_order is not None:
+                order = value_or_order
+        
+        if isinstance(value, torch.Tensor):
+            value = value.detach().cpu().numpy()
+        
+        block = self[block_name]
+        
+        # If order='xy', first index is x, second is y: arr[ix, iy].
+        # ImageData wants x to vary fastest: iterate all x before incrementing y.
+        # So arr[0,1] has index nx in the flat array. That's Fortran order ('F').
+        # If order='yx', arr[iy, ix], transpose first to get arr.T[ix, iy], then same.
+        
+        if value.ndim == 1:
+            # Already flat, just assign
+            block.point_data[attr_name] = value
+        elif value.ndim == 2:
+            # 2D grid data: need to flatten in correct order for ImageData
+            if order == 'xy':
+                # Shape is (nx, ny), flatten Fortran-order so x varies fastest
+                flat = value.flatten('F')
+            elif order == 'yx':
+                # Shape is (ny, nx), transpose to (nx, ny) then flatten Fortran-order
+                flat = value.T.flatten('F')
+            else:
+                raise ValueError(f"Invalid order: {order}. Use 'xy' or 'yx'.")
+            block.point_data[attr_name] = flat
+        elif value.ndim == 3:
+            # Multi-component data, e.g. (nx, ny, 3) or (ny, nx, 3)
+            if order == 'xy':
+                # (nx, ny, n_components)
+                nx, ny, nc = value.shape
+                flat = value.reshape(nx * ny, nc, order='F')
+            elif order == 'yx':
+                # (ny, nx, n_components)
+                ny, nx, nc = value.shape
+                flat = value.transpose(1, 0, 2).reshape(nx * ny, nc, order='F')
+            else:
+                raise ValueError(f"Invalid order: {order}. Use 'xy' or 'yx'.")
+            block.point_data[attr_name] = flat
+        else:
+            raise ValueError(f"Unsupported ndim={value.ndim}, expected 1, 2, or 3")
+        
         
     def __getitem__(self, key):
-        # PyVista internally uses integer indices during iteration, pass through
+        # PyVista uses integer indices internally
         if isinstance(key, int):
             return super().__getitem__(key)
         
-        # First try: full key as literal block name (e.g., 'sensor.roi' is a block)
+        # Full key as literal block name (e.g., 'sensor.roi' is a block)
         if key in self.keys():
             return super().__getitem__(key)
         
-        # Second try: dot notation for nested blocks or scalars
-        parts = key.split('.', 1)
-        if len(parts) == 1:
-            # No dot and not found above -> error
+        if '.' not in key:
             return super().__getitem__(key)  # will raise KeyError
         
-        first_part, rest = parts
-        block = super().__getitem__(first_part)
+        # For 'sensor.roi.B_NV': could be block='sensor.roi' with scalar='B_NV' (flat),
+        # or block='sensor' containing 'roi.B_NV' (nested). Prefer flat naming.
+        parts = key.split('.')
+        flat_block_name = '.'.join(parts[:-1])
+        scalar_name = parts[-1]
+        flat_exists = flat_block_name in self.keys()
         
-        # If block is MultiBlock, recurse
-        if isinstance(block, pv.MultiBlock):
-            return block[rest]
+        # Check nested: is parts[0] a MultiBlock?
+        nested_exists = False
+        if parts[0] in self.keys():
+            first_block = super().__getitem__(parts[0])
+            if isinstance(first_block, pv.MultiBlock):
+                nested_exists = True
         
-        # Otherwise rest must be a scalar name
-        if rest in block.point_data:
-            return torch.tensor(block.point_data[rest])
+        if flat_exists and nested_exists:
+            import warnings
+            warnings.warn(
+                f"Ambiguous key '{key}': '{flat_block_name}' exists as block and "
+                f"'{parts[0]}' is a MultiBlock. Using flat naming."
+            )
+        
+        if flat_exists:
+            block = self[flat_block_name]
+            if scalar_name in block.point_data:
+                return torch.tensor(block.point_data[scalar_name])
+            else:
+                raise KeyError(f"'{scalar_name}' not found in block '{flat_block_name}'")
+        elif nested_exists:
+            # Recurse into the MultiBlock
+            first_block = super().__getitem__(parts[0])
+            return first_block['.'.join(parts[1:])]
         else:
-            raise KeyError(f"'{rest}' not found as scalar in '{first_part}' or as nested block")
+            raise KeyError(f"No block '{flat_block_name}' or MultiBlock '{parts[0]}' found for key '{key}'")
     
     def add_region(self, region, inp, name=None):
         """Create a sub-block from points in parent that fall within region."""
@@ -846,23 +1095,382 @@ class Pipeset(pv.MultiBlock):
                 self[i + "." + name] = region.select(self[i])[0]
 
     
-    def plot(self, scalar,  ax=None, **kwargs):
-        """Plot a scalar from a block. scalar is 'block.scalar_name'."""
-        if ax is None:
-            fig, ax = plt.subplots()
+    def plot(self, scalar, ax=None, name=None, clim=None, sync=True, 
+             colorbar=False, symmetric=False, norm_type=None,
+             cbar_width=0.05, cbar_pad=0.02, wspace=None,
+             method='auto', labels=None, **kwargs):
+        """
+        Plot a scalar from a block. scalar is 'block.scalar_name'.
+        
+        name: store this plot under a name for later access via pipe.plots['name']
+        clim: (vmin, vmax) to set color limits
+        sync: if True, sync color limits with the plot with the same name, if False, do not sync, 
+            if a string, it is the name of the plot to sync with,
+        colorbar: if True, add a colorbar to the axis
+        method: plotting method
+            'auto' (default): imshow for ImageData, scatter for PolyData
+            'scatter': scatter plot with circles at each point
+            'imshow': pixel grid, requires regular grid (ImageData or convertible)
+            'pcolormesh': cell-based grid, shows cell boundaries
+        labels: for multi-component data, custom labels for each component.
+            These become both the plot names (for sync_clim) and axis titles.
+            E.g., labels=['B_x', 'B_y', 'B_z'] creates plots named 'B_x', 'B_y', 'B_z'.
+        
+        After plotting, call pipe.sync_clim('p1', 'p2', 'p3') to unify limits.
+        """
+        
+        # If scalar is a tuple/list of strings, plot each as a separate "row" in a grid.
+        # Each string may itself be multi-component (e.g., B with shape (N,3)), giving columns.
+        # So ('sensor.roi.B', 'sensor.roi.B_NV') with B being 3-component and B_NV being scalar
+        # gives a 2-row layout: first row has 3 axes, second row has 1 axis.
+        if isinstance(scalar, (list, tuple)):
+            # First pass: figure out how many columns each scalar needs
+            col_counts = []
+            for s in scalar:
+                p = s.rsplit('.', 1)
+                if len(p) == 2 and p[0] in self._steps:
+                    col_counts.append(1)
+                    continue
+                block = self[p[0]]
+                vals = block.point_data[p[1]]
+                n_comp = vals.shape[1] if vals.ndim > 1 and vals.shape[1] > 1 else 1
+                col_counts.append(n_comp)
+            
+            total_axes = sum(col_counts)
+            
+            if ax is None:
+                # Create a single row with total_axes columns
+                fig, flat_axs = plt.subplots(1, total_axes, figsize=(3.5 * total_axes + 1, 3.5),
+                                              squeeze=False)
+                flat_axs = flat_axs.flatten()
+            else:
+                # Flatten whatever axes array was passed
+                flat_axs = np.array(ax).flatten()
+                if len(flat_axs) < total_axes:
+                    raise ValueError(f"Need {total_axes} axes for {scalar}, got {len(flat_axs)}")
+                fig = flat_axs[0].figure
+            
+            # Slice labels and norm_type into per-scalar chunks, consumed sequentially.
+            # labels=['B_x','B_y','B_z','B_NV'] with col_counts=[3,1] -> ['B_x','B_y','B_z'] and ['B_NV']
+            label_idx = 0
+            norm_idx = 0
+            
+            all_mappables = []
+            all_plot_names = []
+            ax_idx = 0
+            for row_i, s in enumerate(scalar):
+                n_comp = col_counts[row_i]
+                
+                # Slice labels for this scalar
+                sub_labels = None
+                if labels is not None:
+                    sub_labels = labels[label_idx:label_idx + n_comp]
+                    label_idx += n_comp
+                
+                if n_comp == 1:
+                    # For single-component, use the label as the plot name
+                    row_name = sub_labels[0] if sub_labels else (f"{name}_{row_i}" if name else None)
+                    m = self.plot(s, ax=flat_axs[ax_idx], name=row_name, clim=clim, sync=sync,
+                                 colorbar=colorbar, method=method, **kwargs)
+                    if sub_labels:
+                        title = f'${sub_labels[0]}$' if '$' not in sub_labels[0] else sub_labels[0]
+                        flat_axs[ax_idx].set_title(title)
+                    all_mappables.append(m)
+                    if row_name:
+                        all_plot_names.append(row_name)
+                    ax_idx += 1
+                else:
+                    row_axes = [flat_axs[ax_idx + j] for j in range(n_comp)]
+                    row_name = f"{name}_{row_i}" if name else None
+                    m = self.plot(s, ax=row_axes, name=row_name, clim=clim, sync=sync,
+                                 colorbar=colorbar, method=method, labels=sub_labels, **kwargs)
+                    all_mappables.append(m)
+                    # Collect the plot names that were created
+                    if sub_labels:
+                        all_plot_names.extend(sub_labels)
+                    ax_idx += n_comp
+            
+            # Auto-sync if norm_type was given at this level. sync_clim handles
+            # colorbar sizing and subplot spacing (wspace) precisely, so we skip
+            # tight_layout when it runs -- tight_layout would override subplots_adjust
+            # and make axes unequal when colorbar tick labels differ in width.
+            synced = False
+            if norm_type and all_plot_names:
+                if len(norm_type) != len(all_plot_names):
+                    raise ValueError(f"norm_type length ({len(norm_type)}) must match total plots ({len(all_plot_names)}): {all_plot_names}")
+                self.sync_clim(*all_plot_names, norm_type=norm_type, symmetric=symmetric,
+                               colorbar=colorbar, cbar_width=cbar_width, cbar_pad=cbar_pad, wspace=wspace)
+                synced = True
+            
+            # Hide any leftover axes
+            for j in range(ax_idx, len(flat_axs)):
+                flat_axs[j].set_visible(False)
+            
+            if not synced:
+                fig.tight_layout()
+            return all_mappables
         
         parts = scalar.rsplit('.', 1)
         if len(parts) != 2:
             raise ValueError(f"scalar must be 'block.scalar_name', got '{scalar}'")
         block_name, scalar_name = parts[0], parts[1]
         
+        # Check if block_name is a step (e.g., 'fit.loss')
+        if block_name in self._steps:
+            step = self._steps[block_name]
+            if scalar_name == 'loss' and 'loss' in step:
+                if ax is None:
+                    fig, ax = plt.subplots()
+                losses = step['loss']
+                ax.semilogy(losses)
+                ax.set_xlabel('iteration')
+                ax.set_ylabel('loss')
+                ax.set_title(f'{block_name} loss')
+                ax.grid(True, alpha=0.3)
+                if name:
+                    self._plots[name] = {'sc': None, 'ax': ax, 'clim': None, 'scalar': scalar, 'cbar': None}
+                return ax
+            elif scalar_name == 'm' and 'm' in step:
+                # Plot trainable parameters as spatial data on source block
+                source_name = step['source']
+                m = step['m'].detach().cpu().numpy()
+                self[f'{source_name}._plot_m'] = m
+                result = self.plot(f'{source_name}._plot_m', ax=ax, name=name, clim=clim,
+                                   sync=sync, colorbar=colorbar, method=method, labels=labels, **kwargs)
+                del self[source_name].point_data['_plot_m']
+                return result
+            else:
+                raise KeyError(f"Step '{block_name}' has no plottable attribute '{scalar_name}'")
+        
         block = self[block_name]
         pts = np.asarray(block.points)
         values = block.point_data[scalar_name]
         
-        sc = ax.scatter(pts[:, 0], pts[:, 1], c=values, **kwargs)
+        if values.ndim > 1 and values.shape[1] > 1:
+            # Multi-component data (e.g., Bx, By, Bz). Create horizontal subplot layout like plot_n_components.
+            n_comp = values.shape[1]
+            
+            # Labels: if provided, use directly as plot names and titles.
+            # Otherwise generate defaults like 'name_x', 'name_y', 'name_z'.
+            if labels is not None:
+                if len(labels) != n_comp:
+                    raise ValueError(f"labels length ({len(labels)}) must match components ({n_comp})")
+                comp_names = labels  # Use labels directly as plot names
+                # Wrap in math mode: 'B_x' → '$B_x$', unless already has '$'
+                comp_titles = [f'${l}$' if '$' not in l else l for l in labels]
+            else:
+                suffixes = ['x', 'y', 'z', 'w', 'u', 'v'][:n_comp] if n_comp <= 6 else [f'c{i}' for i in range(n_comp)]
+                base_name = name if name else scalar_name
+                comp_names = [f"{base_name}_{s}" for s in suffixes]
+                comp_titles = [f'{scalar_name}$_{s}$' for s in suffixes]
+            
+            if ax is None:
+                # Figsize: ~4 inches per component plus padding
+                fig, axs = plt.subplots(1, n_comp, figsize=(3.5 * n_comp + 1, 3.5))
+            elif isinstance(ax, (list, np.ndarray)):
+                axs = ax
+                fig = axs[0].figure
+            else:
+                raise ValueError(f"For multi-component data, ax must be a list of {n_comp} axes or None")
+            
+            # Plot each component, storing with indexed names
+            mappables = []
+            for i in range(n_comp):
+                comp_values = values[:, i]
+                
+                # Temporarily replace values in point_data to reuse single-component logic
+                block.point_data[f'_temp_comp_{i}'] = comp_values
+                m = self.plot(f'{block_name}._temp_comp_{i}', ax=axs[i], name=comp_names[i],
+                              symmetric=symmetric, clim=clim, sync=sync, colorbar=colorbar, method=method, **kwargs)
+                del block.point_data[f'_temp_comp_{i}']
+                
+                axs[i].set_title(comp_titles[i])
+                mappables.append(m)
+            
+            synced = False
+            if sync:
+                self.sync_clim(*comp_names, symmetric=symmetric, norm_type=norm_type, 
+                               colorbar=colorbar, cbar_width=cbar_width, 
+                               cbar_pad=cbar_pad, wspace=wspace)
+                synced = True
+                
+            if not synced:
+                fig.tight_layout()
+            return mappables
+        
+        if ax is None:
+            fig, ax = plt.subplots()
+        
+        # Handle color limits
+        if sync and sync in self._plots:
+            clim = self._plots[sync]['clim']
+        if clim is None:
+            vmin, vmax = float(values.min()), float(values.max())
+        else:
+            vmin, vmax = clim
+        
+        if symmetric:
+            bound = max(abs(vmin), abs(vmax))
+            vmin, vmax = -bound, bound
+        
+        # Determine method
+        is_image_data = isinstance(block, pv.ImageData)
+        if method == 'auto':
+            method = 'imshow' if is_image_data else 'scatter'
+        
+        if method == 'scatter':
+            mappable = ax.scatter(pts[:, 0], pts[:, 1], c=values, vmin=vmin, vmax=vmax, **kwargs)
+            
+        elif method in ('imshow', 'pcolormesh'):
+            # Need grid structure. For ImageData we have dimensions, for PolyData we infer from points.
+            if is_image_data:
+                nx, ny, nz = block.dimensions
+                x0, y0, z0 = block.origin
+                dx, dy, dz = block.spacing
+            else:
+                # Infer grid from unique x, y values
+                xs = np.unique(pts[:, 0])
+                ys = np.unique(pts[:, 1])
+                nx, ny = len(xs), len(ys)
+                if nx * ny != len(pts):
+                    raise ValueError(f"Cannot use {method} on non-rectangular grid ({nx}x{ny} != {len(pts)} points)")
+                x0, y0 = xs.min(), ys.min()
+                dx = xs[1] - xs[0] if nx > 1 else 1.0
+                dy = ys[1] - ys[0] if ny > 1 else 1.0
+            
+            grid = values.reshape((ny, nx), order='C')  # C-order: first index (nx) varies fastest in flat values
+            
+            # Extent for imshow: [x_min, x_max, y_min, y_max]. For pixel-centered data, extend by half-pixel.
+            extent = [x0 - dx/2, x0 + (nx - 0.5)*dx, y0 - dy/2, y0 + (ny - 0.5)*dy]
+            
+            if method == 'imshow':
+                # origin='lower' so y increases upward
+                mappable = ax.imshow(grid, extent=extent, origin='lower', vmin=vmin, vmax=vmax, 
+                                     aspect='equal', **kwargs)
+            else:  # pcolormesh
+                mappable = ax.pcolormesh(xs, ys, grid, shading='nearest', vmin=vmin, vmax=vmax, **kwargs)
+                ax.set_aspect('equal')
+        else:
+            raise ValueError(f"Unknown method '{method}'. Use 'auto', 'scatter', 'imshow', or 'pcolormesh'.")
+        
         ax.set_aspect('equal')
-        return sc
+        
+        cbar = None
+        if colorbar:
+            from mpl_toolkits.axes_grid1 import make_axes_locatable
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes("right", size="5%", pad="2%")
+            cbar = ax.figure.colorbar(mappable, cax=cax)
+        
+        # Store plot if named
+        if name:
+            self._plots[name] = {'sc': mappable, 'ax': ax, 'clim': (vmin, vmax), 'scalar': scalar, 'cbar': cbar}
+        
+        return mappable
+    
+    def sync_clim(self, *names, norm_type=None, symmetric=False, colorbar=False, 
+                  cbar_width=0.05, cbar_pad=0.02, wspace=None, cbar_format='scientific'):
+        """
+        Synchronize color limits across named plots, with optional grouping like plot_n_components.
+        
+        names: plot names to sync. If empty, uses all stored plots.
+        norm_type: grouping pattern like 'AAB' - plots with same letter share limits.
+                   Length must match number of names. If None, all share same limits ('AAA...').
+        symmetric: if True, center on 0: clim = (-max_abs, +max_abs)
+        colorbar: if True, add colorbars to each plot
+        cbar_width: colorbar width as fraction of plot width (default 0.05 = 5%)
+        cbar_pad: padding between plot and colorbar as fraction (default 0.02 = 2%)
+        wspace: spacing between subplots as fraction of plot width (default None = no change).
+        cbar_format: colorbar tick format. Options:
+            'scientific' (default): shows "2" with "×10⁻⁴" on top (ScalarFormatter with powerlimits)
+            '%.2e': printf-style format string for scientific notation
+            '%.3f': printf-style for fixed decimal
+            None: use matplotlib default
+            or pass a matplotlib.ticker.Formatter instance
+        
+        Usage:
+            pipe.sync_clim('target', 'pred', 'error', symmetric=True, colorbar=True, wspace=0.4)
+            pipe.sync_clim('target', 'pred', 'error', norm_type='AAB', colorbar=True, cbar_format='%.1e')
+        """
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        
+        if not names:
+            names = list(self._plots.keys())
+        
+        if norm_type is None:
+            norm_type = 'A' * len(names)
+        if len(norm_type) != len(names):
+            raise ValueError(f"norm_type length ({len(norm_type)}) must match names count ({len(names)})")
+        
+        # Build groups: {'A': ['target', 'pred'], 'B': ['error']}
+        groups = {}
+        for name, group_key in zip(names, norm_type):
+            if group_key not in groups:
+                groups[group_key] = []
+            groups[group_key].append(name)
+        
+        # Compute clim per group from original data, not stored clim (which may be stale)
+        group_clims = {}
+        for group_key, group_names in groups.items():
+            vmins, vmaxs = [], []
+            for n in group_names:
+                info = self._plots[n]
+                # Get actual data range from the scatter's array
+                arr = info['sc'].get_array()
+                vmins.append(float(arr.min()))
+                vmaxs.append(float(arr.max()))
+            vmin, vmax = min(vmins), max(vmaxs)
+            if symmetric:
+                bound = max(abs(vmin), abs(vmax))
+                vmin, vmax = -bound, bound
+            group_clims[group_key] = (vmin, vmax)
+        
+        # Apply clim to each plot
+        for name, group_key in zip(names, norm_type):
+            info = self._plots[name]
+            vmin, vmax = group_clims[group_key]
+            info['sc'].set_clim(vmin, vmax)
+            info['clim'] = (vmin, vmax)
+            
+            # Add or replace colorbar with controlled sizing
+            if colorbar:
+                import matplotlib.ticker as ticker
+                ax = info['ax']
+                # Remove old colorbar if present
+                if info.get('cbar') is not None:
+                    info['cbar'].remove()
+                
+                divider = make_axes_locatable(ax)
+                cax = divider.append_axes("right", size=f"{cbar_width*100:.0f}%", pad=f"{cbar_pad*100:.0f}%")
+                cbar = ax.figure.colorbar(info['sc'], cax=cax)
+                
+                # Apply tick format
+                if cbar_format == 'scientific':
+                    # ScalarFormatter with exponent on top, ticks show mantissa only
+                    fmt = ticker.ScalarFormatter(useMathText=True)
+                    fmt.set_powerlimits((-2, 2))  # use scientific for values outside 0.01-100
+                    cbar.ax.yaxis.set_major_formatter(fmt)
+                    cbar.ax.ticklabel_format(style='scientific', axis='y', scilimits=(-2, 2))
+                elif isinstance(cbar_format, str):
+                    # Printf-style format string like '%.2e' or '%.3f'
+                    cbar.ax.yaxis.set_major_formatter(ticker.FormatStrFormatter(cbar_format))
+                elif cbar_format is not None:
+                    # Assume it's a Formatter instance
+                    cbar.ax.yaxis.set_major_formatter(cbar_format)
+                
+                info['cbar'] = cbar
+        
+        # Adjust spacing between subplots if requested
+        if wspace is not None and names:
+            fig = self._plots[names[0]]['ax'].figure
+            fig.subplots_adjust(wspace=wspace)
+        
+        return group_clims
+    
+    @property
+    def plots(self):
+        """Access stored plots by name."""
+        return self._plots
     
     def to_image_data(self, block_name, tol=1e-5):
         """
@@ -965,5 +1573,6 @@ class Pipeset(pv.MultiBlock):
 
 
 # Backwards compatibility aliases
-MagneticFieldImageData = Dataset
+Dataset = Pipeset
+MagneticFieldImageData = Dataset  # old name for the ImageData-based class
 MagneticFieldUnstructuredGrid = UnstructuredData
