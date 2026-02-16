@@ -161,7 +161,7 @@ class Region2D:
         """Returns boolean mask for points inside region (x,y only, ignores z)."""
         if isinstance(pts, (torch.Tensor, np.ndarray)):
             x, y = pts[:, 0], pts[:, 1]
-        elif isinstance(pts, (pv.PolyData, pv.UnstructuredGrid)):
+        elif isinstance(pts, (pv.PolyData, pv.UnstructuredGrid, pv.ImageData)):
             x, y = pts.points[:, 0], pts.points[:, 1]
         else:
             raise ValueError(f"Unsupported type: {type(pts)}")
