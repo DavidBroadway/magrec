@@ -1,5 +1,7 @@
 # Classes and functions for handling spatial magnetic field data.
 
+import functools
+import html
 import re
 import scipy
 import torch
@@ -29,12 +31,12 @@ class MagneticFieldDataMixin:
             # Check if the attribute is in `field_data`
             field_data = object.__getattribute__(self, 'field_data')
             if name in field_data:
-                return torch.tensor(field_data[name])
+                return torch.as_tensor(field_data[name])
             
             # Check if the attribute is in `point_data`
             point_data = object.__getattribute__(self, 'point_data')
             if name in point_data:
-                return torch.tensor(point_data[name])
+                return torch.as_tensor(point_data[name])
             
         except AttributeError:
             pass
@@ -44,7 +46,7 @@ class MagneticFieldDataMixin:
         
     def map(self, func: callable, name):
         """Map a function over all points, assign result to point_data."""
-        self.point_data[name] = func(torch.tensor(self.points, dtype=torch.float32)).detach().numpy()
+        self.point_data[name] = func(torch.as_tensor(self.points, dtype=torch.float32)).detach().numpy()
         return self
 
 
@@ -202,11 +204,26 @@ class Region2D:
     def __repr__(self):
         return f"Region2D(x=[{self.x_min:.2e}, {self.x_max:.2e}], y=[{self.y_min:.2e}, {self.y_max:.2e}])"
     
+    
+def wrap_as_pipeset(method):
+    """
+    Decorator for Pipeset methods that may return bare VTK datasets.
+    If the wrapped method returns an ImageData / PolyData / UnstructuredGrid /
+    StructuredGrid, it is wrapped into a new Pipeset so that methods like
+    get_as_grid() remain available on the returned object.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        result = method(self, *args, **kwargs)
+        return self._wrap_result_as_pipeset(result, default_name=method.__name__)
+    return wrapper
+    
 
 class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
     """
-    Pipeline + Dataset hybrid built on PyVista MultiBlock. Each named block is a point set,
-    which can be a structured grid or an unstructured point cloud.
+    Pipeline + Dataset hybrid built on PyVista MultiBlock. Each block is a point set
+    (structured or unstructured). When there is only one block, .points, .point_data,
+    etc. delegate to it so you use the Pipeset like the block (no shallow wrap).
     
     Setting a PyTorch tensor with last dim 2 or 3 auto-creates a PolyData block.
     Scalars can be added to existing blocks via pipe['name.scalar'] = values.
@@ -267,12 +284,493 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
     
     def __init__(self, *args, **kwargs):
         pv.MultiBlock.__init__(self, *args, **kwargs)
-        # Store plot objects for colorbar synchronization: {'name': {'sc': mappable, 'ax': ax, 'clim': (vmin, vmax)}}
         self._plots = {}
-        # Steps connect blocks: propagators, trainers, etc.
-        # Each step is a dict with 'source', 'target', 'fn', and optional extra state.
         self._steps = {}
     
+    def __repr__(self):
+        if len(self) == 1:
+            return self[0].__repr__()
+        return super().__repr__()
+
+    def _repr_html_(self):
+        """Rich HTML representation for Jupyter notebooks.
+        
+        Single-block: custom table with header + data arrays where field string
+        values (e.g. *_units) are shown directly in the arrays section.
+        Multi-block: enhanced block table showing
+        each block's type, point count, arrays, and units at a glance.
+        """
+        units = self.units
+
+        if len(self) == 1:
+            blk = super().__getitem__(0)
+            return self._dataset_repr_with_field_values(blk)
+
+        # Multi-block: two-column layout (info | blocks with details)
+        fmt = "<table style='width: 100%;'>"
+        fmt += '<tr><th>Pipeset</th><th>Blocks</th></tr>'
+
+        # Left column: summary attributes
+        fmt += '<tr><td><table>\n'
+        fmt += f'<tr><td>N Blocks</td><td>{len(self)}</td></tr>\n'
+        bds = self.bounds
+        ff = '{:.3e}'
+        fmt += f'<tr><td>X Bounds</td><td>{ff.format(bds[0])}, {ff.format(bds[1])}</td></tr>\n'
+        fmt += f'<tr><td>Y Bounds</td><td>{ff.format(bds[2])}, {ff.format(bds[3])}</td></tr>\n'
+        fmt += f'<tr><td>Z Bounds</td><td>{ff.format(bds[4])}, {ff.format(bds[5])}</td></tr>\n'
+        if units:
+            fmt += '<tr><td colspan="2"><b>Units</b></td></tr>\n'
+            for name, unit in units.items():
+                fmt += f'<tr><td style="padding-left:10px">{name}</td><td>{unit}</td></tr>\n'
+        fmt += '</table></td>\n'
+
+        # Right column: block details
+        fmt += '<td><table>\n'
+        fmt += '<tr><th>#</th><th>Name</th><th>Type</th><th>N Points</th><th>Arrays</th></tr>\n'
+        for i in range(len(self)):
+            blk = super().__getitem__(i)
+            bname = self.get_block_name(i) or ''
+            btype = type(blk).__name__
+            npts = blk.n_points if hasattr(blk, 'n_points') else '—'
+
+            # Collect array names with units annotation
+            arr_parts = []
+            if hasattr(blk, 'point_data'):
+                for aname in blk.point_data.keys():
+                    u_key = f'{aname}_units'
+                    if hasattr(blk, 'field_data') and u_key in blk.field_data:
+                        u = str(blk.field_data[u_key][0])
+                        arr_parts.append(f'{aname} <i>[{u}]</i>')
+                    else:
+                        arr_parts.append(aname)
+            arrays_str = ', '.join(arr_parts) if arr_parts else '—'
+            fmt += f'<tr><td>{i}</td><td>{bname}</td><td>{btype}</td><td>{npts}</td><td>{arrays_str}</td></tr>\n'
+        fmt += '</table></td></tr></table>'
+        return fmt
+
+    @staticmethod
+    def _field_value_to_string(value):
+        """Convert a field_data value to a readable string."""
+        arr = np.asarray(value)
+        if arr.ndim == 0:
+            item = arr.item()
+            return item.decode() if isinstance(item, (bytes, bytearray)) else str(item)
+        flat = arr.ravel()
+        if flat.size == 0:
+            return ""
+        if flat.size == 1:
+            item = flat[0]
+            return item.decode() if isinstance(item, (bytes, bytearray)) else str(item)
+        # Compact representation for short vectors
+        if flat.size <= 4:
+            items = []
+            for item in flat:
+                items.append(item.decode() if isinstance(item, (bytes, bytearray)) else str(item))
+            return "[" + ", ".join(items) + "]"
+        return f"array(shape={arr.shape})"
+
+    def _dataset_repr_with_field_values(self, blk):
+        """Single-block HTML repr with explicit field-data values."""
+        if not hasattr(blk, "head"):
+            return f"<pre>{blk!r}</pre>"
+
+        fmt = "<table style='width: 100%;'>"
+        fmt += "<tr><th>Header</th><th>Data Arrays</th></tr>"
+        fmt += "<tr><td>"
+        fmt += blk.head(display=False, html=True)
+        fmt += "</td><td>"
+        fmt += "<table style='width: 100%;'>\n"
+        titles = ["Name", "Field", "Type", "N Comp", "Min", "Max"]
+        fmt += "<tr>" + "".join([f"<th>{t}</th>" for t in titles]) + "</tr>\n"
+        row = "<tr>" + "".join(["<td>{}</td>" for _ in titles]) + "</tr>\n"
+
+        def add_numeric_row(name, arr, field):
+            dl, dh = blk.get_data_range(arr)
+            dl = pv.FLOAT_FORMAT.format(dl)
+            dh = pv.FLOAT_FORMAT.format(dh)
+            ncomp = arr.shape[1] if arr.ndim > 1 else 1
+            return row.format(html.escape(str(name)), field, arr.dtype, ncomp, dl, dh)
+
+        for key, arr in blk.point_data.items():
+            fmt += add_numeric_row(key, arr, "Points")
+        for key, arr in blk.cell_data.items():
+            fmt += add_numeric_row(key, arr, "Cells")
+        for key, arr in blk.field_data.items():
+            value = self._field_value_to_string(arr)
+            # For field-data strings like *_units, use one merged cell for readability.
+            fmt += (
+                "<tr>"
+                f"<td>{html.escape(str(key))}</td>"
+                "<td>Fields</td>"
+                f"<td colspan='4' style='text-align:left;'>Value: {html.escape(value)}</td>"
+                "</tr>\n"
+            )
+
+        fmt += "</table></td></tr></table>"
+        return fmt
+
+    def __getattr__(self, name):
+        if len(self) != 1:
+            raise AttributeError(
+                f"'{type(self).__name__}' has no attribute '{name}' "
+                f"(multiple blocks: use dotted key e.g. pipe['block_name.{name}'])"
+            )
+        block = self[0]
+        try:
+            return getattr(block, name)
+        except AttributeError:
+            if hasattr(block, 'point_data') and name in block.point_data:
+                return torch.as_tensor(block.point_data[name])
+            raise
+    
+    # ── Units & Scaling ─────────────────────────────────────────────────
+    #
+    # Units are stored as field_data on each block following the currio convention:
+    #   block.field_data['<array_name>_units'] = ['T']
+    # Coordinate units use the reserved key 'coordinates_units'.
+    #
+    # pipe.set_units(B_NV='T', coordinates='m')   → stores on the single block
+    # pipe.units                                   → {'B_NV': 'T', 'coordinates': 'm'}
+    # pipe.scale('B_NV', factor=1e6)               → multiply values, record in _steps
+    # pipe.scale('B_NV', to_units='uT')            → auto-compute factor from current units
+    # pipe.scale(coordinates=True, to_units='um')   → rescale geometry + spacing/origin
+
+    def set_units(self, block=None, **units):
+        """Store unit strings as field_data['<name>_units'] on a block.
+        
+        For single-block Pipesets, block can be omitted. For multi-block, pass the
+        block name or index. The special key 'coordinates' sets geometry units.
+        Only accepts names that correspond to existing point_data arrays or
+        the reserved key 'coordinates'.
+        
+            pipe.set_units(B_NV='T', coordinates='m')
+            pipe.set_units(block='sensor', B_NV='T')
+        """
+        target = self._resolve_block(block)
+        valid_names = set(target.point_data.keys()) if hasattr(target, 'point_data') else set()
+        valid_names.add('coordinates')
+        for name in units:
+            if name not in valid_names:
+                raise KeyError(
+                    f"'{name}' is not a point_data array on this block. "
+                    f"Available: {sorted(valid_names)}")
+        for name, unit in units.items():
+            target.field_data[f'{name}_units'] = [str(unit)]
+        return self
+
+    @property
+    def units(self):
+        """Collect all '<name>_units' field_data across blocks into a dict.
+        
+        Returns dict like {'B_NV': 'T', 'coordinates': 'm'} for single block, or
+        {'block_name.B_NV': 'T', ...} for multi-block.
+        """
+        result = {}
+        suffix = '_units'
+        for i in range(len(self)):
+            blk = super().__getitem__(i)
+            if not hasattr(blk, 'field_data'):
+                continue
+            prefix = '' if len(self) == 1 else f'{self.keys()[i]}.'
+            for key in blk.field_data.keys():
+                if key.endswith(suffix):
+                    array_name = key[:-len(suffix)]
+                    val = blk.field_data[key]
+                    # field_data stores arrays; unit string is the first element
+                    result[f'{prefix}{array_name}'] = str(val[0]) if hasattr(val, '__len__') else str(val)
+        return result
+
+    def scale(self, source=None, *, factor=None, to_units=None, coordinates=False,
+              absolute=False, block=None, **array_factors):
+        """Scale point data or coordinates, with optional unit tracking.
+        
+        Scaling a point_data array:
+            pipe.scale('B_NV', factor=1e6)
+            pipe.scale('B_NV', to_units='uT')       # requires current units set
+        
+        Scaling coordinates (points, and spacing/origin for ImageData):
+            pipe.scale(coordinates=True, factor=1e6)
+            pipe.scale(coordinates=True, to_units='um')  # default from-units is 'm'
+        
+        The scaling factor is recorded in _steps['scale.<name>'] so it can be
+        reversed later via pipe.unscale(). The unit metadata is updated accordingly.
+        """
+        # Convenience form:
+        #   pipe.scale(B_NV=1e4, Bz=1e3)
+        # Applies per-array factors on the resolved block.
+        if array_factors:
+            if source is not None or factor is not None or to_units is not None or coordinates:
+                raise ValueError(
+                    "When using keyword factors (e.g. scale(B_NV=1e4)), do not pass "
+                    "source/factor/to_units/coordinates."
+                )
+            target = self._resolve_block(block)
+            for arr_name, arr_factor in array_factors.items():
+                self._scale_array(
+                    target, arr_name, arr_factor, to_units=None, block_ref=block, absolute=absolute
+                )
+            return self
+
+        # Shorthand forms for coordinate scaling:
+        #   scale(coordinates=1e7)   -> factor=1e7
+        #   scale(coordinates='um')  -> to_units='um'
+        coordinates_enabled = False
+        if isinstance(coordinates, bool):
+            coordinates_enabled = coordinates
+        elif isinstance(coordinates, (int, float, np.number)):
+            coordinates_enabled = True
+            if factor is not None:
+                raise ValueError("Pass either coordinates=<factor> or factor=, not both.")
+            factor = float(coordinates)
+        elif isinstance(coordinates, str):
+            coordinates_enabled = True
+            if to_units is not None:
+                raise ValueError("Pass either coordinates=<unit> or to_units=, not both.")
+            to_units = coordinates
+        elif coordinates is not None:
+            raise TypeError(
+                f"coordinates must be bool, numeric factor, unit string, or None; got {type(coordinates).__name__}"
+            )
+
+        if coordinates_enabled and source is not None:
+            raise ValueError("Pass either source=<array_name> or coordinates=True, not both.")
+        if factor is not None and to_units is not None:
+            raise ValueError("Pass either factor or to_units, not both.")
+        if absolute and to_units is not None:
+            raise ValueError("absolute=True is only valid with factor-based scaling.")
+        
+        target = self._resolve_block(block)
+        
+        if coordinates_enabled:
+            return self._scale_coordinates(target, factor, to_units, block, absolute=absolute)
+        
+        if source is None:
+            raise ValueError("Provide source=<array_name> or coordinates=True.")
+        return self._scale_array(target, source, factor, to_units, block, absolute=absolute)
+
+    def _resolve_block(self, block):
+        """Return the VTK block for a given name/index/None (single-block default)."""
+        if block is None:
+            if len(self) != 1:
+                raise ValueError("Ambiguous: multiple blocks, pass block=<name or index>.")
+            return super().__getitem__(0)
+        if isinstance(block, int):
+            return super().__getitem__(block)
+        if isinstance(block, str):
+            # Prefer exact top-level key first
+            if block in self.keys():
+                return super().__getitem__(block)
+            # Then try recursive leaf-path/local-name lookup
+            matches = self._find_leaf_blocks_by_name(block)
+            if len(matches) == 1:
+                return matches[0][1]
+            if len(matches) > 1:
+                paths = [p for p, _ in matches]
+                raise ValueError(f"Ambiguous block name '{block}', matches: {paths}")
+            raise KeyError(f"Block '{block}' not found")
+        raise TypeError(f"block must be int, str, or None; got {type(block).__name__}")
+
+    def _scale_array(self, target, source, factor, to_units, block_ref, absolute=False):
+        """Scale a single point_data array on target block."""
+        if source not in target.point_data:
+            raise KeyError(f"'{source}' not in point_data of block")
+        
+        units_key = f'{source}_units'
+        current_unit = None
+        has_explicit_unit = units_key in target.field_data
+        if has_explicit_unit:
+            current_unit = str(target.field_data[units_key][0])
+        
+        if to_units is not None:
+            if current_unit is None:
+                raise ValueError(
+                    f"Cannot convert to '{to_units}': no current units set for '{source}'. "
+                    f"Call pipe.set_units({source}='<unit>') first.")
+            # Both units must share the same base dimension (e.g., both end in 'T')
+            # so the conversion is purely a prefix exponent difference
+            from magrec.prop.constants import get_exponent_from_unit
+            from_exp = get_exponent_from_unit(current_unit)
+            to_exp = get_exponent_from_unit(to_units)
+            factor = 10.0 ** (from_exp - to_exp)
+        
+        if factor is None:
+            raise ValueError("Provide factor= or to_units=.")
+
+        if absolute and to_units is None:
+            # 'factor' is desired final cumulative data scale.
+            # Convert to the incremental factor needed from current state.
+            prev_scale, _ = self._parse_scaling_unit_string(current_unit) if current_unit else (1.0, None)
+            current_total_factor = 1.0 / prev_scale
+            factor = float(factor) / current_total_factor
+        
+        target.point_data[source] = np.asarray(target.point_data[source]) * factor
+        
+        # Update unit metadata
+        if to_units is not None:
+            target.field_data[units_key] = [str(to_units)]
+        else:
+            # Track manual scaling as inverse factor so physical values stay interpretable:
+            # scaled_value * (1/factor) [unit] == original physical value.
+            if has_explicit_unit and current_unit:
+                target.field_data[units_key] = [self._compose_scaled_unit_string(current_unit, factor)]
+            else:
+                target.field_data[units_key] = [self._format_inverse_factor(factor)]
+        
+        # Record in steps for reversibility
+        step_name = f'scale.{source}'
+        self._steps[step_name] = {
+            'type': 'scale', 'source': source, 'factor': factor,
+            'from_units': current_unit, 'to_units': to_units,
+        }
+        return self
+
+    @staticmethod
+    def _format_inverse_factor(factor):
+        """Format inverse scaling factor as compact scientific notation."""
+        inv = 1.0 / float(factor)
+        base, exp = f"{inv:.0e}".split("e")
+        return f"{base}e{int(exp)}"
+
+    @staticmethod
+    def _parse_scaling_unit_string(unit_string):
+        """Parse '<scale> <unit>' or legacy 'xN' scaling notation."""
+        s = str(unit_string).strip()
+        if not s:
+            return 1.0, None
+
+        parts = s.split()
+        first = parts[0]
+        rest = " ".join(parts[1:]).strip() if len(parts) > 1 else None
+
+        try:
+            return float(first), rest
+        except ValueError:
+            pass
+
+        if first.startswith("x"):
+            try:
+                return 1.0 / float(first[1:]), rest
+            except ValueError:
+                pass
+
+        return 1.0, s
+
+    def _compose_scaled_unit_string(self, existing_unit_string, factor):
+        """Compose cumulative inverse factor with optional base unit."""
+        prev_scale, base_unit = self._parse_scaling_unit_string(existing_unit_string)
+        new_scale = prev_scale * (1.0 / float(factor))
+        base, exp = f"{new_scale:.0e}".split("e")
+        scale_str = f"{base}e{int(exp)}"
+        return f"{scale_str} {base_unit}" if base_unit else scale_str
+
+    def _scale_coordinates(self, target, factor, to_units, block_ref, absolute=False):
+        """Scale point coordinates (and spacing/origin for ImageData)."""
+        units_key = 'coordinates_units'
+        current_unit = None
+        has_explicit_unit = units_key in target.field_data
+        if has_explicit_unit:
+            current_unit = str(target.field_data[units_key][0])
+        else:
+            current_unit = 'm'  # SI default for coordinates
+        
+        if to_units is not None:
+            from magrec.prop.constants import get_exponent_from_unit
+            from_exp = get_exponent_from_unit(current_unit)
+            to_exp = get_exponent_from_unit(to_units)
+            factor = 10.0 ** (from_exp - to_exp)
+        
+        if factor is None:
+            raise ValueError("Provide factor= or to_units=.")
+
+        if absolute and to_units is None:
+            # Same absolute-mode semantics as for point_data arrays.
+            prev_scale, _ = self._parse_scaling_unit_string(current_unit) if current_unit else (1.0, None)
+            current_total_factor = 1.0 / prev_scale
+            factor = float(factor) / current_total_factor
+        
+        # Scale point positions. For ImageData we must adjust origin and spacing
+        # (points are computed from those); for PolyData we scale points directly.
+        if isinstance(target, pv.ImageData):
+            ox, oy, oz = target.origin
+            sx, sy, sz = target.spacing
+            target.origin = (ox * factor, oy * factor, oz * factor)
+            target.spacing = (sx * factor, sy * factor, sz * factor)
+        else:
+            target.points = np.asarray(target.points) * factor
+        
+        if to_units is not None:
+            new_unit = str(to_units)
+        else:
+            new_unit = (
+                self._compose_scaled_unit_string(current_unit, factor)
+                if has_explicit_unit
+                else self._format_inverse_factor(factor)
+            )
+        target.field_data[units_key] = [new_unit]
+        
+        step_name = 'scale.coordinates'
+        self._steps[step_name] = {
+            'type': 'scale_coordinates', 'factor': factor,
+            'from_units': current_unit, 'to_units': new_unit,
+        }
+        return self
+
+    # TODO: replace unscale() with a proper step-referencing approach. The problem
+    # with a standalone unscale('B_NV') is ambiguity: there could be multiple
+    # successive scalings of the same array (e.g. first unit conversion T→uT,
+    # then normalization by std). Instead, each scale() call should return a step
+    # handle (or be named), and unscale should reference that handle:
+    #
+    #     s1 = pipe.scale('B_NV', to_units='uT')        # step handle
+    #     s2 = pipe.scale('B_NV', factor=1/std)          # another step
+    #     pipe.unscale(s2)                                # undo just s2
+    #     pipe.unscale(s1)                                # undo s1
+    #
+    # The steps are already recorded in _steps with enough info to invert.
+    # A cleaner design would store them as an ordered list per array (not
+    # overwriting 'scale.B_NV'), pop the last one on unscale, and compose
+    # factors when queried. For now this naive version only handles the last
+    # scaling per array.
+
+    def unscale(self, source=None, *, coordinates=False, block=None):
+        """Reverse the most recent scale() call for a given source.
+        
+        Only handles one scaling per array — see TODO above for the proper
+        step-referencing design that supports stacked scalings.
+        """
+        if coordinates:
+            step_name = 'scale.coordinates'
+        elif source is not None:
+            step_name = f'scale.{source}'
+        else:
+            raise ValueError("Provide source=<array_name> or coordinates=True.")
+        
+        if step_name not in self._steps:
+            raise KeyError(f"No recorded scaling step '{step_name}' to reverse.")
+        
+        step = self._steps[step_name]
+        inv_factor = 1.0 / step['factor']
+        target = self._resolve_block(block)
+        
+        if coordinates:
+            if isinstance(target, pv.ImageData):
+                ox, oy, oz = target.origin
+                sx, sy, sz = target.spacing
+                target.origin = (ox * inv_factor, oy * inv_factor, oz * inv_factor)
+                target.spacing = (sx * inv_factor, sy * inv_factor, sz * inv_factor)
+            else:
+                target.points = np.asarray(target.points) * inv_factor
+            if step['from_units']:
+                target.field_data['coordinates_units'] = [step['from_units']]
+        else:
+            name = step['source']
+            target.point_data[name] = np.asarray(target.point_data[name]) * inv_factor
+            if step['from_units']:
+                target.field_data[f'{name}_units'] = [step['from_units']]
+        
+        del self._steps[step_name]
+        return self
+
     @classmethod
     def from_dict(cls, datadict, rename_map=None, x_grid=False, y_grid=False, 
                   as_regular_grid=False, nx=None, ny=None, nz=1):
@@ -303,22 +801,23 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         
         Returns
         -------
-        Dataset or pv.PolyData
-            Dataset (ImageData) if as_regular_grid=True, otherwise PolyData
+        Pipeset
+            Pipeset with one block (index 0). When only one block, .points, .point_data
+            etc. delegate to that block so you use the pipe like the block directly.
         
         Examples
         --------
-        >>> # Point list coordinates
         >>> data = {'xs': [0, 1, 2], 'ys': [0, 1, 2], 'B': [...]}
-        >>> ds = Dataset.from_dict(data)
+        >>> pipe = Pipeset.from_dict(data)
+        >>> pipe.point_data['B']   # single block: direct access
         
         >>> # Grid coordinates
         >>> xx, yy = np.meshgrid(x, y)
         >>> data = {'xs': xx, 'ys': yy, 'B': field}
-        >>> ds = Dataset.from_dict(data, x_grid=True, y_grid=True)
+        >>> pipe = Pipeset.from_dict(data, x_grid=True, y_grid=True)
         
         >>> # With renaming
-        >>> ds = Dataset.from_dict(data, rename_map=["BNV->B", "x->xs"])
+        >>> pipe = Pipeset.from_dict(data, rename_map=["BNV->B", "x->xs"])
         """
         # Create a copy to avoid modifying original
         data = datadict.copy()
@@ -386,11 +885,10 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
                 raise ValueError(f"Data array '{key}' has unsupported dimensionality: {value_array.ndim}D")
         
         if as_regular_grid:
-            # Resample to regular grid
             return cls.from_unstructured(unstruct, nx=nx, ny=ny, nz=nz)
-        else:
-            # Return UnstructuredData
-            return unstruct
+        pipe = cls()
+        pipe.append(unstruct)
+        return pipe
     
     @staticmethod
     def _parse_coordinates(xs, ys, zs=None, height=None, standoff=None, x_grid=False, y_grid=False):
@@ -466,7 +964,8 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
     
     @staticmethod
     def _apply_rename_map(data, rename_map):
-        """Apply rename_map to transform dictionary keys."""
+        """Apply rename_map to transform dictionary keys. Used in renaming 
+        passed dictionary keys to names of arrays in the dataset."""
         # Convert rename_map to dict if in other formats
         if isinstance(rename_map, dict):
             pass
@@ -639,6 +1138,32 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         interpolated = ds.interpolate(unstructured_data)
         return cls(interpolated)
     
+    def _wrap_result_as_pipeset(self, result, default_name="block"):
+        """
+        Wrap common VTK dataset outputs into a new Pipeset.
+        - If result is already a Pipeset, return it unchanged.
+        - If result is a single PyVista dataset, wrap it as a one-block Pipeset.
+        - If result is a list/tuple of datasets, wrap them as multiple blocks.
+        - Otherwise, return result unchanged.
+        """
+        # Already a Pipeset
+        if isinstance(result, Pipeset):
+            return result
+        vtk_types = (pv.ImageData, pv.PolyData, pv.UnstructuredGrid, pv.StructuredGrid)
+        # Single dataset
+        if isinstance(result, vtk_types):
+            pipe = Pipeset()
+            pipe[default_name] = result
+            return pipe
+        # List/tuple of datasets
+        if isinstance(result, (list, tuple)) and result and all(isinstance(r, vtk_types) for r in result):
+            pipe = Pipeset()
+            for i, r in enumerate(result):
+                pipe[f"{default_name}_{i}"] = r
+            return pipe
+        # Anything else: leave as is (numbers, tensors, dicts, etc.)
+        return result
+    
     def __sub__(self, other, threshold_distance=1e-2):
         """Subtract points of one dataset from another (set difference)."""
         if not hasattr(other, 'points'):
@@ -796,6 +1321,249 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         expanded_grid.spacing = spacing
         
         return expanded_grid
+
+    def _iter_leaf_blocks(self, container=None, parent_path="", block_type=None):
+        """Yield leaf blocks recursively as (path, local_name, block).
+
+        A leaf is any block that is not a MultiBlock. Paths are dot-joined names,
+        with numeric indices used for unnamed blocks.
+        """
+        if container is None:
+            container = self
+        if not isinstance(container, pv.MultiBlock):
+            return
+
+        for i in range(len(container)):
+            child = container[i]
+            local_name = container.get_block_name(i) or str(i)
+            path = f"{parent_path}.{local_name}" if parent_path else local_name
+            if isinstance(child, pv.MultiBlock):
+                yield from self._iter_leaf_blocks(child, path, block_type=block_type)
+            else:
+                if block_type is None or isinstance(child, block_type):
+                    yield path, local_name, child
+
+    def _find_leaf_blocks_by_name(self, name, block_type=None):
+        """Return all leaf blocks matching name by local name or full path."""
+        matches = []
+        for path, local_name, block in self._iter_leaf_blocks(block_type=block_type):
+            if name == local_name or name == path:
+                matches.append((path, block))
+        return matches
+
+    def _find_by_name(self, name, block_type=None):
+        """Find all leaves and arrays matching a name.
+
+        Returns a list of dicts with:
+            kind: 'block' or 'array'
+            path: full leaf path
+            block: leaf object
+            name: local matched name (for arrays: array name)
+        """
+        matches = []
+        for path, local_name, block in self._iter_leaf_blocks(block_type=block_type):
+            if name == local_name or name == path:
+                matches.append({"kind": "block", "path": path, "block": block, "name": local_name})
+            if hasattr(block, "point_data") and name in block.point_data:
+                matches.append({"kind": "array", "path": path, "block": block, "name": name})
+        return matches
+    
+    def downsample(self, new_shape, out=None, name=None, source=None, interpolation='linear',
+                   anti_aliasing=False, as_tensor=False, as_grid=False, inplace=False):
+        """Downsample ImageData blocks to new dimensions.
+
+        Source resolution:
+        - None            -> unique ImageData leaf block, all arrays
+        - int             -> top-level block index, all arrays
+        - str             -> leaf block name/path OR array name
+        - list/tuple[str] -> array names on a unique ImageData leaf block
+
+        If a string matches both block name and array name, raises ValueError.
+        For block sources (or None), all arrays are resampled together.
+
+        Parameters
+        ----------
+        out : str, optional
+            Output block name. If provided, behaves like ``inplace=True`` and stores
+            the result under this name.
+        name : str, optional
+            Backward-compatible alias for ``out``.
+        inplace : bool, default False
+            If True, store the downsampled result into this Pipeset under ``out``
+            (or ``downsampled`` when ``out`` is not provided) and return ``self``.
+            If False, return a new one-block Pipeset with the downsampled result.
+        """
+        if out is None and name is not None:
+            out = name
+
+        dims = tuple(int(d) for d in new_shape)
+        if len(dims) == 2:
+            dims = (dims[0], dims[1], 1)
+
+        # Resolve source -> (block, selected_arrays)
+        # selected_arrays is None for whole-block resampling.
+        if source is None:
+            image_leaves = list(self._iter_leaf_blocks(block_type=pv.ImageData))
+            if len(image_leaves) != 1:
+                raise ValueError(
+                    "downsample(..., source=None) requires exactly one ImageData leaf block; "
+                    "pass source=<block_name>, source=<index>, or source=<array_name>."
+                )
+            block, selected_arrays = image_leaves[0][2], None
+        elif isinstance(source, int):
+            block = self[source]
+            if not isinstance(block, pv.ImageData):
+                raise TypeError(f"downsample only supports ImageData; got {type(block).__name__}")
+            selected_arrays = None
+        elif isinstance(source, (list, tuple)):
+            selected_arrays = [str(s) for s in source]
+            if len(selected_arrays) == 0:
+                raise ValueError("source iterable cannot be empty")
+            block_candidates = []
+            for _, _, b in self._iter_leaf_blocks(block_type=pv.ImageData):
+                if all(a in b.point_data for a in selected_arrays):
+                    block_candidates.append(b)
+            if len(block_candidates) == 0:
+                raise KeyError(f"no ImageData leaf block contains all arrays {selected_arrays}")
+            if len(block_candidates) > 1:
+                raise ValueError(
+                    f"arrays {selected_arrays} match multiple ImageData leaf blocks; "
+                    "disambiguate by downsampling a block first."
+                )
+            block = block_candidates[0]
+        elif isinstance(source, str):
+            matches = self._find_by_name(source, block_type=pv.ImageData)
+            if len(matches) == 0:
+                raise KeyError(
+                    f"'{source}' is neither a leaf block name/path nor a point_data array "
+                    "on any ImageData leaf block"
+                )
+            if len(matches) > 1:
+                # Prefer a unique cached hit already at requested output dimensions.
+                dim_matches = []
+                for m in matches:
+                    b = m["block"]
+                    if isinstance(b, pv.ImageData) and tuple(b.dimensions) == tuple(dims):
+                        # For array-kind matches, ensure the array exists on that block.
+                        if m["kind"] == "array" and source in b.point_data:
+                            dim_matches.append(m)
+                        elif m["kind"] == "block":
+                            dim_matches.append(m)
+
+                # De-duplicate by block identity in case both block+array match same block.
+                uniq_by_block = {}
+                for m in dim_matches:
+                    uniq_by_block[id(m["block"])] = m
+                dim_unique = list(uniq_by_block.values())
+
+                if len(dim_unique) == 1:
+                    m = dim_unique[0]
+                    block = m["block"]
+                    # Prefer array interpretation when available so as_grid/as_tensor works.
+                    if source in block.point_data:
+                        selected_arrays = [source]
+                    else:
+                        selected_arrays = None
+                else:
+                    kinds = {m["kind"] for m in matches}
+                    if len(kinds) > 1:
+                        raise ValueError(
+                            f"'{source}' matches both a block name and a point_data array; "
+                            "disambiguate with source=<int index> or unique names."
+                        )
+                    raise ValueError(
+                        f"'{source}' matches multiple {next(iter(kinds))} entries; use unique names or paths."
+                    )
+            else:
+                match = matches[0]
+                block = match["block"]
+                selected_arrays = None if match["kind"] == "block" else [source]
+        else:
+            raise TypeError(f"source must be str, int, list, tuple, or None; got {type(source).__name__}")
+
+        base_kw = dict(
+            dimensions=dims,
+            interpolation=interpolation,
+            anti_aliasing=anti_aliasing,
+            inplace=False,
+        )
+
+        # Reuse an already stored downsampled grid when possible, especially for
+        # fast as_grid/as_tensor access. Prefer explicit cache name, otherwise
+        # search leaf blocks for a matching ImageData with same dimensions/array.
+        cache_name = out or "downsampled"
+        if selected_arrays is not None and len(selected_arrays) == 1:
+            arr0 = selected_arrays[0]
+            cached_block = None
+
+            # 1) Preferred: named cache block
+            if isinstance(cache_name, str) and cache_name in self.keys():
+                maybe = super().__getitem__(cache_name)
+                if isinstance(maybe, Pipeset) and len(maybe) == 1:
+                    maybe = maybe[0]
+                elif isinstance(maybe, pv.MultiBlock) and len(maybe) == 1:
+                    maybe = maybe[0]
+                if (
+                    isinstance(maybe, pv.ImageData)
+                    and tuple(maybe.dimensions) == tuple(dims)
+                    and arr0 in maybe.point_data
+                ):
+                    cached_block = maybe
+
+            # 2) Fallback: search any matching ImageData leaf
+            if cached_block is None:
+                for _, _, b in self._iter_leaf_blocks(block_type=pv.ImageData):
+                    if tuple(b.dimensions) == tuple(dims) and arr0 in b.point_data:
+                        cached_block = b
+                        break
+
+            if cached_block is not None:
+                wrapped_cached = Pipeset()
+                wrapped_cached.append(cached_block)
+                if as_grid:
+                    return wrapped_cached.get_as_grid(arr0, keep_dims=True)
+                if as_tensor:
+                    return torch.as_tensor(np.asarray(cached_block.point_data[arr0]))
+
+        # Always resample explicitly per-array. This avoids backend-dependent behavior
+        # where ImageData.resample() can keep only active scalars in whole-block mode.
+        arrays_to_resample = (
+            list(block.point_data.keys()) if selected_arrays is None else list(selected_arrays)
+        )
+        if len(arrays_to_resample) == 0:
+            # No arrays to carry over; keep geometry-only result.
+            resampled = block.resample(**base_kw)
+        else:
+            resampled = None
+            for arr_name in arrays_to_resample:
+                r = block.resample(**{**base_kw, "scalars": arr_name, "preference": "point"})
+                if resampled is None:
+                    resampled = r
+                else:
+                    resampled.point_data[arr_name] = r.point_data[arr_name]
+
+        # Preserve field_data metadata (e.g. *_units) from source block.
+        for k in block.field_data.keys():
+            resampled.field_data[k] = block.field_data[k]
+
+        wrapped = Pipeset()
+        wrapped.append(resampled)
+
+        if as_grid:
+            if selected_arrays is None or len(selected_arrays) != 1:
+                raise ValueError("as_grid requires a single array source")
+            return wrapped.get_as_grid(selected_arrays[0], keep_dims=True)
+
+        if as_tensor:
+            if selected_arrays is None or len(selected_arrays) != 1:
+                raise ValueError("as_tensor requires a single array source")
+            return torch.as_tensor(np.asarray(resampled.point_data[selected_arrays[0]]))
+
+        if inplace or out is not None:
+            out_name = out or "downsampled"
+            self.append(wrapped, out_name)
+            return self
+        return wrapped
     
     @classmethod
     def _get_as_grid(cls, grid, point_data_name):
@@ -804,26 +1572,26 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         nx, ny, nz = grid.dimensions
         shape = (nz, ny, nx, 3) if nz > 1 else (ny, nx, 3)
         if nz > 1:
-            return torch.tensor(data.reshape(*shape)).permute(2, 1, 0, 3)
+            return torch.as_tensor(data.reshape(*shape)).permute(2, 1, 0, 3)
         elif nz == 1:
-            return torch.tensor(data.reshape(*shape)).permute(1, 0, 2)
+            return torch.as_tensor(data.reshape(*shape)).permute(1, 0, 2)
         else:
             raise ValueError("Invalid dimensions for the grid.")
     
-    def get_as_grid(self, point_data_name):
-        """Return point data reshaped to grid matching mesh structure.
-        
-        Only available for ImageData (structured grids).
-        """
+    def get_as_grid(self, point_data_name, keep_dims=False):
+        """Return point data reshaped to (nx, ny, nz[, ncomp]) to match grid. ImageData only."""
         data = self.__getattr__(point_data_name)
         nx, ny, nz = self.dimensions
-        shape = (nz, ny, nx, 3) if nz > 1 else (ny, nx, 3)
+        ncomp = data.shape[1] if data.ndim == 2 else 1
+        has_comp_dim = ncomp > 1 or keep_dims  # determine if there's a dimension for the component of the point data
+        # Reshape flat to VTK order (z, y, x) or (z, y, x, ncomp); then permute to (x, y, z[, ncomp])
         if nz > 1:
-            return data.reshape(*shape).permute(2, 1, 0, 3)
-        elif nz == 1:
-            return data.reshape(*shape).permute(1, 0, 2)
+            shape = (nz, ny, nx, ncomp) if has_comp_dim else (nz, ny, nx)
+            perm = (2, 1, 0, 3) if has_comp_dim else (2, 1, 0)
         else:
-            raise ValueError("Invalid dimensions for the grid.")
+            shape = (ny, nx, ncomp) if has_comp_dim else (ny, nx)
+            perm = (1, 0, 2) if has_comp_dim else (1, 0)
+        return data.reshape(*shape).permute(*perm)
     
     def interpolate(self, *args, **kwargs):
         """Interpolate data onto this grid, ensuring output is Dataset."""
@@ -1043,7 +1811,14 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         
         # Full key as literal block name (e.g., 'sensor.roi' is a block)
         if key in self.keys():
-            return super().__getitem__(key)
+            blk = super().__getitem__(key)
+            # Expose leaf datasets through a one-block Pipeset wrapper so callers
+            # get dotted/scalar helpers and methods like .scale(), .get_as_grid().
+            if isinstance(blk, (pv.ImageData, pv.PolyData, pv.UnstructuredGrid, pv.StructuredGrid)):
+                wrapped = Pipeset()
+                wrapped.append(blk)
+                return wrapped
+            return blk
         
         if '.' not in key:
             return super().__getitem__(key)  # will raise KeyError
@@ -1072,7 +1847,7 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         if flat_exists:
             block = self[flat_block_name]
             if scalar_name in block.point_data:
-                return torch.tensor(block.point_data[scalar_name])
+                return torch.as_tensor(block.point_data[scalar_name])
             else:
                 raise KeyError(f"'{scalar_name}' not found in block '{flat_block_name}'")
         elif nested_exists:
@@ -1084,9 +1859,6 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
     
     def add_region(self, region, inp, name=None):
         """Create a sub-block from points in parent that fall within region."""
-        if inp is None:
-            raise ValueError("`inp` is required for adding Region2D")
-        
         if isinstance(inp, str):
             pts = region.select(self[inp])[0]
             self[inp + "." + name] = pts
@@ -1538,38 +2310,6 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         # Replace block
         super().__setitem__(block_name, img)
         return self
-    
-    def __repr__(self):
-        lines = ["Pipeset:"]
-        for name in self.keys():
-            block = super().__getitem__(name)
-            n_pts = block.n_points
-            scalars = list(block.point_data.keys())
-            btype = type(block).__name__
-            lines.append(f"  '{name}': {btype}, {n_pts} pts, scalars={scalars}")
-        return "\n".join(lines)
-    
-    def add(self, obj, name=None, **kwargs):
-        if name is None:
-            name = obj.__class__.__name__
-            
-        if isinstance(obj, Region2D):
-            inp = kwargs.get("inp", None)
-            if inp is None:
-                raise ValueError("`inp` is required for adding Region2D")
-            self.add_region(obj, inp, name)
-                    
-        elif isinstance(obj, str):
-            pts = kwargs.get("pts", None)
-            pts = kwargs.get("points", None)
-            if pts is None:
-                raise ValueError(f"`pts` or `points` argument is required for adding a named block with name {name}")
-            self[name] = pts
-            
-            # Check if rest of kwargs is a valid scalar
-            for k, v in kwargs.items():
-                if isinstance(v, (np.ndarray, torch.Tensor)) and v.ndim == 1:
-                    self[name + "." + k] = v
 
 
 # Backwards compatibility aliases
