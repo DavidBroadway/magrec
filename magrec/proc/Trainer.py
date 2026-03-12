@@ -169,19 +169,24 @@ class Trainer:
         """Run optimization. Regularization: lambda_tv (TV), lambda_ex (exchange), lambda_dm (DM), lambda_sg (spin-glass)."""
         opt = optim.Adam([self.dipole_moments], lr=lr)
         m = self.dipole_moments
+        
         for i in range(n_iters):
+        
             opt.zero_grad()
             pred = self.forward()
             loss_data = ((pred - self.target) ** 2).mean()
+        
             r_tv = self._reg_tv(m) if lambda_tv != 0 else m.new_zeros(())
             r_ex = self._reg_exchange(m) if lambda_ex != 0 else m.new_zeros(())
             r_dm = self._reg_dm(m) if lambda_dm != 0 else m.new_zeros(())
             r_sg = self._reg_sg(m) if lambda_sg != 0 else m.new_zeros(())
+        
             self.loss_data_history.append(loss_data.item())
             self.loss_tv_history.append(r_tv.item() if r_tv.numel() else 0.0)
             self.loss_ex_history.append(r_ex.item() if r_ex.numel() else 0.0)
             self.loss_dm_history.append(r_dm.item() if r_dm.numel() else 0.0)
             self.loss_sg_history.append(r_sg.item() if r_sg.numel() else 0.0)
+        
             loss = loss_data + lambda_tv * r_tv + lambda_ex * r_ex + lambda_dm * r_dm + lambda_sg * r_sg
             loss.backward()
             opt.step()

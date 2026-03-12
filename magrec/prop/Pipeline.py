@@ -241,7 +241,6 @@ class Pipeline:
             if self._dataset is None and '_last' in datadict:
                 last_value = datadict['_last']
                 if hasattr(last_value, 'points') and hasattr(last_value, 'point_data'):
-                    # Duck typing for Dataset/PyVista objects
                     self._dataset = last_value
             
             # If this step produced dipole locations (3D points), add to dataset
@@ -435,9 +434,7 @@ class Show(Step):
     
     def run(self, datadict: Dict[str, Any], dataset=None) -> Dict[str, Any]:
         """Create visualization."""
-        # Get data to visualize
         if self.field_name is not None:
-            # Try datadict first, then dataset
             if self.field_name in datadict:
                 data = datadict[self.field_name]
             elif dataset is not None and self.field_name in dataset.point_data:
@@ -446,13 +443,9 @@ class Show(Step):
                 raise KeyError(f"Field '{self.field_name}' not found")
         else:
             data = self._get_input(datadict)
-        
-        # Handle different data types
         if isinstance(data, np.ndarray) and data.ndim == 2 and data.shape[1] == 3:
-            # Array of 3D points - visualize as point cloud
             plotter = self._visualize_points(data, dataset)
         elif dataset is not None:
-            # Use dataset for visualization
             plotter = self._visualize_dataset(dataset, self.field_name)
         elif isinstance(data, np.ndarray) and data.ndim in [2, 3]:
             # 2D or 3D array - use plot_n_components
