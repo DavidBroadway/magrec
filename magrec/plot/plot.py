@@ -12,6 +12,11 @@ from PIL import Image
 
 import vedo
 
+try:
+    import pyvista as pv
+except ImportError:
+    pv = None
+
 plt.rcParams.update({
     "text.usetex": False,
     "font.family": "Helvetica"
@@ -477,7 +482,333 @@ def plot_vector_field_2d(current_distribution, ax: plt.Axes = None,
         plt.close()
         
     return fig
+
+
+def plot_vector_field_3d(vectors, positions=None, ax=None, backend='auto', cmap='plasma',
+                         color='black', units=None, title=None, show=False, num_arrows=20,
+                         clim=None, opacity=0.8, color_by='mag', **kwargs):
+    """
+    Plot a 3D vector field: scalar component as colormap surface, arrows for direction.
     
+    Two input modes:
+    1. Grid mode: vectors is (W, H, 3), positions is None -> automatic integer grid [0..W-1] x [0..H-1]
+    2. Scattered mode: vectors is (N, 3), positions is (N, 3) -> must form a regular plane grid
+    
+    Parameters
+    ----------
+    vectors : (W, H, 3) or (N, 3) array-like
+        Vector field values (e.g., dipole moments). For grid mode, shape determines dimensions.
+    positions : (N, 3) array-like or None
+        Point coordinates. If None, uses grid indices from vectors shape.
+    backend : 'auto' | 'matplotlib' | 'pyvista' | 'vedo'
+    num_arrows : int
+        Approximate arrow count along longer dimension.
+    clim : (vmin, vmax) or None
+        Colorbar limits. Values outside this range use overflow colors. None = auto from data.
+    opacity : float
+        Opacity of the magnitude surface (0-1). Default 0.8.
+    color_by : 'x' | 'y' | 'z' | 'mag' | 'norm'
+        Which component to use for coloring. 'mag'/'norm' use vector magnitude (default).
+    """
+    
+    # Normalize inputs to numpy
+    def to_numpy(x):
+        if x is None:
+            return None
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().numpy()
+        if isinstance(x, (pv.PolyData, pv.UnstructuredGrid, pv.ImageData, pv.StructuredGrid)):
+            return np.asarray(x.points)
+        return np.asarray(x)
+    
+    vectors = to_numpy(vectors)
+    positions = to_numpy(positions)
+    
+    # Grid mode: vectors is (W, H, 3), generate positions as integer grid at z=0
+    if positions is None:
+        if vectors.ndim != 3 or vectors.shape[-1] != 3:
+            raise ValueError("Without positions, vectors must be (W, H, 3)")
+        W, H = vectors.shape[:2]
+        xs, ys = np.arange(W), np.arange(H)
+        grid_x, grid_y = np.meshgrid(xs, ys, indexing='ij')
+        positions = np.stack([grid_x, grid_y, np.zeros_like(grid_x)], axis=-1)  # (W, H, 3)
+    
+    # Flatten to (N, 3) canonical form for all backends
+    if vectors.ndim == 3:
+        W, H = vectors.shape[:2]
+        vec_flat = vectors.reshape(-1, 3)
+        pos_flat = positions.reshape(-1, 3)
+    else:
+        vec_flat = vectors
+        pos_flat = positions
+        # Infer grid dimensions from unique coordinates
+        ux, uy = np.unique(pos_flat[:, 0]), np.unique(pos_flat[:, 1])
+        W, H = len(ux), len(uy)
+        if W * H != len(pos_flat):
+            raise ValueError(f"Positions don't form complete grid: {W}x{H} != {len(pos_flat)}")
+    
+    z_val = float(np.median(pos_flat[:, 2]))
+    mag_flat = np.linalg.norm(vec_flat, axis=1)
+    
+    # Subsample arrows: pick ~num_arrows along longer dimension, average vectors in each cell
+    step = max(W, H) // max(1, num_arrows)
+    step = max(1, step)
+    ix_centers = np.arange(step // 2, W, step)
+    iy_centers = np.arange(step // 2, H, step)
+    if len(ix_centers) == 0: ix_centers = np.array([W // 2])
+    if len(iy_centers) == 0: iy_centers = np.array([H // 2])
+    
+    # Reshape to grid for averaging (need (W, H, 3) layout)
+    vec_grid = vec_flat.reshape(W, H, 3) if vec_flat.size == W * H * 3 else vectors.reshape(W, H, 3)
+    pos_grid = pos_flat.reshape(W, H, 3) if pos_flat.size == W * H * 3 else positions.reshape(W, H, 3)
+    
+    arrow_pos, arrow_vec = [], []
+    for i in ix_centers:
+        for j in iy_centers:
+            i0, i1 = max(0, i - step//2), min(W, i + step//2 + 1)
+            j0, j1 = max(0, j - step//2), min(H, j + step//2 + 1)
+            avg_v = vec_grid[i0:i1, j0:j1].mean(axis=(0,1))
+            center_p = pos_grid[i, j]
+            arrow_pos.append(center_p)
+            arrow_vec.append(avg_v)
+    arrow_pos = np.array(arrow_pos)
+    arrow_vec = np.array(arrow_vec)
+    
+    # Scale arrows so max length is ~1/num_arrows of the domain span
+    span = max(np.ptp(pos_flat[:, 0]), np.ptp(pos_flat[:, 1]), 1e-30)
+    arrow_mags = np.linalg.norm(arrow_vec, axis=1)
+    max_arrow_mag = arrow_mags.max() if arrow_mags.size else 1.0
+    target_len = span / max(num_arrows, 1)
+    if max_arrow_mag > 1e-30:
+        arrow_vec_scaled = arrow_vec * (target_len / max_arrow_mag)
+    else:
+        arrow_vec_scaled = arrow_vec
+    
+    # Compute scalar grid for coloring based on color_by parameter
+    color_by = color_by.lower()
+    if color_by in ('mag', 'norm', 'magnitude'):
+        scalar_grid = np.linalg.norm(vec_grid, axis=2)
+        scalar_label = 'magnitude'
+    elif color_by == 'x':
+        scalar_grid = vec_grid[:, :, 0]
+        scalar_label = 'x-component'
+    elif color_by == 'y':
+        scalar_grid = vec_grid[:, :, 1]
+        scalar_label = 'y-component'
+    elif color_by == 'z':
+        scalar_grid = vec_grid[:, :, 2]
+        scalar_label = 'z-component'
+    else:
+        raise ValueError(f"color_by must be 'x', 'y', 'z', 'mag', or 'norm', got '{color_by}'")
+    
+    if backend == 'auto':
+        try:
+            import vedo as _
+            backend = 'vedo'
+        except ImportError:
+            backend = 'pyvista' if pv else 'matplotlib'
+    
+    if backend == 'matplotlib':
+        return _plot_vf3d_mpl(pos_grid, scalar_grid, z_val, arrow_pos, arrow_vec_scaled,
+                              ax=ax, cmap=cmap, color=color, units=units, title=title, show=show,
+                              clim=clim, opacity=opacity, scalar_label=scalar_label, **kwargs)
+    if backend == 'pyvista':
+        return _plot_vf3d_pyvista(pos_grid, scalar_grid, z_val, arrow_pos, arrow_vec_scaled,
+                                  cmap=cmap, color=color, units=units, title=title, show=show,
+                                  clim=clim, opacity=opacity, scalar_label=scalar_label, **kwargs)
+    if backend == 'vedo':
+        return _plot_vf3d_vedo(pos_grid, scalar_grid, z_val, arrow_pos, arrow_vec_scaled,
+                               cmap=cmap, color=color, units=units, title=title, show=show,
+                               clim=clim, opacity=opacity, scalar_label=scalar_label, **kwargs)
+    raise ValueError("backend must be 'auto', 'matplotlib', 'pyvista', or 'vedo'")
+
+
+def _plot_vf3d_mpl(pos_grid, scalar_grid, z_val, arrow_pos, arrow_vec,
+                   ax=None, cmap='plasma', color='black', units=None, title=None, show=False,
+                   clim=None, opacity=0.8, scalar_label='magnitude', **kwargs):
+    """
+    Matplotlib 3D backend: colored surface + quiver arrows.
+    
+    pos_grid: (W, H, 3) position coordinates
+    scalar_grid: (W, H) scalar values for coloring (magnitude or component)
+    z_val: z-plane value
+    arrow_pos: (M, 3) arrow base positions
+    arrow_vec: (M, 3) arrow direction vectors (pre-scaled)
+    clim: (vmin, vmax) colorbar limits, None for auto
+    opacity: surface opacity (0-1)
+    scalar_label: label for colorbar
+    """
+    from mpl_toolkits.mplot3d import Axes3D
+    
+    x_2d, y_2d = pos_grid[:, :, 0], pos_grid[:, :, 1]
+    z_2d = np.full_like(x_2d, z_val)
+    
+    if ax is None:
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+    else:
+        fig = ax.get_figure()
+    
+    # For components (can be negative), auto clim should be symmetric or from data range
+    if clim:
+        vmin, vmax = clim[0], clim[1]
+    else:
+        vmin = float(scalar_grid.min()) if scalar_grid.size else 0
+        vmax = float(scalar_grid.max()) if scalar_grid.size else 1.0
+    norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
+    cmap_obj = plt.get_cmap(cmap)
+    
+    facecolors = cmap_obj(norm(scalar_grid))
+    facecolors[..., 3] = opacity  # set alpha channel
+    
+    ax.plot_surface(x_2d, y_2d, z_2d, facecolors=facecolors,
+                    rstride=1, cstride=1, shade=False, edgecolor='none', antialiased=False)
+    
+    sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap_obj)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, shrink=0.6)
+    cbar_label = units if units else scalar_label
+    cbar.set_label(cbar_label)
+    
+    ax.quiver(arrow_pos[:, 0], arrow_pos[:, 1], arrow_pos[:, 2],
+              arrow_vec[:, 0], arrow_vec[:, 1], arrow_vec[:, 2],
+              color=color, arrow_length_ratio=0.15, normalize=False)
+    
+    ax.set_xlabel('x'); ax.set_ylabel('y'); ax.set_zlabel('z')
+    if title:
+        ax.set_title(title)
+    if not show:
+        plt.close()
+    return fig
+
+
+def _plot_vf3d_pyvista(pos_grid, scalar_grid, z_val, arrow_pos, arrow_vec,
+                       cmap='plasma', color='black', units=None, title=None, show=True,
+                       clim=None, opacity=0.8, scalar_label='magnitude', **kwargs):
+    """
+    PyVista backend: quad mesh with cell-colored scalars + glyph arrows.
+    
+    pos_grid: (W, H, 3) grid positions
+    scalar_grid: (W, H) scalar values (magnitude or component)
+    arrow_pos/arrow_vec: (M, 3) arrow data, pre-scaled to physical units
+    clim: (vmin, vmax) colorbar limits, None for auto
+    opacity: mesh opacity (0-1)
+    scalar_label: label for colorbar
+    """
+    W, H = pos_grid.shape[:2]
+    pos_flat = pos_grid.reshape(-1, 3)
+    
+    # Auto-scale coordinates for display (avoid 1e-6 scale numbers in axes)
+    ref = max(np.abs(pos_flat).max(), 1e-30)
+    exp = -int(np.round(np.log10(ref)))
+    coord_scale = 10.0 ** exp
+    pts_scaled = pos_flat * coord_scale
+    unit_suffix = f' (1e{-exp:+d})' if exp != 0 else ''
+    
+    # Build quad mesh: vertex indices in row-major (i*H + j) order
+    cells = []
+    for i in range(W - 1):
+        for j in range(H - 1):
+            a = i * H + j
+            cells.extend([4, a, a + 1, a + H + 1, a + H])
+    mesh = pv.PolyData(pts_scaled, np.array(cells, dtype=np.int64))
+    cell_scalars = scalar_grid[:-1, :-1].ravel()
+    mesh.cell_data['scalar'] = cell_scalars
+    
+    # Colorbar limits: use clim if provided, else auto from data range
+    if clim is not None:
+        clim_use = (clim[0], clim[1])
+    else:
+        clim_use = (float(cell_scalars.min()), float(cell_scalars.max())) if cell_scalars.size else (0, 1)
+    
+    cbar_label = units if units else scalar_label
+    plotter = pv.Plotter()
+    plotter.add_mesh(mesh, scalars='scalar', cmap=cmap, show_edges=False, opacity=opacity, 
+                     clim=clim_use, scalar_bar_args={'title': cbar_label})
+    plotter.show_bounds(xtitle='x'+unit_suffix, ytitle='y'+unit_suffix, ztitle='z'+unit_suffix)
+    
+    # Arrows: scale positions and vectors by same coord_scale, then use glyph with explicit length
+    ap_scaled = arrow_pos * coord_scale
+    av_scaled = arrow_vec * coord_scale
+    
+    # Compute arrow lengths and unit directions
+    lengths = np.linalg.norm(av_scaled, axis=1, keepdims=True)
+    lengths = np.maximum(lengths, 1e-30)
+    directions = av_scaled / lengths
+    
+    arrow_mesh = pv.PolyData(ap_scaled)
+    arrow_mesh['directions'] = directions
+    arrow_mesh['lengths'] = lengths.ravel()
+    
+    # Glyph with orient by direction, scale by length
+    glyphs = arrow_mesh.glyph(orient='directions', scale='lengths', factor=1.0)
+    plotter.add_mesh(glyphs, color=color)
+    
+    if title:
+        plotter.add_title(title)
+    if show:
+        plotter.show()
+    return plotter
+
+
+def _plot_vf3d_vedo(pos_grid, scalar_grid, z_val, arrow_pos, arrow_vec,
+                    cmap='plasma', color='black', units=None, title=None, show=True,
+                    clim=None, opacity=0.8, scalar_label='magnitude', **kwargs):
+    """
+    Vedo backend: flat quad mesh with per-cell scalar coloring + arrows.
+    
+    pos_grid: (W, H, 3) grid positions
+    scalar_grid: (W, H) scalar values for coloring (magnitude or component)
+    arrow_pos/arrow_vec: (M, 3) arrow data
+    clim: (vmin, vmax) colorbar limits, None for auto
+    opacity: mesh opacity (0-1)
+    scalar_label: label for colorbar
+    """
+    W, H = pos_grid.shape[:2]
+    
+    # Build a Grid mesh from the position bounds. vedo.Grid creates a flat rectangular mesh.
+    x_min, x_max = pos_grid[:, :, 0].min(), pos_grid[:, :, 0].max()
+    y_min, y_max = pos_grid[:, :, 1].min(), pos_grid[:, :, 1].max()
+    
+    # Create grid mesh with (W-1) x (H-1) cells to match scalar_grid cell count
+    grid = vedo.Grid(pos=(0.5*(x_min+x_max), 0.5*(y_min+y_max), z_val),
+                     s=((x_max - x_min), (y_max - y_min)),
+                     res=(W-1, H-1))
+    
+    # Assign scalars and apply colormap with clim
+    cell_scalars = scalar_grid[:-1, :-1].T.ravel()
+    grid.celldata['scalar'] = cell_scalars
+    
+    # Determine color range
+    if clim:
+        vmin, vmax = clim[0], clim[1]
+    else:
+        vmin = float(cell_scalars.min()) if cell_scalars.size else 0
+        vmax = float(cell_scalars.max()) if cell_scalars.size else 1.0
+    
+    grid.cmap(cmap, cell_scalars, on='cells', vmin=vmin, vmax=vmax)
+    grid.lw(0)  # line width 0 = no wireframe edges
+    grid.lighting('off')  # flat shading, no specular highlights
+    grid.alpha(opacity)  # set transparency
+    
+    # Add colorbar
+    cbar_label = units if units else scalar_label
+    grid.add_scalarbar(title=cbar_label)
+    
+    plotter = vedo.Plotter()
+    plotter.add(grid)
+    
+    # Add arrows
+    for p, v in zip(arrow_pos, arrow_vec):
+        arr = vedo.Arrow(start_pt=p, end_pt=p + v, c=color)
+        plotter.add(arr)
+    
+    if title:
+        plotter.add_title(title)
+    if show:
+        plotter.show()
+    return plotter
+
 
 def get_color_norm(vals=None, vmin=None, vmax=None,
                    symmetric=False) -> matplotlib.colors.Normalize:
