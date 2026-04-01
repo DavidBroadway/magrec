@@ -332,7 +332,8 @@ def plot_n_components(
     return fig
 
 
-def plot_vector_field_2d(current_distribution, ax: plt.Axes = None, 
+def plot_vector_field_2d(vectors=None, u=None, v=None, positions=None, xs=None, ys=None, 
+                         ax: plt.Axes = None, method='imshow', symmetric=False,
                          interpolation='none', cmap='plasma', color='black', units=None,
                          title=None, show=False, num_arrows=20, zoom_in_region=None):
     """
@@ -342,9 +343,34 @@ def plot_vector_field_2d(current_distribution, ax: plt.Axes = None,
     
     Parameters:
     ----------
-    current_distribution : ndarray
-        An array of shape (2, W, H) representing current distribution vectors.
+    Either `vectors` or `u` and `v` must be provided.
+    vectors : ndarray of shape (2, W, H) or (N, 2) or (2, N) where N is the number of vectors, optional
+        An array representing vector field vectors. For grid mode, shape determines dimensions.
+        
+    Alternatively, the following parameters can be provided instead of `vectors`:
+    u : ndarray of shape (W, H) or (N,) where N is the number of u values, optional
+        An array representing the u component of the vector field.
+        
+    v : ndarray of shape (W, H) or (N,) where N is the number of v values, optional
+        An array representing the v component of the vector field.
+       
+    Either `positions` or `xs` and `ys` must be provided.
+    positions : ndarray of shape (2, W, H) or (N, 2) or (2, N) where N is the number of positions, optional
+        An array representing the positions of the vector field. For grid mode, shape determines dimensions.
+        If None, the positions are assumed to be the indices of the vector field.
+        
+    Alternatively, the following parameters can be provided instead of `positions`:
+    xs : ndarray of shape (W, H) or (N,) where N is the number of x values, optional
+        An array representing the x coordinates of the vector field.
+        
+    ys : ndarray of shape (W, H) or (N,) where N is the number of y values, optional
+        An array representing the y coordinates of the vector field.
     
+    method : 'auto' | 'imshow' | 'pcolormesh', optional
+        The method to be used for the plot. Options are 'auto' (default), 'imshow', and 'pcolormesh'.
+        'auto' will use 'imshow' if the current distribution is a 2D array, and 'pcolormesh' if it is a 3D array.
+        Default is 'imshow'.
+        
     interpolation : str, optional
         The interpolation method to be used for the heatmap. Options are as provided by matplotlib's `imshow`.
         Default is 'none'.
@@ -395,6 +421,8 @@ def plot_vector_field_2d(current_distribution, ax: plt.Axes = None,
     # PARAMS
     # figsize = get_figsize(n_components=1, n_maps=1, alignment='horizontal')
     
+    
+    
     # Create a figure with an axis if none is provided
     if ax is None:
         fig = plt.figure(frameon=False)
@@ -410,17 +438,177 @@ def plot_vector_field_2d(current_distribution, ax: plt.Axes = None,
             divider = make_axes_locatable(ax)
             cax = divider.append_axes("right", size="5%", pad=0.05)
         
-    if isinstance(current_distribution, torch.Tensor):
-        current_distribution = current_distribution.detach().cpu().numpy()
-        
-    W, H = current_distribution.shape[-2:]
-    step_size = max(W, H) // num_arrows
-    
-    # Create averaged grid
+    # Normalize every accepted input combination into one internal format.
+    # After this block, all key variables are defined and ready for plotting.
+    input_mode = None
+
+    # --- Vector values: either "vectors" OR both "u" and "v" ---
+    if vectors is not None:
+        if u is not None or v is not None:
+            raise ValueError("Use either 'vectors' or 'u' and 'v', not both at the same time.")
+        input_mode = "vectors"
+    else:
+        if (u is None) != (v is None):
+            raise ValueError("If you pass one component, you must pass both 'u' and 'v'.")
+        if u is None and v is None:
+            raise ValueError("Missing vector values. Pass 'vectors' or pass both 'u' and 'v'.")
+        input_mode = "uv"
+
+    if input_mode == "vectors":
+        if isinstance(vectors, torch.Tensor):
+            vectors = vectors.detach().cpu().numpy()
+        vectors = np.asarray(vectors)
+        if vectors.ndim == 3:
+            if vectors.shape[0] == 2:
+                vectors = vectors
+            elif vectors.shape[-1] == 2:
+                vectors = np.moveaxis(vectors, -1, 0)
+            else:
+                raise ValueError(
+                    "For grid data, 'vectors' must have shape (2, W, H) or (W, H, 2)."
+                )
+        elif vectors.ndim == 2:
+            if vectors.shape[1] == 2:
+                vectors = vectors
+            elif vectors.shape[0] == 2:
+                vectors = vectors.T
+            else:
+                raise ValueError("For scattered data, 'vectors' must have shape (N, 2) or (2, N).")
+            # Keep scattered input as-is for later, but we still define a placeholder.
+            vectors_grid = None
+        else:
+            raise ValueError(
+                "For 2D vector fields, 'vectors' must have shape (2, W, H), (W, H, 2), (N, 2), or (2, N)."
+            )
+    else:
+        if isinstance(u, torch.Tensor):
+            u = u.detach().cpu().numpy()
+        if isinstance(v, torch.Tensor):
+            v = v.detach().cpu().numpy()
+        u = np.asarray(u)
+        v = np.asarray(v)
+        if u.shape != v.shape:
+            raise ValueError("'u' and 'v' must have the same shape.")
+        if u.ndim == 2:
+            vectors = np.stack((u, v), axis=0)
+        elif u.ndim == 1:
+            # Keep scattered input as-is for later, but we still define a placeholder.
+            vectors_grid = None
+            vectors = np.stack((u, v), axis=1)
+        else:
+            raise ValueError("'u' and 'v' must be 2D grids or 1D scattered arrays.")
+
+    # --- Coordinates: either "positions" OR both "xs" and "ys" ---
+    if positions is not None:
+        if xs is not None or ys is not None:
+            raise ValueError("Use either 'positions' or 'xs' and 'ys', not both at the same time.")
+    else:
+        if (xs is None) != (ys is None):
+            raise ValueError("If you pass one coordinate array, you must pass both 'xs' and 'ys'.")
+
+    if positions is not None:
+        if isinstance(positions, torch.Tensor):
+            positions = positions.detach().cpu().numpy()
+        positions = np.asarray(positions)
+        if positions.ndim == 3:
+            if positions.shape[0] == 2:
+                xs = positions[0]
+                ys = positions[1]
+            elif positions.shape[-1] == 2:
+                xs = positions[..., 0]
+                ys = positions[..., 1]
+            else:
+                raise ValueError(
+                    "For grid data, 'positions' must have shape (2, W, H) or (W, H, 2)."
+                )
+        elif positions.ndim == 2:
+            if positions.shape[1] == 2:
+                xs = positions[:, 0]
+                ys = positions[:, 1]
+            elif positions.shape[0] == 2:
+                xs = positions[0]
+                ys = positions[1]
+            else:
+                raise ValueError(
+                    "For scattered data, 'positions' must have shape (N, 2) or (2, N), got {}.".format(positions.shape)
+                )
+        else:
+            raise ValueError("'positions' must be 2D or 3D.")
+    elif xs is not None and ys is not None:
+        if isinstance(xs, torch.Tensor):
+            xs = xs.detach().cpu().numpy()
+        if isinstance(ys, torch.Tensor):
+            ys = ys.detach().cpu().numpy()
+        xs = np.asarray(xs)
+        ys = np.asarray(ys)
+        positions = np.stack((xs, ys), axis=-1)
+    else:
+        # No explicit coordinates passed. For grid data we can safely use index coordinates.
+        if vectors.ndim != 3:
+            raise ValueError(
+                "Scattered data needs coordinates. Pass 'positions' or pass both 'xs' and 'ys'."
+            )
+        W_auto, H_auto = vectors.shape[-2:]
+        x_idx, y_idx = np.meshgrid(np.arange(W_auto), np.arange(H_auto), indexing='ij')
+        xs = x_idx
+        ys = y_idx
+        positions = np.stack((xs, ys), axis=0)
+
+    # Plot keyword arguments are always defined after normalization.
+    kwargs = {"cmap": cmap}
+
+    if vectors.ndim == 2:
+        # Convert scattered vectors into a regular 2D grid so downstream code can use one path.
+        if positions.ndim != 2:
+            raise ValueError("Scattered vectors require scattered positions with shape (N, 2) or (2, N).")
+        if positions.shape[1] == 2:
+            pos_2d = positions
+        elif positions.shape[0] == 2:
+            pos_2d = positions.T
+        else:
+            raise ValueError("Scattered positions must have shape (N, 2) or (2, N).")
+
+        x_unique = np.unique(pos_2d[:, 0])
+        y_unique = np.unique(pos_2d[:, 1])
+        nx, ny = len(x_unique), len(y_unique)
+        if nx * ny != pos_2d.shape[0]:
+            raise ValueError(f"Number of unique x ({nx}) and y values ({ny}) does not match the number of points ({pos_2d.shape[0]}).")
+
+        vectors_grid = np.zeros((2, nx, ny), dtype=vectors.dtype)
+        x_to_i = {x_val: i for i, x_val in enumerate(x_unique)}
+        y_to_j = {y_val: j for j, y_val in enumerate(y_unique)}
+        for k in range(pos_2d.shape[0]):
+            i = x_to_i[pos_2d[k, 0]]
+            j = y_to_j[pos_2d[k, 1]]
+            vectors_grid[0, i, j] = vectors[k, 0]
+            vectors_grid[1, i, j] = vectors[k, 1]
+
+        xs, ys = np.meshgrid(x_unique, y_unique, indexing='ij')
+        positions = np.stack((xs, ys), axis=0)
+        vectors = vectors_grid
+
+    W, H = vectors.shape[-2:]
+    step_size = max(1, max(W, H) // num_arrows)
+
+    # Build coordinate vectors that match vector-grid indexing [x, y].
+    if np.asarray(xs).ndim == 2 and np.asarray(ys).ndim == 2:
+        x_vals = np.unique(xs[:, 0])
+        y_vals = np.unique(ys[0, :])
+    else:
+        x_vals = np.unique(np.asarray(xs))
+        y_vals = np.unique(np.asarray(ys))
+
+    if len(x_vals) != W or len(y_vals) != H:
+        raise ValueError(
+            f"Coordinate grid shape mismatch: vectors are ({W}, {H}) but coordinates resolve to ({len(x_vals)}, {len(y_vals)})."
+        )
+
+    # Create averaged grid in index space, then map centers to real coordinates.
     x_centers = np.arange(step_size // 2, W, step_size)
     y_centers = np.arange(step_size // 2, H, step_size)
-    
-    x_grid, y_grid = np.meshgrid(x_centers, y_centers, indexing='ij')
+    x_center_vals = x_vals[x_centers]
+    y_center_vals = y_vals[y_centers]
+    x_grid, y_grid = np.meshgrid(x_center_vals, y_center_vals, indexing='ij')
     
     # Initialize averaged fields
     avg_u = np.zeros((len(x_centers), len(y_centers)))
@@ -433,15 +621,39 @@ def plot_vector_field_2d(current_distribution, ax: plt.Axes = None,
             x_low, x_high = x - step_size // 2, x + step_size // 2 + 1
             y_low, y_high = y - step_size // 2, y + step_size // 2 + 1
             
-            avg_u[i, j] = np.mean(current_distribution[0, x_low:x_high, y_low:y_high])
-            avg_v[i, j] = np.mean(current_distribution[1, x_low:x_high, y_low:y_high])
+            avg_u[i, j] = np.mean(vectors[0, x_low:x_high, y_low:y_high])
+            avg_v[i, j] = np.mean(vectors[1, x_low:x_high, y_low:y_high])
             avg_m[i, j] = np.sqrt(avg_v[i, j] ** 2 + avg_u[i, j] ** 2)
     
-    magnitudes = np.hypot(current_distribution[0], current_distribution[1]).transpose(1, 0)
+    # imshow expects [rows, cols] = [y, x], so we transpose the [x, y] grid.
+    magnitudes = np.hypot(vectors[0], vectors[1]).T
     
-    im = ax.imshow(magnitudes, interpolation=interpolation, vmin=0, cmap=cmap, origin='lower')
+    if symmetric:
+        vmax = np.abs(magnitudes).max()
+        vmin = -vmax
+    else:
+        vmax = magnitudes.max()
+        vmin = magnitudes.min()
     
-    cbar = fig.colorbar(im, cax=cax, orientation='vertical')
+    if method in ('imshow', 'pcolormesh'):
+        # Match Pipeset.plot behavior: both methods render the same scalar grid.
+        nx, ny = len(x_vals), len(y_vals)
+        x0, y0 = x_vals.min(), y_vals.min()
+        dx = x_vals[1] - x_vals[0] if nx > 1 else 1.0
+        dy = y_vals[1] - y_vals[0] if ny > 1 else 1.0
+        extent = [x0 - dx/2, x0 + (nx - 0.5)*dx, y0 - dy/2, y0 + (ny - 0.5)*dy]
+
+        if method == 'imshow':
+            # origin='lower' so y increases upward
+            mappable = ax.imshow(magnitudes, extent=extent, origin='lower', vmin=vmin, vmax=vmax, 
+                                    aspect='equal', interpolation=interpolation, **kwargs)
+        else:  # pcolormesh
+            mappable = ax.pcolormesh(x_vals, y_vals, magnitudes, shading='nearest', vmin=vmin, vmax=vmax, **kwargs)
+            ax.set_aspect('equal')
+    else:
+        raise ValueError(f"Unknown method '{method}'. Use 'auto', 'scatter', 'imshow', or 'pcolormesh'.")
+    
+    cbar = fig.colorbar(mappable, cax=cax, orientation='vertical')
     if units:
         cax.set_title(units, fontsize=9, loc='left')
         
@@ -452,17 +664,57 @@ def plot_vector_field_2d(current_distribution, ax: plt.Axes = None,
                         xytext=(0, 0), textcoords='offset points',
                         ha='center', va='baseline')
     
-    # Compute scale of the arrow length. 
-    # Scale gives number of data points per arrow length unit, 
-    # e.g. A/mm^2 per plot width. We want the maximum arrow length to be 1/num_arrows of the plot width.
-    # How much data units per arrow length unit? 
-    scale = 1.1 * avg_m.max() * num_arrows  # 1.1 to make the length of the longest arrow a bit shorter 
-                                            # than the spacing between arrows blocks.  
+    def _choose_arrow_colors_from_background(local_scalar, vmin, vmax, cmap_name_or_obj):
+        """
+        Pick white/black arrow colors from local background brightness.
+
+        For each arrow location we look at the scalar used by the heatmap,
+        map it through the colormap, compute luminance, and choose:
+        - white arrow on dark background
+        - black arrow on light background
+        """
+        cmap_obj = plt.get_cmap(cmap_name_or_obj) if isinstance(cmap_name_or_obj, str) else cmap_name_or_obj
+        norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax, clip=True)
+        rgba = cmap_obj(norm(local_scalar))
+        luminance = 0.2126 * rgba[..., 0] + 0.7152 * rgba[..., 1] + 0.0722 * rgba[..., 2]
+        return np.where(luminance < 0.5, 'white', 'black')
+
+    if color in (None, 'auto', 'adaptive', 'black'):
+        # Quiver accepts one color or a flat per-arrow color list.
+        arrow_colors = _choose_arrow_colors_from_background(avg_m, vmin, vmax, cmap).ravel()
+    else:
+        arrow_colors = color
+
+    # Scale arrow display length in coordinate units.
+    # We keep true direction from avg_u/avg_v, but rescale lengths so the longest
+    # arrow is a readable fraction of the arrow-grid spacing on the plot.
+    if len(x_center_vals) > 1:
+        arrow_dx = np.min(np.diff(x_center_vals))
+    elif len(x_vals) > 1:
+        arrow_dx = (x_vals[1] - x_vals[0]) * step_size
+    else:
+        arrow_dx = 1.0
+    if len(y_center_vals) > 1:
+        arrow_dy = np.min(np.diff(y_center_vals))
+    elif len(y_vals) > 1:
+        arrow_dy = (y_vals[1] - y_vals[0]) * step_size
+    else:
+        arrow_dy = 1.0
+
+    max_arrow_len = 0.8 * min(abs(arrow_dx), abs(arrow_dy))
+    max_mag = float(avg_m.max()) if avg_m.size else 0.0
+    if max_mag > 0:
+        disp_scale = max_arrow_len / max_mag
+        quiver_u = avg_u * disp_scale
+        quiver_v = avg_v * disp_scale
+    else:
+        quiver_u = avg_u
+        quiver_v = avg_v
     
     ax.quiver(
-        x_grid, y_grid, avg_u, avg_v, color=color,
-        pivot='mid', units='width', angles='uv',
-        scale=scale, scale_units='width',
+        x_grid, y_grid, quiver_u, quiver_v, color=arrow_colors,
+        pivot='mid', units='xy', angles='xy',
+        scale=1.0, scale_units='xy',
     )
     
     if zoom_in_region is not None:

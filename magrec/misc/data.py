@@ -425,8 +425,8 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
     
     # ── Units & Scaling ─────────────────────────────────────────────────
     #
-    # Units are stored as field_data on each block following the currio convention:
-    #   block.field_data['<array_name>_units'] = ['T']
+    # Units are stored as field_data on each block following the convention:
+    #   block.field_data['<array_name>_units'] = ['<units>']
     # Coordinate units use the reserved key 'coordinates_units'.
     #
     # pipe.set_units(B_NV='T', coordinates='m')   → stores on the single block
@@ -446,7 +446,9 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             pipe.set_units(B_NV='T', coordinates='m')
             pipe.set_units(block='sensor', B_NV='T')
         """
-        target = self._resolve_block(block)
+        target = self.resolve_name(block)
+        if not hasattr(target, "point_data"):
+            raise TypeError(f"set_units() expected a leaf block; got {type(target).__name__}")
         valid_names = set(target.point_data.keys()) if hasattr(target, 'point_data') else set()
         valid_names.add('coordinates')
         for name in units:
@@ -504,7 +506,9 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
                     "When using keyword factors (e.g. scale(B_NV=1e4)), do not pass "
                     "source/factor/to_units/coordinates."
                 )
-            target = self._resolve_block(block)
+            target = self.resolve_name(block)
+            if not hasattr(target, "point_data"):
+                raise TypeError(f"scale() expected a leaf block; got {type(target).__name__}")
             for arr_name, arr_factor in array_factors.items():
                 self._scale_array(
                     target, arr_name, arr_factor, to_units=None, block_ref=block, absolute=absolute
@@ -539,7 +543,9 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         if absolute and to_units is not None:
             raise ValueError("absolute=True is only valid with factor-based scaling.")
         
-        target = self._resolve_block(block)
+        target = self.resolve_name(block)
+        if not hasattr(target, "point_data"):
+            raise TypeError(f"scale() expected a leaf block; got {type(target).__name__}")
         
         if coordinates_enabled:
             return self._scale_coordinates(target, factor, to_units, block, absolute=absolute)
@@ -548,27 +554,175 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             raise ValueError("Provide source=<array_name> or coordinates=True.")
         return self._scale_array(target, source, factor, to_units, block, absolute=absolute)
 
-    def _resolve_block(self, block):
-        """Return the VTK block for a given name/index/None (single-block default)."""
-        if block is None:
+    def resolve_name(self, name):
+        """Resolve a name to either a leaf block or a point_data array.
+
+        Rules:
+          - ``None``: single-block default (requires exactly one leaf block)
+          - ``int``: block by index
+          - ``str``:
+              - No dots (``len(parts)==1``): return ``point_data[parts[0]]`` if it exists
+                (unique across all leaves). Otherwise return the leaf block whose local
+                name or full leaf path matches ``parts[0]``.
+              - Dotted (``len(parts)>1``): traverse the MultiBlock tree using all parts
+                except the last. If the traversal ends on a leaf dataset, the last part
+                is interpreted as ``point_data``. If it ends on a MultiBlock container,
+                the last part is interpreted as a child leaf block name, with a fallback
+                to a unique ``point_data`` name across all leaves under that container.
+        """
+        if name is None:
             if len(self) != 1:
-                raise ValueError("Ambiguous: multiple blocks, pass block=<name or index>.")
+                raise ValueError("Ambiguous: multiple blocks, pass name=<name or index>.")
             return super().__getitem__(0)
-        if isinstance(block, int):
-            return super().__getitem__(block)
-        if isinstance(block, str):
-            # Prefer exact top-level key first
-            if block in self.keys():
-                return super().__getitem__(block)
-            # Then try recursive leaf-path/local-name lookup
-            matches = self._find_leaf_blocks_by_name(block)
-            if len(matches) == 1:
-                return matches[0][1]
-            if len(matches) > 1:
-                paths = [p for p, _ in matches]
-                raise ValueError(f"Ambiguous block name '{block}', matches: {paths}")
-            raise KeyError(f"Block '{block}' not found")
-        raise TypeError(f"block must be int, str, or None; got {type(block).__name__}")
+
+        if isinstance(name, int):
+            return super().__getitem__(name)
+
+        if not isinstance(name, str):
+            raise TypeError(f"name must be int, str, or None; got {type(name).__name__}")
+
+        def _get_child_by_local_name(container, local_name):
+            """Return container[child] matching local_name, or None."""
+            if not isinstance(container, pv.MultiBlock):
+                return None
+
+            for i in range(len(container)):
+                candidate = container.get_block_name(i) or str(i)
+                if local_name == candidate:
+                    return container[i]
+
+            if str(local_name).isdigit():
+                idx = int(local_name)
+                if 0 <= idx < len(container):
+                    return container[idx]
+
+            return None
+
+        def _point_data_tensor(blk, array_name):
+            return torch.as_tensor(np.asarray(blk.point_data[array_name]))
+
+        parts = name.split(".")
+
+        if len(parts) == 1:
+            arr_name = parts[0]
+
+            # Fast path for single-block Pipesets.
+            if len(self) == 1:
+                blk0 = super().__getitem__(0)
+                if hasattr(blk0, "point_data") and arr_name in blk0.point_data:
+                    return _point_data_tensor(blk0, arr_name)
+
+            # Search for point_data across all leaves.
+            point_matches = []
+            for path, _, blk in self._iter_leaf_blocks():
+                if hasattr(blk, "point_data") and arr_name in blk.point_data:
+                    point_matches.append((path, blk))
+
+            if len(point_matches) == 1:
+                return _point_data_tensor(point_matches[0][1], arr_name)
+            if len(point_matches) > 1:
+                paths = [p for p, _ in point_matches]
+                raise ValueError(f"Ambiguous point_data name '{arr_name}', matches: {paths}")
+
+            # If point_data doesn't exist, resolve to a leaf block name/path.
+            block_matches = []
+            for path, local_name, blk in self._iter_leaf_blocks():
+                if arr_name == local_name or arr_name == path:
+                    block_matches.append((path, blk))
+
+            if len(block_matches) == 1:
+                return block_matches[0][1]
+            if len(block_matches) > 1:
+                paths = [p for p, _ in block_matches]
+                raise ValueError(f"Ambiguous block name '{arr_name}', matches: {paths}")
+
+            raise KeyError(f"Name '{name}' not found as point_data or leaf block")
+
+        # Dotted resolution: traverse parts[:-1] down the tree, then resolve parts[-1].
+        try:
+            current = self
+            for seg in parts[:-1]:
+                if not isinstance(current, pv.MultiBlock):
+                    raise KeyError(f"Cannot traverse into non-MultiBlock while resolving '{name}'")
+                child = _get_child_by_local_name(current, seg)
+                if child is None:
+                    raise KeyError(f"Missing block segment '{seg}' while resolving '{name}'")
+                current = child
+
+            prefix_path = ".".join(parts[:-1])
+            last = parts[-1]
+
+            if isinstance(current, pv.MultiBlock):
+                # Prefer an immediate leaf-block child match.
+                child = _get_child_by_local_name(current, last)
+                if child is not None:
+                    if isinstance(child, pv.MultiBlock):
+                        leaves = list(self._iter_leaf_blocks(container=child, parent_path=prefix_path + "." + last))
+                        if len(leaves) == 1:
+                            return leaves[0][2]
+                        raise ValueError(
+                            f"Name '{name}' matched a MultiBlock container; "
+                            f"matched {len(leaves)} leaf blocks. Specify a leaf block name/path."
+                        )
+                    return child
+
+                # Fallback: interpret last as point_data name within leaves under this container.
+                point_matches = []
+                for path, _, blk in self._iter_leaf_blocks(container=current, parent_path=prefix_path):
+                    if hasattr(blk, "point_data") and last in blk.point_data:
+                        point_matches.append((path, blk))
+
+                if len(point_matches) == 1:
+                    return _point_data_tensor(point_matches[0][1], last)
+                if len(point_matches) > 1:
+                    paths = [p for p, _ in point_matches]
+                    raise ValueError(
+                        f"Ambiguous point_data name '{last}' under '{prefix_path}', matches: {paths}"
+                    )
+
+                # Last attempt: resolve leaf block by local name under this container.
+                block_matches = []
+                for path, local_name, blk in self._iter_leaf_blocks(container=current, parent_path=prefix_path):
+                    if last == local_name or last == path:
+                        block_matches.append((path, blk))
+                if len(block_matches) == 1:
+                    return block_matches[0][1]
+                if len(block_matches) > 1:
+                    paths = [p for p, _ in block_matches]
+                    raise ValueError(
+                        f"Ambiguous block name '{last}' under '{prefix_path}', matches: {paths}"
+                    )
+
+                raise KeyError(f"Name '{name}' not found under '{prefix_path}'")
+
+            # We ended on a leaf dataset: last part must be point_data.
+            if hasattr(current, "point_data") and last in current.point_data:
+                return _point_data_tensor(current, last)
+
+            raise KeyError(f"'{last}' not found as point_data on leaf '{prefix_path}'")
+
+        except KeyError:
+            # Fallback for flattened leaf blocks (top-level keys may already include dots).
+            block_matches = self._find_leaf_blocks_by_name(name)
+            if len(block_matches) == 1:
+                return block_matches[0][1]
+            if len(block_matches) > 1:
+                paths = [p for p, _ in block_matches]
+                raise ValueError(f"Ambiguous block name '{name}', matches: {paths}")
+
+            block_path = ".".join(parts[:-1])
+            arr_name = parts[-1]
+            prefix_matches = self._find_leaf_blocks_by_name(block_path)
+            if len(prefix_matches) == 1:
+                blk = prefix_matches[0][1]
+                if hasattr(blk, "point_data") and arr_name in blk.point_data:
+                    return _point_data_tensor(blk, arr_name)
+                raise KeyError(f"'{arr_name}' not found in point_data of '{block_path}'")
+            if len(prefix_matches) > 1:
+                paths = [p for p, _ in prefix_matches]
+                raise ValueError(f"Ambiguous block path '{block_path}', matches: {paths}")
+
+            raise KeyError(f"Name '{name}' not found as leaf block or point_data")
 
     def _scale_array(self, target, source, factor, to_units, block_ref, absolute=False):
         """Scale a single point_data array on target block."""
@@ -750,7 +904,9 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         
         step = self._steps[step_name]
         inv_factor = 1.0 / step['factor']
-        target = self._resolve_block(block)
+        target = self.resolve_name(block)
+        if not hasattr(target, "point_data"):
+            raise TypeError(f"unscale() expected a leaf block; got {type(target).__name__}")
         
         if coordinates:
             if isinstance(target, pv.ImageData):
@@ -779,6 +935,8 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         Intelligently handles different coordinate formats:
         - (N,) or (N, 1): List of coordinates for N points
         - (N, M): Grid coordinates where xs[i, j] is x-coord at pixel (i,j)
+        - (nx,), (ny,), and (nz,): Coordinates for each dimension of the 
+            grid to make a regular grid, so that nx * ny * nz = N points.
         
         Parameters
         ----------
@@ -950,6 +1108,7 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             if isinstance(z_val, (int, float)):
                 zs_flat = np.full_like(xs_flat, z_val)
             else:
+                # Else z is a list of coordinates and there can be multiple of z'em
                 z_val = np.asarray(z_val).ravel()
                 if len(z_val) == len(xs_flat):
                     zs_flat = z_val
@@ -1380,14 +1539,15 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
 
         If a string matches both block name and array name, raises ValueError.
         For block sources (or None), all arrays are resampled together.
+        
+        If requested `new_shape` is already found in an array of any block, it is
+        considered as a cached result and returned directly.
 
         Parameters
         ----------
         out : str, optional
             Output block name. If provided, behaves like ``inplace=True`` and stores
             the result under this name.
-        name : str, optional
-            Backward-compatible alias for ``out``.
         inplace : bool, default False
             If True, store the downsampled result into this Pipeset under ``out``
             (or ``downsampled`` when ``out`` is not provided) and return ``self``.
@@ -1536,7 +1696,13 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         else:
             resampled = None
             for arr_name in arrays_to_resample:
-                r = block.resample(**{**base_kw, "scalars": arr_name, "preference": "point"})
+                # PyVista's ImageData.resample() can ignore the explicit ``scalars=``
+                # argument and sample whichever point array is currently active. 
+                # Work on a copy with the requested array marked active so each pass
+                # really samples the intended data instead of relabeling active scalars.
+                block_copy = block.copy(deep=True)
+                block_copy.set_active_scalars(arr_name, preference="point")
+                r = block_copy.resample(**{**base_kw, "scalars": arr_name, "preference": "point"})
                 if resampled is None:
                     resampled = r
                 else:
@@ -1580,8 +1746,19 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
     
     def get_as_grid(self, point_data_name, keep_dims=False):
         """Return point data reshaped to (nx, ny, nz[, ncomp]) to match grid. ImageData only."""
-        data = self.__getattr__(point_data_name)
-        nx, ny, nz = self.dimensions
+        block = self.resolve_name(None)
+        if not hasattr(block, "point_data") or point_data_name not in block.point_data:
+            available = sorted(block.point_data.keys()) if hasattr(block, "point_data") else []
+            raise KeyError(
+                f"'{point_data_name}' not found in point_data of the resolved block. "
+                f"Available: {available}"
+            )
+
+        # Read the array explicitly from point_data instead of delegating through
+        # attribute lookup on the wrapped PyVista dataset. That path can resolve to
+        # the active scalar/vector rather than the requested named array.
+        data = torch.as_tensor(np.asarray(block.point_data[point_data_name]))
+        nx, ny, nz = block.dimensions
         ncomp = data.shape[1] if data.ndim == 2 else 1
         has_comp_dim = ncomp > 1 or keep_dims  # determine if there's a dimension for the component of the point data
         # Reshape flat to VTK order (z, y, x) or (z, y, x, ncomp); then permute to (x, y, z[, ncomp])
@@ -1802,8 +1979,7 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             block.point_data[attr_name] = flat
         else:
             raise ValueError(f"Unsupported ndim={value.ndim}, expected 1, 2, or 3")
-        
-        
+           
     def __getitem__(self, key):
         # PyVista uses integer indices internally
         if isinstance(key, int):
@@ -1821,7 +1997,39 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             return blk
         
         if '.' not in key:
-            return super().__getitem__(key)  # will raise KeyError
+            # Plain key fallback:
+            # 1) try direct block lookup first (PyVista behavior)
+            # 2) if not found, resolve as a unique leaf array name across nested blocks
+            try:
+                return super().__getitem__(key)
+            except KeyError:
+                pass
+
+            def iter_leaf_blocks(container, prefix=""):
+                """Yield (full_block_name, leaf_dataset) recursively."""
+                for child_name in container.keys():
+                    child = super(Pipeset, container).__getitem__(child_name)
+                    full_name = f"{prefix}.{child_name}" if prefix else child_name
+                    if isinstance(child, pv.MultiBlock):
+                        yield from iter_leaf_blocks(child, full_name)
+                    elif isinstance(child, (pv.ImageData, pv.PolyData, pv.UnstructuredGrid, pv.StructuredGrid)):
+                        yield full_name, child
+
+            matches = []
+            for block_name, block in iter_leaf_blocks(self):
+                if key in block.point_data:
+                    matches.append((block_name, block))
+
+            if len(matches) == 1:
+                _, block = matches[0]
+                return torch.as_tensor(block.point_data[key])
+            if len(matches) > 1:
+                match_blocks = ", ".join(name for name, _ in matches)
+                raise KeyError(
+                    f"Array name '{key}' is ambiguous. Found in blocks: {match_blocks}. "
+                    f"Use a full key like 'block.{key}'."
+                )
+            raise KeyError(f"Block name ({key}) not found, and no leaf array named '{key}' was found.")
         
         # For 'sensor.roi.B_NV': could be block='sensor.roi' with scalar='B_NV' (flat),
         # or block='sensor' containing 'roi.B_NV' (nested). Prefer flat naming.
@@ -1856,6 +2064,80 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             return first_block['.'.join(parts[1:])]
         else:
             raise KeyError(f"No block '{flat_block_name}' or MultiBlock '{parts[0]}' found for key '{key}'")
+
+    def select(self, *, axis=None, value=None, tol=None, x=None, y=None, z=None):
+        """
+        Select points near one coordinate plane and return them as a new Pipeset.
+
+        Supported call styles:
+            pipe.select(z=0)
+            pipe.select(axis='z', value=0)
+            pipe.select(axis=2, value=0, tol=1e-9)
+
+        Notes:
+        - tol is an absolute tolerance in coordinate units.
+        - If tol is not given, a small data-driven tolerance is chosen automatically.
+        """
+        shorthand = {"x": x, "y": y, "z": z}
+        shorthand_used = [name for name, val in shorthand.items() if val is not None]
+
+        if len(shorthand_used) > 1:
+            raise ValueError("Use only one shorthand axis at a time: x=..., y=..., or z=....")
+
+        if shorthand_used:
+            if axis is not None or value is not None:
+                raise ValueError("Use either shorthand (x/y/z) or explicit (axis, value), not both.")
+            axis = shorthand_used[0]
+            value = shorthand[axis]
+        else:
+            if axis is None or value is None:
+                raise ValueError("Pass either z=<value> (or x/y) or pass both axis=<x|y|z> and value=<number>.")
+
+        axis_map = {"x": 0, "y": 1, "z": 2, 0: 0, 1: 1, 2: 2}
+        if axis not in axis_map:
+            raise ValueError("axis must be one of: 'x', 'y', 'z', 0, 1, 2.")
+        axis_idx = axis_map[axis]
+        value = float(value)
+
+        if tol is not None:
+            tol = float(tol)
+            if tol < 0:
+                raise ValueError("tol must be non-negative.")
+
+        out = Pipeset()
+        for path, _, block in self._iter_leaf_blocks():
+            pts = np.asarray(block.points)
+            if pts.size == 0:
+                continue
+
+            # Auto tolerance: half of the smallest non-zero spacing along selected axis.
+            # If spacing cannot be inferred, use a tiny fallback.
+            local_tol = tol
+            if local_tol is None:
+                axis_vals = np.unique(pts[:, axis_idx])
+                if axis_vals.size > 1:
+                    diffs = np.diff(np.sort(axis_vals))
+                    positive_diffs = diffs[diffs > 0]
+                    if positive_diffs.size > 0:
+                        local_tol = 0.5 * positive_diffs.min()
+                    else:
+                        local_tol = 1e-12
+                else:
+                    local_tol = 1e-12
+
+            mask = np.isclose(pts[:, axis_idx], value, atol=local_tol, rtol=0.0)
+            if not np.any(mask):
+                continue
+
+            selected = block.extract_points(mask)
+            out[path] = selected
+
+        if len(out) == 0:
+            axis_name = {0: "x", 1: "y", 2: "z"}[axis_idx]
+            raise ValueError(
+                f"No points found for {axis_name}={value} within tol={tol if tol is not None else 'auto'}."
+            )
+        return out
     
     def add_region(self, region, inp, name=None):
         """Create a sub-block from points in parent that fall within region."""
@@ -1878,7 +2160,16 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         clim: (vmin, vmax) to set color limits
         sync: if True, sync color limits with the plot with the same name, if False, do not sync, 
             if a string, it is the name of the plot to sync with,
-        colorbar: if True, add a colorbar to the axis
+        colorbar, cbar: if True, add a colorbar to the axis
+        cbar_width: width of the colorbar as a fraction of the plot width
+        cbar_pad: padding between the colorbar and the plot
+        wspace: horizontal space between subplots
+        symmetric: if True, symmetrize the colorbar so that 0 is in the middle of the colormap and lower and upper data limits
+            have the same absolute values.
+        norm_type: type of the normalization: per map ('map'), common to all ('all'), or by row/column with grouping,
+            e.g. 'AAB' for 1st and 2nd maps to have the same norm, 3rd map to have its own norm. Default: 'map'
+            Allows to have common normalization for different maps, e.g. when they both show similar fields to compare.
+            
         method: plotting method
             'auto' (default): imshow for ImageData, scatter for PolyData
             'scatter': scatter plot with circles at each point
@@ -1940,10 +2231,11 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
                     label_idx += n_comp
                 
                 if n_comp == 1:
-                    # For single-component, use the label as the plot name
-                    row_name = sub_labels[0] if sub_labels else (f"{name}_{row_i}" if name else None)
+                    # Give every subplot a stable name so grouped norm_type sync works
+                    # even when the caller only passed raw scalar paths like 'Block-00.B_NV'.
+                    row_name = sub_labels[0] if sub_labels else (f"{name}_{row_i}" if name else s)
                     m = self.plot(s, ax=flat_axs[ax_idx], name=row_name, clim=clim, sync=sync,
-                                 colorbar=colorbar, method=method, **kwargs)
+                                 colorbar=colorbar, symmetric=symmetric, method=method, **kwargs)
                     if sub_labels:
                         title = f'${sub_labels[0]}$' if '$' not in sub_labels[0] else sub_labels[0]
                         flat_axs[ax_idx].set_title(title)
@@ -1953,13 +2245,17 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
                     ax_idx += 1
                 else:
                     row_axes = [flat_axs[ax_idx + j] for j in range(n_comp)]
-                    row_name = f"{name}_{row_i}" if name else None
+                    row_name = f"{name}_{row_i}" if name else s
                     m = self.plot(s, ax=row_axes, name=row_name, clim=clim, sync=sync,
-                                 colorbar=colorbar, method=method, labels=sub_labels, **kwargs)
+                                 colorbar=colorbar, symmetric=symmetric, method=method, labels=sub_labels, **kwargs)
                     all_mappables.append(m)
-                    # Collect the plot names that were created
+                    # Mirror the inner auto-naming so top-level norm_type can address
+                    # component plots without the caller having to pass labels manually.
                     if sub_labels:
                         all_plot_names.extend(sub_labels)
+                    else:
+                        suffixes = ['x', 'y', 'z', 'w', 'u', 'v'][:n_comp] if n_comp <= 6 else [f'c{i}' for i in range(n_comp)]
+                        all_plot_names.extend([f"{row_name}_{suffix}" for suffix in suffixes])
                     ax_idx += n_comp
             
             # Auto-sync if norm_type was given at this level. sync_clim handles
@@ -1981,11 +2277,19 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             if not synced:
                 fig.tight_layout()
             return all_mappables
-        
+
         parts = scalar.rsplit('.', 1)
-        if len(parts) != 2:
-            raise ValueError(f"scalar must be 'block.scalar_name', got '{scalar}'")
-        block_name, scalar_name = parts[0], parts[1]
+        if len(parts) == 1:
+            block_name = 0
+            scalar_name = scalar
+        elif len(parts) == 2:
+            block_name, scalar_name = parts[0], parts[1]
+        else:
+            block_name, rest = parts[0], parts[1]
+            return self[block_name].plot(rest, ax=ax, name=name, 
+                                         clim=clim, sync=sync,
+                                         colorbar=colorbar, symmetric=symmetric, 
+                                         method=method, **kwargs)
         
         # Check if block_name is a step (e.g., 'fit.loss')
         if block_name in self._steps:
@@ -2174,33 +2478,50 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         if len(norm_type) != len(names):
             raise ValueError(f"norm_type length ({len(norm_type)}) must match names count ({len(names)})")
         
-        # Build groups: {'A': ['target', 'pred'], 'B': ['error']}
-        groups = {}
-        for name, group_key in zip(names, norm_type):
-            if group_key not in groups:
-                groups[group_key] = []
-            groups[group_key].append(name)
+        # Map string group labels like 'AABC' to integer ids so we can store
+        # per-group metadata and limits in a compact dict.
+        group_ids = {}
+        plot_group_ids = []
+        norm_groups = {}
+        for plot_name, group_label in zip(names, norm_type):
+            if group_label not in group_ids:
+                group_id = len(group_ids)
+                group_ids[group_label] = group_id
+                norm_groups[group_id] = {
+                    'name': group_label,
+                    'lims': [0.0, 0.0] if symmetric else [np.inf, -np.inf],
+                    'plot_names': [],
+                }
+            group_id = group_ids[group_label]
+            norm_groups[group_id]['plot_names'].append(plot_name)
+            plot_group_ids.append(group_id)
         
-        # Compute clim per group from original data, not stored clim (which may be stale)
-        group_clims = {}
-        for group_key, group_names in groups.items():
-            vmins, vmaxs = [], []
-            for n in group_names:
-                info = self._plots[n]
-                # Get actual data range from the scatter's array
-                arr = info['sc'].get_array()
-                vmins.append(float(arr.min()))
-                vmaxs.append(float(arr.max()))
-            vmin, vmax = min(vmins), max(vmaxs)
+        # Compute clim per group from the actual plotted arrays, not any stored
+        # clim, so repeated sync operations always reflect current data.
+        for plot_name, group_id in zip(names, plot_group_ids):
+            info = self._plots[plot_name]
+            arr = np.ma.asarray(info['sc'].get_array())
+            arr = arr.compressed() if np.ma.isMaskedArray(arr) else np.asarray(arr).ravel()
+            
             if symmetric:
-                bound = max(abs(vmin), abs(vmax))
-                vmin, vmax = -bound, bound
-            group_clims[group_key] = (vmin, vmax)
+                bound = float(np.abs(arr).max())
+                current_bound = max(abs(norm_groups[group_id]['lims'][0]),
+                                    abs(norm_groups[group_id]['lims'][1]),
+                                    bound)
+                norm_groups[group_id]['lims'] = [-current_bound, current_bound]
+            else:
+                norm_groups[group_id]['lims'][0] = min(norm_groups[group_id]['lims'][0], float(arr.min()))
+                norm_groups[group_id]['lims'][1] = max(norm_groups[group_id]['lims'][1], float(arr.max()))
+        
+        group_clims = {
+            group['name']: tuple(group['lims'])
+            for group in norm_groups.values()
+        }
         
         # Apply clim to each plot
-        for name, group_key in zip(names, norm_type):
+        for name, group_id in zip(names, plot_group_ids):
             info = self._plots[name]
-            vmin, vmax = group_clims[group_key]
+            vmin, vmax = norm_groups[group_id]['lims']
             info['sc'].set_clim(vmin, vmax)
             info['clim'] = (vmin, vmax)
             
