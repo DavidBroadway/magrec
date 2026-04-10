@@ -1,0 +1,23 @@
+magrec/misc/odmr.py
+  b290dfa519faea5d 1-12,14-165,167-182,187-196,212-221,232-234,236-306,308-327,329-368,370-381,383-398,400-416,425,463,488,503-511,515-523,526,543,615-616,630-631,641-645
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6",
+  "base_commit_sha": "ecc1508f831f18ce3b3f41e5669370dc6d5da7bf",
+  "prompts": {
+    "b290dfa519faea5d": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "6e90bb21-b8d8-4363-8bf6-3c5396642f2d",
+        "model": "default"
+      },
+      "human_author": "Michael Flaks",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 411,
+      "overriden_lines": 0
+    }
+  }
+}
