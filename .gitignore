@@ -9,4 +9,4 @@ venv/
 wandb/
 logs/
 
-magrec/data/*/
+magrec/data/*
