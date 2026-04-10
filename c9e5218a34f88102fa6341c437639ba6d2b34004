@@ -1,0 +1,21 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6",
+  "base_commit_sha": "c9e5218a34f88102fa6341c437639ba6d2b34004",
+  "prompts": {
+    "b290dfa519faea5d": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "6e90bb21-b8d8-4363-8bf6-3c5396642f2d",
+        "model": "default"
+      },
+      "human_author": "Michael Flaks",
+      "messages": [],
+      "total_additions": 873,
+      "total_deletions": 358,
+      "accepted_lines": 396,
+      "overriden_lines": 16
+    }
+  }
+}
