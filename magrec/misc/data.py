@@ -286,11 +286,21 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         pv.MultiBlock.__init__(self, *args, **kwargs)
         self._plots = {}
         self._steps = {}
+        self._assigned = set()
     
     def __repr__(self):
+        if len(self) == 0:
+            return "Pipeset (empty)"
         if len(self) == 1:
             return self[0].__repr__()
-        return super().__repr__()
+        lines = [f"Pipeset ({len(self)} blocks):"]
+        for name in self.keys():
+            blk = super().__getitem__(name)
+            npts = getattr(blk, "n_points", "?")
+            btype = type(blk).__name__
+            scalars = list(blk.point_data.keys()) if hasattr(blk, "point_data") else []
+            lines.append(f"  '{name}': {btype}, {npts} pts, scalars={scalars}")
+        return "\n".join(lines)
 
     def _repr_html_(self):
         """Rich HTML representation for Jupyter notebooks.
@@ -313,7 +323,7 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         # Left column: summary attributes
         fmt += '<tr><td><table>\n'
         fmt += f'<tr><td>N Blocks</td><td>{len(self)}</td></tr>\n'
-        bds = self.bounds
+        bds = self._aggregate_bounds()
         ff = '{:.3e}'
         fmt += f'<tr><td>X Bounds</td><td>{ff.format(bds[0])}, {ff.format(bds[1])}</td></tr>\n'
         fmt += f'<tr><td>Y Bounds</td><td>{ff.format(bds[2])}, {ff.format(bds[3])}</td></tr>\n'
@@ -347,6 +357,21 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             fmt += f'<tr><td>{i}</td><td>{bname}</td><td>{btype}</td><td>{npts}</td><td>{arrays_str}</td></tr>\n'
         fmt += '</table></td></tr></table>'
         return fmt
+
+    def _aggregate_bounds(self):
+        """Axis-aligned union of each block's bounds; nested Pipeset/MultiBlock recurse via .bounds."""
+        xs, ys, zs = [], [], []
+        for i in range(len(self)):
+            blk = super(Pipeset, self).__getitem__(i)
+            b = getattr(blk, "bounds", None)
+            if b is None or len(b) < 6:
+                continue
+            xs.extend((b[0], b[1]))
+            ys.extend((b[2], b[3]))
+            zs.extend((b[4], b[5]))
+        if not xs:
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        return (min(xs), max(xs), min(ys), max(ys), min(zs), max(zs))
 
     @staticmethod
     def _field_value_to_string(value):
@@ -410,18 +435,159 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         return fmt
 
     def __getattr__(self, name):
+        if len(self) == 1:
+            block = self[0]
+            try:
+                return getattr(block, name)
+            except AttributeError:
+                if hasattr(block, "point_data") and name in block.point_data:
+                    return torch.as_tensor(block.point_data[name])
+                raise
+        if name == "bounds":
+            return self._aggregate_bounds()
+        # Multi-block: delegate other names to PyVista __getattr__ chain
+        for cls in type(self).__mro__[1:]:
+            ga = cls.__dict__.get("__getattr__")
+            if ga is not None:
+                try:
+                    return ga(self, name)
+                except AttributeError:
+                    continue
+        raise AttributeError(
+            f"'{type(self).__name__}' has no attribute '{name}' "
+            f"(multiple blocks: use dotted key e.g. pipe['block_name.{name}'])"
+        )
+
+    def _geometry_block(self, create_if_missing=False):
+        """Return the single ImageData block used for geometry operations."""
+        if len(self) == 0:
+            if not create_if_missing:
+                raise AttributeError("Pipeset has no blocks.")
+            grid = pv.ImageData()
+            super().__setitem__("grid", grid)
+            return grid
         if len(self) != 1:
+            block_names = [self.get_block_name(i) or str(i) for i in range(len(self))]
             raise AttributeError(
-                f"'{type(self).__name__}' has no attribute '{name}' "
-                f"(multiple blocks: use dotted key e.g. pipe['block_name.{name}'])"
+                "Geometry assignment is ambiguous for Pipeset with multiple blocks: "
+                f"{block_names}"
             )
-        block = self[0]
-        try:
-            return getattr(block, name)
-        except AttributeError:
-            if hasattr(block, 'point_data') and name in block.point_data:
-                return torch.as_tensor(block.point_data[name])
-            raise
+        blk = super().__getitem__(0)
+        if not isinstance(blk, pv.ImageData):
+            raise TypeError(
+                f"Geometry assignment expects a single ImageData block, got {type(blk).__name__}"
+            )
+        return blk
+
+    @property
+    def dimensions(self):
+        return self._geometry_block(create_if_missing=False).dimensions
+
+    @dimensions.setter
+    def dimensions(self, dims):
+        blk = self._geometry_block(create_if_missing=True)
+        old_spacing = tuple(blk.spacing)
+        old_origin = tuple(blk.origin)
+        blk.dimensions = tuple(int(v) for v in dims)
+        # dimensions update keeps spacing constant; bounds expand/contract.
+        blk.spacing = old_spacing
+        blk.origin = old_origin
+        self._assigned.add("dimensions")
+
+    @property
+    def origin(self):
+        return self._geometry_block(create_if_missing=False).origin
+
+    @origin.setter
+    def origin(self, value):
+        blk = self._geometry_block(create_if_missing=True)
+        old_spacing = tuple(blk.spacing)
+        blk.origin = tuple(float(v) for v in value)
+        # keep spacing constant when origin changes.
+        blk.spacing = old_spacing
+        self._assigned.add("origin")
+
+    @property
+    def spacing(self):
+        return self._geometry_block(create_if_missing=False).spacing
+
+    @spacing.setter
+    def spacing(self, value):
+        blk = self._geometry_block(create_if_missing=True)
+        sx, sy, sz = (float(v) for v in value)
+        if sx <= 0 or sy <= 0 or sz <= 0:
+            raise ValueError("spacing components must be positive")
+        # spacing has highest constancy priority:
+        # keep current bounds, recompute dimensions.
+        xmin, xmax, ymin, ymax, zmin, zmax = blk.bounds
+        nx = int(round((xmax - xmin) / sx)) + 1
+        ny = int(round((ymax - ymin) / sy)) + 1
+        nz = int(round((zmax - zmin) / sz)) + 1
+        blk.origin = (xmin, ymin, zmin)
+        blk.spacing = (sx, sy, sz)
+        blk.dimensions = (max(nx, 1), max(ny, 1), max(nz, 1))
+        self._assigned.add("spacing")
+
+    @property
+    def bounds(self):
+        return self._geometry_block(create_if_missing=False).bounds
+
+    @bounds.setter
+    def bounds(self, value):
+        if len(value) != 6:
+            raise ValueError("bounds must be (xmin, xmax, ymin, ymax, zmin, zmax)")
+        blk = self._geometry_block(create_if_missing=True)
+        xmin, xmax, ymin, ymax, zmin, zmax = (float(v) for v in value)
+        if xmax < xmin or ymax < ymin or zmax < zmin:
+            raise ValueError("Invalid bounds ordering")
+        # Assignment-aware precedence:
+        # - if spacing was explicitly assigned, keep spacing and recompute dimensions
+        # - else if dimensions were explicitly assigned, keep dimensions and recompute spacing
+        # - else fallback to keep spacing and recompute dimensions
+        if "spacing" in self._assigned:
+            sx, sy, sz = blk.spacing
+            nx = int(round((xmax - xmin) / sx)) + 1
+            ny = int(round((ymax - ymin) / sy)) + 1
+            nz = int(round((zmax - zmin) / sz)) + 1
+            blk.origin = (xmin, ymin, zmin)
+            blk.dimensions = (max(nx, 1), max(ny, 1), max(nz, 1))
+            blk.spacing = (sx, sy, sz)
+        elif "dimensions" in self._assigned:
+            nx, ny, nz = blk.dimensions
+            sx = (xmax - xmin) / max(nx - 1, 1)
+            sy = (ymax - ymin) / max(ny - 1, 1)
+            sz = (zmax - zmin) / max(nz - 1, 1)
+            blk.origin = (xmin, ymin, zmin)
+            blk.spacing = (sx, sy, sz)
+            blk.dimensions = (max(int(nx), 1), max(int(ny), 1), max(int(nz), 1))
+        else:
+            sx, sy, sz = blk.spacing
+            nx = int(round((xmax - xmin) / sx)) + 1
+            ny = int(round((ymax - ymin) / sy)) + 1
+            nz = int(round((zmax - zmin) / sz)) + 1
+            blk.origin = (xmin, ymin, zmin)
+            blk.dimensions = (max(nx, 1), max(ny, 1), max(nz, 1))
+            blk.spacing = (sx, sy, sz)
+        self._assigned.add("bounds")
+
+    @property
+    def n_points(self):
+        """Number of points for single-block pipes.
+
+        For multi-block pipes this is ambiguous, so an explicit error is raised
+        with the available block names.
+        """
+        if len(self) == 1:
+            blk = super().__getitem__(0)
+            return int(getattr(blk, "n_points", 0))
+        block_names = []
+        for i in range(len(self)):
+            name = self.get_block_name(i)
+            block_names.append(name if name else str(i))
+        raise AttributeError(
+            "n_points is ambiguous for Pipeset with multiple blocks; "
+            f"it has multiple sets of points in blocks: {block_names}"
+        )
     
     # ── Units & Scaling ─────────────────────────────────────────────────
     #
@@ -571,8 +737,13 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
                 to a unique ``point_data`` name across all leaves under that container.
         """
         if name is None:
-            if len(self) != 1:
-                raise ValueError("Ambiguous: multiple blocks, pass name=<name or index>.")
+            leaves = [path for path, _, _ in self._iter_leaf_blocks()]
+            if len(leaves) != 1:
+                raise ValueError(
+                    "Resolving a block without a name requires exactly one block; "
+                    "requires a name to specify which block to take from: "
+                    f"{leaves}"
+                )
             return super().__getitem__(0)
 
         if isinstance(name, int):
@@ -998,8 +1169,29 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         xs = np.asarray(xs)
         ys = np.asarray(ys)
         
-        # Determine coordinate format and create points
-        points = cls._parse_coordinates(xs, ys, zs, height, standoff, x_grid, y_grid)
+        # Determine coordinate format and create points.
+        # Special-case axis-vector regular grids:
+        # xs:(nx,), ys:(ny,), zs:(nz,) with data arrays like (nx, ny, nz).
+        inferred_dims = None
+        z_candidate = zs if zs is not None else (height if height is not None else standoff)
+        if not x_grid and not y_grid and xs.ndim == 1 and ys.ndim == 1 and z_candidate is not None:
+            z_arr = np.asarray(z_candidate)
+            if z_arr.ndim == 1 and z_arr.size > 1:
+                candidate_dims = (xs.size, ys.size, z_arr.size)
+                for value in data.values():
+                    arr = np.asarray(value)
+                    if arr.ndim >= 3 and arr.shape[:3] == candidate_dims:
+                        inferred_dims = candidate_dims
+                        break
+                if inferred_dims is not None:
+                    xx, yy, zz = np.meshgrid(xs, ys, z_arr, indexing='ij')
+                    points = np.column_stack([xx.ravel(), yy.ravel(), zz.ravel()])
+                else:
+                    points = cls._parse_coordinates(xs, ys, zs, height, standoff, x_grid, y_grid)
+            else:
+                points = cls._parse_coordinates(xs, ys, zs, height, standoff, x_grid, y_grid)
+        else:
+            points = cls._parse_coordinates(xs, ys, zs, height, standoff, x_grid, y_grid)
         n_points = len(points)
         
         # Create UnstructuredData with points
@@ -1033,9 +1225,12 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
                             f"number of points {n_points}"
                         )
             elif value_array.ndim == 3:
-                # 3D array - flatten spatial dimensions
-                if value_array.shape[0] * value_array.shape[1] == n_points:
-                    # Shape is (nx, ny, n_components)
+                # 3D arrays can be either:
+                # - scalar volume (nx, ny, nz) where size == n_points
+                # - vector-like grid (nx, ny, n_components) where nx*ny == n_points
+                if value_array.size == n_points:
+                    unstruct.point_data[key] = value_array.ravel()
+                elif value_array.shape[0] * value_array.shape[1] == n_points:
                     unstruct.point_data[key] = value_array.reshape(n_points, -1)
                 else:
                     raise ValueError(f"Cannot match 3D array '{key}' shape {value_array.shape} to {n_points} points")
@@ -1043,6 +1238,13 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
                 raise ValueError(f"Data array '{key}' has unsupported dimensionality: {value_array.ndim}D")
         
         if as_regular_grid:
+            if inferred_dims is not None:
+                if nx is None:
+                    nx = inferred_dims[0]
+                if ny is None:
+                    ny = inferred_dims[1]
+                if nz in (None, 1):
+                    nz = inferred_dims[2]
             return cls.from_unstructured(unstruct, nx=nx, ny=ny, nz=nz)
         pipe = cls()
         pipe.append(unstruct)
@@ -1148,12 +1350,22 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         else:
             raise ValueError(f"rename_map must be dict, list, or tuple")
         
-        # Parse for split operations
+        # Parse for split/merge operations
         split_operations = {}
+        merge_operations = {}
         parsed_rename_map = {}
         
         for old_key, new_value in rename_map.items():
-            if isinstance(new_value, (list, tuple)):
+            if isinstance(old_key, str) and ',' in old_key:
+                if not isinstance(new_value, str):
+                    raise ValueError(
+                        f"Merge target for '{old_key}' must be a string key, got {type(new_value).__name__}"
+                    )
+                source_keys = [k.strip() for k in old_key.split(',') if k.strip()]
+                if len(source_keys) < 2:
+                    raise ValueError(f"Invalid merge source specification: {old_key}")
+                merge_operations[tuple(source_keys)] = new_value.strip()
+            elif isinstance(new_value, (list, tuple)):
                 split_operations[old_key] = list(new_value)
             elif isinstance(new_value, str):
                 match = re.match(r'\[(.*?)\]', new_value)
@@ -1170,6 +1382,25 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         for old_key, new_key in parsed_rename_map.items():
             if old_key in data:
                 data[new_key] = data.pop(old_key)
+
+        # Apply merge operations (e.g. "Jx, Jy, Jz->J")
+        for source_keys, target_key in merge_operations.items():
+            missing = [k for k in source_keys if k not in data]
+            if missing:
+                raise ValueError(
+                    f"Cannot merge into '{target_key}': missing source keys {missing}"
+                )
+            arrays = [np.asarray(data[k]) for k in source_keys]
+            base_shape = arrays[0].shape
+            for key, arr in zip(source_keys, arrays):
+                if arr.shape != base_shape:
+                    raise ValueError(
+                        f"Cannot merge keys {list(source_keys)} into '{target_key}': "
+                        f"shape mismatch at '{key}' ({arr.shape}) vs {base_shape}"
+                    )
+            data[target_key] = np.stack(arrays, axis=-1)
+            for key in source_keys:
+                data.pop(key, None)
         
         # Apply split operations
         for old_key, split_names in split_operations.items():
@@ -1791,6 +2022,18 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             return True
         return False
     
+    def _looks_like_grid(self, value):
+        """Check if value is given in a grid format of shape (N, M[, ncomp]) 
+        where N and M are the number of points in the x and y directions, 
+        and ncomp is the number of components."""
+        if isinstance(value, torch.Tensor):
+            if value.ndim >= 2 and value.ndim <= 3:
+                # Check if N and M correspond to the number of points in the x and y directions
+                raise NotImplementedError("Not implemented yet.")
+        if isinstance(value, np.ndarray):
+            return value.ndim >= 2 and value.shape[-1] in (2, 3)
+        return False
+    
     def _to_polydata(self, value):
         """Convert points array to PolyData, padding 2D to 3D if needed."""
         if isinstance(value, torch.Tensor):
@@ -1904,6 +2147,9 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             else:
                 block = value
             super().__setitem__(key, block)
+        if self._looks_like_grid(value):
+            
+            super().__setitem__(key, value)
         else:
             # Non-points, non-matching value: store directly
             super().__setitem__(key, value)
@@ -2150,7 +2396,7 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
 
     
     def plot(self, scalar, ax=None, name=None, clim=None, sync=True, 
-             colorbar=False, symmetric=False, norm_type=None,
+             colorbar=True, symmetric=True, norm_type=None,
              cbar_width=0.05, cbar_pad=0.02, wspace=None,
              method='auto', labels=None, **kwargs):
         """
@@ -2181,6 +2427,8 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         
         After plotting, call pipe.sync_clim('p1', 'p2', 'p3') to unify limits.
         """
+        # Update kwargs with default values
+        kwargs.setdefault('cmap', 'bwr')
         
         # If scalar is a tuple/list of strings, plot each as a separate "row" in a grid.
         # Each string may itself be multi-component (e.g., B with shape (N,3)), giving columns.
@@ -2565,22 +2813,25 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         """Access stored plots by name."""
         return self._plots
     
-    def to_image_data(self, block_name, tol=1e-5):
+    def to_image_data(self, block_name=None, tol=1e-5):
         """
         Convert a PolyData block to ImageData if points form a regular rectangular grid.
         
         Checks: uniform spacing in x and y (within tol * range), and n_x * n_y == n_points.
         If valid, replaces the block with ImageData and copies all scalars.
         """
-        block = self[block_name]
+        block = self.resolve_name(block_name)
+        if not hasattr(block, "points"):
+            raise TypeError(f"to_image_data expects a leaf point-set block, got {type(block).__name__}")
         pts = np.asarray(block.points)
         
         x_unique = np.unique(pts[:, 0])
         y_unique = np.unique(pts[:, 1])
-        n_x, n_y = len(x_unique), len(y_unique)
+        z_unique = np.unique(pts[:, 2])
+        n_x, n_y, n_z = len(x_unique), len(y_unique), len(z_unique)
         
         # Check completeness: grid should have exactly n_x * n_y points
-        if n_x * n_y != len(pts):
+        if n_x * n_y * n_z != len(pts):
             raise ValueError(f"Not a complete grid: {n_x} x {n_y} = {n_x * n_y} != {len(pts)} points")
         
         # Check uniform spacing in x
@@ -2602,12 +2853,22 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             spacing_y = dy[0] if len(dy) > 0 else 1.0
         else:
             spacing_y = 1.0
+            
+        # Check uniform spacing in z
+        if n_z > 1:
+            dz = np.diff(z_unique)
+            z_range = z_unique[-1] - z_unique[0]
+            if z_range > 0 and np.max(np.abs(dz - dz[0])) > tol * z_range:
+                raise ValueError(f"Non-uniform z spacing: max deviation {np.max(np.abs(dz - dz[0])):.2e}")
+            spacing_z = dz[0] if len(dz) > 0 else 1.0
+        else:
+            spacing_z = 1.0
         
         # Create ImageData. Origin is the min corner, dimensions are n_x, n_y, 1
         z_val = pts[0, 2] if pts.shape[1] > 2 else 0.0
         origin = (x_unique[0], y_unique[0], z_val)
         
-        img = pv.ImageData(dimensions=(n_x, n_y, 1), spacing=(spacing_x, spacing_y, 1.0), origin=origin)
+        img = pv.ImageData(dimensions=(n_x, n_y, n_z), spacing=(spacing_x, spacing_y, spacing_z), origin=origin)
         
         # Map scalars: need to reorder from arbitrary point order to grid order (x varies fastest in ImageData)
         # Build index map: for each point, find its (ix, iy) and compute flat index ix + iy * n_x
@@ -2628,8 +2889,11 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             reordered[reorder] = data
             img.point_data[name] = reordered
         
-        # Replace block
-        super().__setitem__(block_name, img)
+        # Replace block. If block_name is omitted, use single-block replacement.
+        if block_name is None:
+            super().__setitem__(0, img)
+        else:
+            super().__setitem__(block_name, img)
         return self
 
 

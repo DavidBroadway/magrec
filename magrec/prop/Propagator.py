@@ -131,6 +131,13 @@ class CurrentFourierPropagator3d(Propagator):
         """
         self.device = "cpu"
         self.shape = shape
+        
+        if len(shape) == 3:
+            nx, ny, nz = shape
+        else:
+            raise ValueError(f"Wrong size of `shape` argument. For {__class__.name()} it has"
+                             + f"define sizes of 3 dimensions: (nx, ny, nz), got shape {shape} instead.")
+        
 
         # either dx, dy, dz or height, width, depth must be provided together with shape
         if (dx is not None) and (dy is not None) and (dz is not None):
@@ -138,17 +145,17 @@ class CurrentFourierPropagator3d(Propagator):
             self.dy = dy
             self.dz = dz
         elif (height is not None) and (width is not None) and (depth is not None):
-            self.dx = height / (shape[0] - 1)
-            self.dy = width / (shape[1] - 1)
-            self.dz = depth / (shape[2] - 1)
+            self.dx = height / (nx - 1)
+            self.dy = width / (ny - 1)
+            self.dz = depth / (nz - 1)
         else:
             raise ValueError("Either dx, dy, dz or height, width, depth must be provided together with shape")
 
         # define a spatial and conjugate grids and a Fourier transform on them for
         # quantities sampled on that grid
         self.ft = FourierTransform2d(
-            grid_shape=shape,
-            dx=dx,
+            grid_shape=(nx, ny),  # assume shape defines size of (n_x, n_y, n_z) in this order
+            dx=dx,                   # and take out only (n_x, n_y) part for the Fourier transform
             dy=dy,
             real_signal=True,
         )
@@ -157,9 +164,19 @@ class CurrentFourierPropagator3d(Propagator):
             define_kernel_matrix(self.ft.kx_vector, self.ft.ky_vector, self.ft.k_matrix)
 
         # torch.linspace includes endpoint and contains exactly `shape[0]` elements
-        self.zs = torch.linspace(0, height, shape[0], device=self.device)
+        self.zs = torch.linspace(0, height, nz, device=self.device)
         self.z0 = height + D
         """z-coordinate of the plane where the magnetic field is evaluated"""
+        
+        # --------> z0
+        # .
+        # .             } D
+        # .
+        # --------> height
+        # ||||||||||  
+        # |material|-> dz 
+        # ||||||||||
+        # --------> 0
 
         self.exp_matrix = self.get_exp_matrix(self.zs, self.ft.k_matrix, self.z0)
 
@@ -291,28 +308,42 @@ class CurrentFourierPropagator3d(Propagator):
         # j — index of the current field component, i.e. j_x, j_y, j_z
         # k, l — indices of k_x and k_y, respectively
         # z — index along the z-axis
-        _b = torch.einsum("ijkl,bjklz->biklz", M, j)
+        _b = torch.einsum("ijkl,...jklz->...iklz", M, j)
 
         # Calculates the magnetic field contribution to b(k_x, k_y, z0) per the current field layer j(k_x, k_y, z)
-        b_zs = torch.einsum("ijz,bcijz->bcijz", exp_matrix, _b)
+        b_zs = torch.einsum("ijz,...cijz->...cijz", exp_matrix, _b)
 
-        # Performs the integration ∫ exp(-k [z0 - z']) M j dz' according to the rule
+        # Performs the integration ∫ exp(-k [z0 - z']) M j dz' according to the rule `trapezoid` or `rectangle`,
+        # i.e. integrates the contributions from the current field layers to the magnetic field 
+        # at the observation plane.
         if rule == "trapezoid":
             b = torch.trapezoid(y=b_zs, x=zs, dim=-1)
         elif rule == "rectangle":
             # Multiply the contribution from the current in each k_x and k_y to the magnetic field by the exponential
             # factor and sum along z, assuming each contribution is scaled by dz (lower Riemann sum)
             dzs = zs[1:] - zs[:-1]
-            b = torch.einsum("z,bcijz->bcij", dzs, b_zs[:-1])
+            b = torch.einsum("z,...cijz->...cij", dzs, b_zs[:-1])
         else:
             raise ValueError("Unknown integration rule: {}".format(rule))
 
         return b
 
     def get_B_from_J(self, J):
-        j = self.ft.forward(J, dim=(-2, -1))
+        """
+        Calculates the magnetic field B from the volume current density J, 
+        expected in the unit dimensions of [A/mm^2].
+
+        Args:
+            J: current density, shape ([batch_size, optional], 3, n_x, n_y, n_z)
+
+        Returns:
+            B: magnetic field, shape ([batch_size, optional], 3, n_x, n_y, 1) at z = z0, 
+                where z0 is the z coordinate of the observation plane, self.D above the current slab.
+        """
+        j = self.ft.forward(J, dim=(-3, -2))
         b = self.get_b_from_j(M=self.j_to_b_z_matrix, j=j, exp_matrix=self.exp_matrix, zs=self.zs, rule=self.rule)
-        B = self.ft.backward(b, dim=(-2, -1))
+        B = self.ft.backward(b, dim=(-2, -1))  # here dim = (-2, -1) because b is of shape (3, n_kx, n_ky) already
+                                                      # i.e. z direction is contracted
         return B
 
 

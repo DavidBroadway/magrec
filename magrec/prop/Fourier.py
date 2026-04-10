@@ -105,7 +105,12 @@ class FourierTransform2d(object):
                                      inherently cyclic, meaning that the signal is considered to be periodic
                                      with the period equal to the grid size. See Yazhdanian et al (2020), p. 3
                                      for the discussion. If the transform is `linear`, the grid is doubled in size
-                                     before computing the DFT by padding with zeros.
+                                     before computing the DFT by padding with zeros. 
+                                     
+                                     `cyclic` is good for periodic current features and when in principle the 
+                                     given current distribution extends indefinitely.
+                                     `linear` should be used when the entire current source is contained within
+                                     the grid, so that the boundary periodicity artifcats are avoided.
 
         """
 
@@ -247,7 +252,7 @@ class FourierTransform2d(object):
 
     def backward(self, x, dim):
         """
-        Computes an inverse 2d-Fourier transform of an at-least-a-3d-tensor along -3, -2 dimensions.
+        Computes an inverse 2d-Fourier transform of an at-least-a-3d-tensor along `dim` dimensions.
 
         Args:
             x:  torch.Tensor with shape (…, n_kx, n_ky, n_z), in units A
@@ -267,7 +272,8 @@ class FourierTransform2d(object):
         else:
             Y = torch.fft.ifft2(x, dim=dim, norm=_norm) / (dx * dy)
 
-        # if FFT is linear, then the backward transformation will be a larger space
+        # if FFT is linear (i.e. internally padded with zeros to avoid periodicity on boundaries), 
+        # then the backward transformation will be a larger space
         # then the original input tensor, so we need to crop it
         if self.type == "linear":
             # guaranteed to be even if Y is obtained from a `linear` FFT
