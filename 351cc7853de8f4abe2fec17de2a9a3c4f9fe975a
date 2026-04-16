@@ -1,0 +1,40 @@
+magrec/prop/test_current_dipole_propagator.py
+  1d95e147bacc1e45 1-111
+magrec/prop/compiled.py
+  1d95e147bacc1e45 77-123
+magrec/prop/Propagator.py
+  1d95e147bacc1e45 20,675,678,682,1032-1057,1060-1063,1066-1078,1080-1088,1090-1094,1097-1101,1103-1105,1107-1130,1137-1144,1164,1168-1171,1176-1179,1184-1187,1233,1257
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "351cc7853de8f4abe2fec17de2a9a3c4f9fe975a",
+  "prompts": {
+    "1d95e147bacc1e45": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "5f5e56f1-09a9-4723-b348-f10460b6dbf6",
+        "model": "default"
+      },
+      "human_author": "Michael Flaks",
+      "messages": [],
+      "total_additions": 479,
+      "total_deletions": 90,
+      "accepted_lines": 363,
+      "overriden_lines": 14
+    },
+    "b9259450fc645678": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "cfcb8483-52fd-4922-b7a8-fb028417ed32",
+        "model": "default"
+      },
+      "human_author": "Michael Flaks",
+      "messages": [],
+      "total_additions": 36,
+      "total_deletions": 0,
+      "accepted_lines": 36,
+      "overriden_lines": 0
+    }
+  }
+}
