@@ -55,6 +55,8 @@ def get_exponent_from_unit(unit: str) -> int:
         return -6
     elif unit_prefix == "m":                            # milli
         return -3
+    elif unit_prefix == "c":                            # centi
+        return -2
     elif unit_prefix == "k":                            # kilo
         return 3
     elif unit_prefix == "M":                            # mega

@@ -6,11 +6,28 @@ import re
 import scipy
 import torch
 import numpy as np
+import pint
 import matplotlib.pyplot as plt
 import pandas as pd
 from magrec.plot.plot import plot_n_components
 
 import pyvista as pv
+
+PINT_REGISTRY = pint.UnitRegistry()
+
+def to_qty(value, units):
+    if isinstance(value, pint.Quantity):
+        return value.to(units)
+    return pint.Quantity(value, units)
+
+
+def _unit_dimension(unit: str) -> str:
+    unit = str(unit).strip()
+    if not unit:
+        raise ValueError("Unit string cannot be empty.")
+    if len(unit) == 1:
+        return unit
+    return unit[1:]
 
 
 class MagneticFieldDataMixin:
@@ -283,7 +300,12 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
     """
     
     def __init__(self, *args, **kwargs):
-        pv.MultiBlock.__init__(self, *args, **kwargs)
+        pv.MultiBlock.__init__(self)
+        if len(args) == 1 and isinstance(args[0], list):
+            for name, block in args[0]:
+                self.add(name=name, dataset=block)
+            return
+            
         self._plots = {}
         self._steps = {}
         self._assigned = set()
@@ -323,7 +345,7 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         # Left column: summary attributes
         fmt += '<tr><td><table>\n'
         fmt += f'<tr><td>N Blocks</td><td>{len(self)}</td></tr>\n'
-        bds = self._aggregate_bounds()
+        bds = self.get_bounds()
         ff = '{:.3e}'
         fmt += f'<tr><td>X Bounds</td><td>{ff.format(bds[0])}, {ff.format(bds[1])}</td></tr>\n'
         fmt += f'<tr><td>Y Bounds</td><td>{ff.format(bds[2])}, {ff.format(bds[3])}</td></tr>\n'
@@ -358,19 +380,16 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         fmt += '</table></td></tr></table>'
         return fmt
 
-    def _aggregate_bounds(self):
-        """Axis-aligned union of each block's bounds; nested Pipeset/MultiBlock recurse via .bounds."""
+    def get_bounds(self):
+        """Get the union of each block's bounds; nested elemetns recurse via .bounds."""
         xs, ys, zs = [], [], []
-        for i in range(len(self)):
-            blk = super(Pipeset, self).__getitem__(i)
-            b = getattr(blk, "bounds", None)
-            if b is None or len(b) < 6:
-                continue
+        
+        for block in self:
+            b = block.bounds
             xs.extend((b[0], b[1]))
             ys.extend((b[2], b[3]))
             zs.extend((b[4], b[5]))
-        if not xs:
-            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        
         return (min(xs), max(xs), min(ys), max(ys), min(zs), max(zs))
 
     @staticmethod
@@ -444,7 +463,7 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
                     return torch.as_tensor(block.point_data[name])
                 raise
         if name == "bounds":
-            return self._aggregate_bounds()
+            return self.get_bounds()
         # Multi-block: delegate other names to PyVista __getattr__ chain
         for cls in type(self).__mro__[1:]:
             ga = cls.__dict__.get("__getattr__")
@@ -478,6 +497,43 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
                 f"Geometry assignment expects a single ImageData block, got {type(blk).__name__}"
             )
         return blk
+    
+    @property
+    def points(self):
+        """Return the points as a tensor."""
+        if len(self) == 0:
+            return torch.tensor([])
+        if len(self) == 1:
+            return torch.as_tensor(self[0].points)
+        else:
+            raise ValueError(f"`points` is ambiguous for Pipeset with multiple blocks: {self.keys()}")
+        
+    @points.setter
+    def points(self, value):
+        if len(self) == 1:
+            # Need to convert to numpy array to have PyVista assign the points correctly
+            self[0].points = np.array(value)
+        else:
+            raise ValueError(f"`points` is ambiguous for Pipeset with multiple blocks: {self.keys()}")
+        
+    def get_points(self, block=None, as_tensor=True, as_array=False, as_type=torch.tensor):
+        """Return the points of a given block.
+        
+        Args:
+            block (str): The name of the block to get the points from. If there
+                is only one block, this can be omitted
+            as_tensor (bool): Whether to return the points as a torch.Tensor.
+            as_array (bool): Whether to return the points as a numpy array.
+            as_type (type): The type to return the points as. Has precedence over as_tensor and as_array.
+                Possible values are torch.tensor or numpy.array.
+        """
+        block = self.resolve_name(block)
+        points = block.get('points')
+        if as_tensor:
+            return torch.as_tensor(points)
+        if as_array:
+            return np.array(points)
+        return as_type(points)
 
     @property
     def dimensions(self):
@@ -530,7 +586,7 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
 
     @property
     def bounds(self):
-        return self._geometry_block(create_if_missing=False).bounds
+        return self.__getattr__("bounds")
 
     @bounds.setter
     def bounds(self, value):
@@ -635,18 +691,43 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         """
         result = {}
         suffix = '_units'
+        
         for i in range(len(self)):
-            blk = super().__getitem__(i)
-            if not hasattr(blk, 'field_data'):
+            block = super().__getitem__(i)
+            
+            if not hasattr(block, 'field_data'):
+                # Means no units data either, since `_units` are stored in `field_data`.
                 continue
+            
+            # Returns block_name.array_name if multi-block
             prefix = '' if len(self) == 1 else f'{self.keys()[i]}.'
-            for key in blk.field_data.keys():
+            
+            for key in block.field_data.keys():
                 if key.endswith(suffix):
                     array_name = key[:-len(suffix)]
-                    val = blk.field_data[key]
+                    val = block.field_data[key]
                     # field_data stores arrays; unit string is the first element
                     result[f'{prefix}{array_name}'] = str(val[0]) if hasattr(val, '__len__') else str(val)
+                    
         return result
+
+    def to_units(self, block=None, **unit_specs):
+        """Convert arrays/coordinates to target units using current unit metadata.
+
+        Examples:
+            pipe.to_units(coordinates='cm')
+            pipe.to_units(B_NV='uT')
+            pipe.to_units(block='sensor', coordinates='um')
+        """
+        target = self.resolve_name(block)
+        if not hasattr(target, "point_data"):
+            raise TypeError(f"to_units() expected a leaf block; got {type(target).__name__}")
+        for name, unit in unit_specs.items():
+            if name == "coordinates":
+                self._scale_coordinates(target, factor=None, to_units=unit, block_ref=block, absolute=False)
+                continue
+            self._scale_array(target, name, factor=None, to_units=unit, block_ref=block, absolute=False)
+        return self
 
     def scale(self, source=None, *, factor=None, to_units=None, coordinates=False,
               absolute=False, block=None, **array_factors):
@@ -702,6 +783,12 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
                 f"coordinates must be bool, numeric factor, unit string, or None; got {type(coordinates).__name__}"
             )
 
+        if source == "coordinates":
+            if coordinates_enabled:
+                raise ValueError("Use either source='coordinates' or coordinates=True, not both.")
+            coordinates_enabled = True
+            source = None
+
         if coordinates_enabled and source is not None:
             raise ValueError("Pass either source=<array_name> or coordinates=True, not both.")
         if factor is not None and to_units is not None:
@@ -712,6 +799,13 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         target = self.resolve_name(block)
         if not hasattr(target, "point_data"):
             raise TypeError(f"scale() expected a leaf block; got {type(target).__name__}")
+
+        if to_units is not None:
+            if coordinates_enabled:
+                return self.to_units(block=block, coordinates=to_units)
+            if source is None:
+                raise ValueError("Provide source=<array_name> or coordinates=True.")
+            return self.to_units(block=block, **{source: to_units})
         
         if coordinates_enabled:
             return self._scale_coordinates(target, factor, to_units, block, absolute=absolute)
@@ -911,6 +1005,11 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
                 raise ValueError(
                     f"Cannot convert to '{to_units}': no current units set for '{source}'. "
                     f"Call pipe.set_units({source}='<unit>') first.")
+            if _unit_dimension(current_unit) != _unit_dimension(to_units):
+                raise ValueError(
+                    f"Cannot convert '{source}' from '{current_unit}' to '{to_units}': "
+                    "base dimensions differ."
+                )
             # Both units must share the same base dimension (e.g., both end in 'T')
             # so the conversion is purely a prefix exponent difference
             from magrec.prop.constants import get_exponent_from_unit
@@ -999,6 +1098,11 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             current_unit = 'm'  # SI default for coordinates
         
         if to_units is not None:
+            if _unit_dimension(current_unit) != _unit_dimension(to_units):
+                raise ValueError(
+                    f"Cannot convert coordinates from '{current_unit}' to '{to_units}': "
+                    "base dimensions differ."
+                )
             from magrec.prop.constants import get_exponent_from_unit
             from_exp = get_exponent_from_unit(current_unit)
             to_exp = get_exponent_from_unit(to_units)
@@ -1974,6 +2078,45 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             return torch.as_tensor(data.reshape(*shape)).permute(1, 0, 2)
         else:
             raise ValueError("Invalid dimensions for the grid.")
+        
+    def add(self, name, dataset):
+        """Add another block (pipe or pyvista block) to the Pipeset under the given name."""
+        self.append(dataset=dataset, name=name)
+        return self
+    
+    def clone(self):
+        """Clone the Pipeset."""
+        return self.copy(deep=True)
+    
+    def move(self, x=0, y=0, z=0, 
+             x_units=None, 
+             y_units=None, 
+             z_units=None, 
+             units=None):
+        """Move the Pipeset by the given amount.
+        
+        Args:
+            Move by x, y, z in units of x_units, y_units, z_units or default units of the Pipeset: 
+            x: float, x-coordinate to move by
+            y: float, y-coordinate to move by, in units of y_units or default units of the Pipeset
+            z: float, z-coordinate to move by, in units of z_units or default units of the Pipeset
+            
+            Optionally specify the units of x, y, z or use the default ones:
+            x_units: str, units of x or default units of the Pipeset
+            y_units: str, units of y or default units of the Pipeset
+            z_units: str, units of z or default units of the Pipeset
+            units: str, units for all x, y, z
+        """
+        target_units = self.units.get("coordinates", "m")
+
+        # Create a vector for displacements, that will be normalized to the target units of the `self`
+        d_vec = []
+        for d, d_units in zip([x, y, z], [x_units, y_units, z_units]):
+            if d != 0:
+                d = to_qty(d, units=d_units if d_units is not None else target_units).to(target_units)
+                d_vec.append(float(d.magnitude))
+        self.points += np.array(d_vec)
+        return self
     
     def get_as_grid(self, point_data_name, keep_dims=False):
         """Return point data reshaped to (nx, ny, nz[, ncomp]) to match grid. ImageData only."""
@@ -2059,6 +2202,42 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         if isinstance(value, (pv.PolyData, pv.UnstructuredGrid, pv.StructuredGrid, pv.ImageData)):
             super().__setitem__(key, value)
             return
+        
+        # Undotted key on a single-child container: assign point_data on the leaf, or recurse
+        # into a nested MultiBlock. Otherwise MultiBlock.__setitem__ treats the array as a new
+        # block and PyVista raises NotImplementedError (cannot wrap bare ndarray as dataset).
+        elif '.' not in key and len(self) == 1:
+            child = super(Pipeset, self).__getitem__(0)
+            if isinstance(child, pv.MultiBlock):
+                child[key] = value
+                return
+            if hasattr(child, "n_points") and hasattr(child, "point_data"):
+                arr = np.asarray(value)
+                shape = arr.shape
+                if len(shape) == 1:
+                    if shape[0] == child.n_points:
+                        child.point_data[key] = arr
+                        return
+                elif len(shape) == 2:
+                    if shape[0] == child.n_points:
+                        child.point_data[key] = arr.reshape(child.n_points, -1).squeeze()
+                        return
+                    W, H = shape
+                    if W * H == child.n_points:
+                        child.point_data[key] = arr.T.flatten("F")
+                        return
+                elif len(shape) == 3:
+                    n, W, H = shape
+                    if n > 3:
+                        W, H, n = shape
+                        arr = arr.transpose(1, 2, 0)
+                    if W * H == child.n_points:
+                        child.point_data[key] = arr.reshape(W * H, n)
+                        return
+                raise ValueError(
+                    f"Cannot assign point data '{key}': shape {shape} does not match "
+                    f"{child.n_points} points on {type(child).__name__}"
+                )
         
         # For dotted keys like 'sensor.roi.B_NV', we need to figure out what's the block name
         # and what's the scalar name. Could be: block='sensor.roi', scalar='B_NV' (flat naming),
