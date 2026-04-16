@@ -731,15 +731,15 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
 
     def scale(self, source=None, *, factor=None, to_units=None, coordinates=False,
               absolute=False, block=None, **array_factors):
-        """Scale point data or coordinates, with optional unit tracking.
+        """Scale point data or coordinates, can be used for unit conversion, or for scaling by a factor.
         
         Scaling a point_data array:
             pipe.scale('B_NV', factor=1e6)
-            pipe.scale('B_NV', to_units='uT')       # requires current units set
+            pipe.scale('B_NV', to_units='uT')       # requires units to be set
         
         Scaling coordinates (points, and spacing/origin for ImageData):
             pipe.scale(coordinates=True, factor=1e6)
-            pipe.scale(coordinates=True, to_units='um')  # default from-units is 'm'
+            pipe.scale(coordinates=True, to_units='um')  # uses preset units of the pipe for conversion
         
         The scaling factor is recorded in _steps['scale.<name>'] so it can be
         reversed later via pipe.unscale(). The unit metadata is updated accordingly.
