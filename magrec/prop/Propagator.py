@@ -17,6 +17,7 @@ from numba import jit
 
 from magrec.prop.Fourier import FourierTransform2d
 from magrec.prop.constants import DEFAULT_UNITS, MU0, get_exponent_from_unit
+from magrec.prop.compiled import get_current_dipole_b_njit
 from magrec.prop.Kernel import (
     UniformLayerFactor2d, 
     MagnetizationFourierKernel2d, 
@@ -671,14 +672,14 @@ class MagneticDipolePropagator(Propagator):
         if len(r_sensor.shape) != 2:
             raise RuntimeError(f"r_sensor must be 2D, got shape {r_sensor.shape}")
         
-        if r_source.shape[1] > r_source.shape[0]:
+        if r_source.shape[1] != 3 and r_source.shape[0] == 3:
             warnings.warn(f"r_source expected (N, 3), got {r_source.shape}. Transposing.")
             r_source = r_source.T
-        if r_sensor.shape[1] > r_sensor.shape[0]:
+        if r_sensor.shape[1] != 3 and r_sensor.shape[0] == 3:
             warnings.warn(f"r_sensor expected (N, 3), got {r_sensor.shape}. Transposing.")
             r_sensor = r_sensor.T
         
-        expected_size_in_MB = MagneticDipolePropagator.get_expected_ffm_size(r_source, r_sensor)
+        expected_size_in_MB = get_expected_ffm_size(source=r_source, sensor=r_sensor, out_units="MB")
         if expected_size_in_MB > self.MAX_FFM_SIZE_IN_MB:
             raise RuntimeError(
                 "Expected size of the forward-field matrix is {:.2f} MB, which is larger than {:.2f} MB. "
@@ -728,56 +729,6 @@ class MagneticDipolePropagator(Propagator):
     def __call__(self, m):
         """Compute B field from dipole moments m. Shape: (n_source, 3) -> (n_sensor, 3)."""
         return self.forward(m)
-    
-    @staticmethod
-    def get_expected_ffm_size(source=None, sensor=None, type="float32", out_units="MB", as_float=False, print_result=False):
-        """Get the expected size of the forward-field matrix in MB."""
-        if type == "float32":
-            element_size = 32
-        elif type == "float64":
-            element_size = 64
-        elif type == "float16":
-            element_size = 16
-        else:
-            element_size = 32
-        
-        if isinstance(source, (list, np.ndarray)):
-            source = torch.tensor(source, dtype=torch.float32)
-            M = source.shape[0]
-        elif isinstance(source, torch.Tensor):
-            M = source.shape[0]
-        elif isinstance(source, int):
-            M = source
-        else:
-            raise AttributeError(f"Unexpected type for source: {type(source)}.")
-        
-        if isinstance(sensor, (list, np.ndarray)):
-            sensor = torch.tensor(sensor, dtype=torch.float32)
-            N = sensor.shape[0]
-        elif isinstance(sensor, torch.Tensor):
-            N = sensor.shape[0]
-        elif isinstance(sensor, int):
-            N = sensor
-        else:
-            raise AttributeError(f"Unexpected type for sensor: {type(sensor)}.")
-        
-        if out_units == "KB":
-            r = 3 * M * 3 * N * element_size / 8 / 1024
-        elif out_units == "MB":
-            r = 3 * M * 3 * N * element_size / 8 / 1024 / 1024
-        elif out_units == "GB":
-            r = 3 * M * 3 * N * element_size / 8 / 1024 / 1024 / 1024
-        else:
-            raise ValueError("Invalid output units, must be one of 'KB', 'MB', 'GB'")
-        
-        if as_float:
-            r = r.float()
-            return r
-        else:
-            if print_result:
-                print(f"{r:.2f} {out_units}")
-            else:
-                return r
     
     @staticmethod
     def get_ffm(r_source, r_sensor):
@@ -1078,16 +1029,119 @@ def _compute_dipole_field_optimized(r_source, r_sensor, m):
     
     
 class CurrentDipolePropagator(Propagator):
-        
-    def __init__(self, r_source, r_sensor):
-        self.ffm = self.get_ffm(r_source=r_source, r_sensor=r_sensor)
-        pass
+    
+    MAX_FFM_SIZE_IN_MB = 100
+    
+    def __init__(
+        self,
+        r_source,
+        r_sensor,
+        backend="torch",
+        method="matrix",
+        compiled=None,
+        dtype=torch.float32,
+        device="cpu",
+    ):
+        """
+        Initialize the current dipole propagator.
+
+        Args:
+            r_source: (n_source, 3) array of dipole positions
+            r_sensor: (n_sensor, 3) array of sensor positions
+            backend: "torch" or "numba"
+            method: "matrix", "iterative", or "rolling_matrix"
+            compiled: bool, whether to compile the method, implemented only when `method` is `iterative`
+            dtype: torch.dtype
+        """
+        self.dtype = dtype
+        self.device = device
+        self.r_source = self.as_tensor(r_source)
+        self.r_sensor = self.as_tensor(r_sensor)
+        self.n_source = self.r_source.shape[0]
+        self.n_sensor = self.r_sensor.shape[0]
+        self.ffm = None
+
+        self.method = method
+        self.compiled = compiled
+        self.backend = backend
+
+        if self.method == "matrix":
+            self.ffm = self.get_ffm(r_source=self.r_source, r_sensor=self.r_sensor).to(dtype=dtype, device=device)
+            self.forward = self._forward_torch_matrix
+            if backend == "torch":
+                if self.compiled and hasattr(torch, "compile"):
+                    self.forward = torch.compile(self._forward_torch_matrix)
+            elif backend == "numba":
+                raise ValueError("backend='numba' is only supported with method='iterative'.")
+            else:
+                raise ValueError(f"Unknown backend: {backend}")
+            return
+        elif self.method == "iterative":
+            if backend == "torch":
+                self.forward = self._forward_torch_iterative
+                if self.compiled and hasattr(torch, "compile"):
+                    self.forward = torch.compile(self._forward_torch_iterative)
+            elif backend == "numba":
+                self.forward = self._forward_numba_iterative
+            else:
+                raise ValueError(f"Unknown backend: {backend}")
+            return
+        else:
+            raise ValueError(
+                f"Unsupported method '{method}'. Supported methods: 'matrix', 'iterative', "
+                "'iterative.compiled', 'iterative+compiled'."
+            )
+
+    def as_tensor(self, x):
+        """Convert to torch tensor with instance dtype and device."""
+        if isinstance(x, torch.Tensor):
+            return x.to(dtype=self.dtype, device=self.device)
+        return torch.tensor(x, dtype=self.dtype, device=self.device)
+
+    def _forward_torch_matrix(self, J):
+        J_tensor = self.as_tensor(J)
+        return torch.einsum('smij,mj->si', self.ffm, J_tensor)
+
+    def _forward_torch_iterative(self, J):
+        J_tensor = self.as_tensor(J)
+        tau = self.r_sensor[:, None, :] - self.r_source[None, :, :]
+        pref = MU0 / (4 * torch.pi)
+        tau_norm = torch.norm(tau, dim=-1, keepdim=True)
+        inv_tau3 = 1.0 / (tau_norm ** 3)
+        contrib = torch.cross(J_tensor[None, :, :], tau, dim=-1) * inv_tau3
+        return pref * contrib.sum(dim=1)
+
+    def _forward_numba_iterative(self, J):
+        was_torch = isinstance(J, torch.Tensor)
+        J_np = J.detach().cpu().numpy() if was_torch else np.asarray(J)
+        r_source_np = self.r_source.detach().cpu().numpy().astype(np.float32)
+        r_sensor_np = self.r_sensor.detach().cpu().numpy().astype(np.float32)
+        B_np = get_current_dipole_b_njit(
+            r_source_np,
+            r_sensor_np,
+            np.asarray(J_np, dtype=np.float32),
+            mu0_over_4pi=np.float32(float(MU0 / (4 * torch.pi))),
+        )
+        if was_torch:
+            return torch.from_numpy(B_np).to(dtype=self.dtype, device=J.device)
+        return B_np
+
+    def __call__(self, J):
+        return self.forward(J)
     
     @staticmethod
     def get_ffm(r_source, r_sensor, as_matrix=False):
         """Get forward-field matrix (FFM) for a current dipole propagator. FFM is a matrix
         that connects 3 components of a current dipole at location r_i to the 3 magnetic field 
         components at location r_j"""
+        
+        expected_size_in_MB = get_expected_ffm_size(source=r_source, sensor=r_sensor, out_units="MB")
+        if expected_size_in_MB > CurrentDipolePropagator.MAX_FFM_SIZE_IN_MB:
+            raise RuntimeError(
+                "Expected size of the forward-field matrix is {:.2f} MB, which is larger than {:.2f} MB. "
+                "This is not feasible.".format(expected_size_in_MB, CurrentDipolePropagator.MAX_FFM_SIZE_IN_MB)
+            )
+        
         if isinstance(r_source, list):
             r_source = torch.tensor(r_source, dtype=torch.float32)
         
@@ -1107,21 +1161,30 @@ class CurrentDipolePropagator(Propagator):
         when contracted with any vector [v_r] gives a transformation: • × v, where • is another 
         arbitrary vector
         """
-        cross_product_matrix = torch.zeros((3, 3, 3))
+        cross_product_matrix = torch.zeros((3, 3, 3), dtype=tau.dtype, device=tau.device)
         cross_product_matrix[:, :, 0] = torch.tensor(
             [[ 0,  0,  0],
             [ 0,  0,  1],
-            [ 0, -1,  0]])
+            [ 0, -1,  0]],
+            dtype=tau.dtype,
+            device=tau.device,
+        )
 
         cross_product_matrix[:, :, 1] = torch.tensor(
             [[ 0,  0, -1],
             [ 0,  0,  0],
-            [ 1,  0,  0]])
+            [ 1,  0,  0]],
+            dtype=tau.dtype,
+            device=tau.device,
+        )
 
         cross_product_matrix[:, :, 2] = torch.tensor(
             [[ 0,  1,  0],
             [-1,  0,  0],
-            [ 0,  0,  0]])
+            [ 0,  0,  0]],
+            dtype=tau.dtype,
+            device=tau.device,
+        )
         
         ffm = torch.einsum('smr,ijr->smij', tau, cross_product_matrix)
         if as_matrix:
@@ -1167,7 +1230,7 @@ class CurrentDipolePropagator(Propagator):
     def get_B_from_J(self, J):
         """Shape of J is (n_pts, 3), J can be thought of as current dipoles located at 
         n_pts and having 3 components that define the direction and amplitude of the current."""
-        return torch.einsum('smij,mj->si', self.ffm, J)
+        return self(J)
     
     @staticmethod
     def get_B_at_pts_from_J_at_pts(J, r_source, r_sensor):
@@ -1191,6 +1254,7 @@ class CurrentDipolePropagator(Propagator):
             r_source = r_source[None, :]
             
         ffm = CurrentDipolePropagator.get_ffm(r_source, r_sensor)
+        ffm = ffm.to(dtype=J.dtype, device=J.device)
         return torch.einsum('smij,mj->si', ffm, J)
     
     def get_J_from_B(self, B, method="penrose"):
@@ -1347,5 +1411,61 @@ class AxisProjectionPropagator(Propagator):
         ax.set_title(f'$\\hat{{n}}=({nx:.3f},\\, {ny:.3f},\\, {nz:.3f})$', fontsize=11, pad=0)
         
         return ax
+    
+    
+def get_expected_ffm_size(source=None, sensor=None, type="float32", out_units="MB", as_float=False, print_result=False):
+        """Get the expected size of the forward-field matrix in MB.
+        
+        Used by:
+            `CurrentDipolePropagator` and
+            `MagneticDipolePropagator`
+            
+        """
+        if type == "float32":
+            element_size = 32
+        elif type == "float64":
+            element_size = 64
+        elif type == "float16":
+            element_size = 16
+        else:
+            element_size = 32
+        
+        if isinstance(source, (list, np.ndarray)):
+            source = torch.tensor(source, dtype=torch.float32)
+            M = source.shape[0]
+        elif isinstance(source, torch.Tensor):
+            M = source.shape[0]
+        elif isinstance(source, int):
+            M = source
+        else:
+            raise AttributeError(f"Unexpected type for source: {type(source)}.")
+        
+        if isinstance(sensor, (list, np.ndarray)):
+            sensor = torch.tensor(sensor, dtype=torch.float32)
+            N = sensor.shape[0]
+        elif isinstance(sensor, torch.Tensor):
+            N = sensor.shape[0]
+        elif isinstance(sensor, int):
+            N = sensor
+        else:
+            raise AttributeError(f"Unexpected type for sensor: {type(sensor)}.")
+        
+        if out_units == "KB":
+            r = 3 * M * 3 * N * element_size / 8 / 1024
+        elif out_units == "MB":
+            r = 3 * M * 3 * N * element_size / 8 / 1024 / 1024
+        elif out_units == "GB":
+            r = 3 * M * 3 * N * element_size / 8 / 1024 / 1024 / 1024
+        else:
+            raise ValueError("Invalid output units, must be one of 'KB', 'MB', 'GB'")
+        
+        if as_float:
+            r = r.float()
+            return r
+        else:
+            if print_result:
+                print(f"{r:.2f} {out_units}")
+            else:
+                return r
 
 # TODO: Implement MagneticFieldComponentsPropagator using the kernel

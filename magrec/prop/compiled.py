@@ -74,6 +74,53 @@ def get_b_njit(current_pts, pts, current):
             B[:, i, :] += np.outer(unit_B, current[j])
     return B  # units of (uT * m / A) * [current] / [distance]
 
+
+@njit(parallel=True, fastmath=True)
+def get_current_dipole_b_njit(r_source, r_sensor, J, mu0_over_4pi=1e-1):
+    """Compute B from current dipoles with an iterative kernel.
+
+    Args:
+        r_source: (n_source, 3) source locations.
+        r_sensor: (n_sensor, 3) sensor locations.
+        J: (n_source, 3) current dipole vectors.
+        mu0_over_4pi: scalar prefactor in units matching coordinate/current convention.
+
+    Returns:
+        B: (n_sensor, 3) magnetic field.
+    """
+    n_sensor = r_sensor.shape[0]
+    n_source = r_source.shape[0]
+    B = np.zeros((n_sensor, 3), dtype=np.float32)
+
+    for i in prange(n_sensor):
+        sx = r_sensor[i, 0]
+        sy = r_sensor[i, 1]
+        sz = r_sensor[i, 2]
+        bx = 0.0
+        by = 0.0
+        bz = 0.0
+        for j in range(n_source):
+            tx = sx - r_source[j, 0]
+            ty = sy - r_source[j, 1]
+            tz = sz - r_source[j, 2]
+            r2 = tx * tx + ty * ty + tz * tz
+            if r2 == 0.0:
+                continue
+            inv_r3 = 1.0 / (r2 * np.sqrt(r2))
+            jx = J[j, 0]
+            jy = J[j, 1]
+            jz = J[j, 2]
+
+            # B contribution proportional to J x tau, tau = r_sensor - r_source
+            bx += (jy * tz - jz * ty) * inv_r3
+            by += (jz * tx - jx * tz) * inv_r3
+            bz += (jx * ty - jy * tx) * inv_r3
+
+        B[i, 0] = mu0_over_4pi * bx
+        B[i, 1] = mu0_over_4pi * by
+        B[i, 2] = mu0_over_4pi * bz
+    return B
+
 @njit(parallel=True, fastmath=True)
 def get_odmr_shifts(B_fields, nv_axes, gamma):
     """Calculate ODMR frequency shifts for B-field vectors and NV orientations.
