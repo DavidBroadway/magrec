@@ -1,7 +1,17 @@
 from magrec.nn.modules import DivergenceFreeTransform2d
-import deepxde as dde
+
+try:
+    import deepxde as dde
+    has_deepxde = True
+except ImportError:
+    has_deepxde = False
+    
 import torch
 
+import pytest
+
+# Checks if deepxde is installed in order to run the test.
+@pytest.mark.skipif(not has_deepxde, reason="deepxde is not installed")
 def test_div_zero_shape():
     # Instantiate the DivZeroTransform module
     div_zero_transform = DivergenceFreeTransform2d()

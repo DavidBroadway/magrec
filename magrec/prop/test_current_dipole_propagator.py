@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import time
 
 from magrec.prop.Propagator import CurrentDipolePropagator
 
@@ -105,3 +106,136 @@ def test_current_dipole_memory_guard():
             raise AssertionError("Expected RuntimeError for too-large matrix")
     finally:
         CurrentDipolePropagator.MAX_FFM_SIZE_IN_MB = old_limit
+
+
+def test_current_dipole_flat_current_surface_matrix():
+    """Test the current dipole propagator with a flat current surface. For a flat current surface, 
+    the magnetic field depends only on the surface current density. 
+
+    B = mu0 / 2 * kappa
+    where kappa is the surface current density.
+    
+    We create:
+    - source slab centered at z=0 with size 1 cm x 1 cm and thickness 0.1 mm
+    - uniform volume current density j along +x
+    - one sensor at slab center, 2 mm above the slab
+
+    For volume current density j = 1 mA/mm^2 in x direction, the surface current density is
+    
+    kappa = j * thickness * dy
+    
+    for thickness = 0.1 mm, the target for the value is:
+    
+    B = mu0 / 2 * 0.1 mA/mm^2 * 0.1 mm = 6.2831853071795862e-6 mT
+    
+    with B directed along -y for +x current and +z observation side.
+    """
+    # Geometry in magrec default length units (mm).
+    a = 10.0          # 1 cm
+    thickness = 0.1   # 0.1 mm
+    nx, ny = 100, 100
+    sensor_z = 2.0    # 2 mm above slab center
+
+    # Uniform volume current density in A/mm^2: 1 mA/mm^2.
+    j = 1.0e-3
+
+    x = torch.linspace(-0.5 * a, 0.5 * a, nx, dtype=torch.float64)
+    y = torch.linspace(-0.5 * a, 0.5 * a, ny, dtype=torch.float64)
+    xx, yy = torch.meshgrid(x, y, indexing="ij")
+    zz = torch.zeros_like(xx)
+    r_source = torch.stack([xx.reshape(-1), yy.reshape(-1), zz.reshape(-1)], dim=1)
+
+    # Each discrete source carries current dipole moment j * dV along +x.
+    dx = float(a / (nx - 1))
+    dy = float(a / (ny - 1))
+    dV = dx * dy * thickness
+    J = torch.zeros((r_source.shape[0], 3), dtype=torch.float64)
+    J[:, 0] = j * dV
+
+    r_sensor = torch.tensor([[0.0, 0.0, sensor_z]], dtype=torch.float64)
+
+    prop = CurrentDipolePropagator(r_source, r_sensor, method="matrix", dtype=torch.float64)
+    B = prop(J)[0]
+
+    # Direction checks from J x tau symmetry.
+    assert B[1] < 0.0
+    assert abs(float(B[0])) < 1e-12
+    assert abs(float(B[2])) < 1e-12
+
+    # Magnitude check versus infinite-sheet approximation in mT.
+    mu0 = 1.25663706212  # [mT * mm / A]
+    kappa = j * thickness
+    expected = mu0 * kappa / 2.0
+    measured = abs(float(B[1]))
+
+    # Finite-size slab should stay in the same order and close at center.
+    np.testing.assert_allclose(measured, expected, rtol=0.40, atol=0.0)
+    
+
+def test_current_dipole_flat_current_surface_iterative():
+    """Test the current dipole propagator with a flat current surface via 'iterative' method. 
+    May take long time to run! Outputs the time taken to run the computation.
+    
+    For a flat current surface, the magnetic field depends only on the surface current density. 
+
+    B = mu0 / 2 * kappa
+    where kappa is the surface current density.
+    
+    We create:
+    - source slab centered at z=0 with size 1 cm x 1 cm and thickness 0.1 mm
+    - uniform volume current density j along +x
+    - one sensor at slab center, 2 mm above the slab
+
+    For volume current density j = 1 mA/mm^2 in x direction, the surface current density is
+    
+    kappa = j * thickness * dy
+    
+    for thickness = 0.1 mm, the target for the value is:
+    
+    B = mu0 / 2 * 0.1 mA/mm^2 * 0.1 mm = 6.2831853071795862e-6 mT
+    
+    with B directed along -y for +x current and +z observation side.
+    """
+    # Geometry in magrec default length units (mm).
+    a = 10.0          # 1 cm
+    thickness = 0.1   # 0.1 mm
+    nx, ny = 100, 100
+    sensor_z = 2.0    # 2 mm above slab center
+
+    # Uniform volume current density in A/mm^2: 1 mA/mm^2.
+    j = 1.0e-3
+
+    x = torch.linspace(-0.5 * a, 0.5 * a, nx, dtype=torch.float64)
+    y = torch.linspace(-0.5 * a, 0.5 * a, ny, dtype=torch.float64)
+    xx, yy = torch.meshgrid(x, y, indexing="ij")
+    zz = torch.zeros_like(xx)
+    r_source = torch.stack([xx.reshape(-1), yy.reshape(-1), zz.reshape(-1)], dim=1)
+
+    # Each discrete source carries current dipole moment j * dV along +x.
+    dx = float(a / (nx - 1))
+    dy = float(a / (ny - 1))
+    dV = dx * dy * thickness
+    J = torch.zeros((r_source.shape[0], 3), dtype=torch.float64)
+    J[:, 0] = j * dV
+
+    r_sensor = torch.tensor([[0.0, 0.0, sensor_z]], dtype=torch.float64)
+
+    prop = CurrentDipolePropagator(r_source, r_sensor, method="iterative", dtype=torch.float64)
+    t0 = time.perf_counter()
+    B = prop(J)[0]
+    dt = time.perf_counter() - t0
+    print(f"[timing] iterative forward: {dt:.6f} s (n_source={r_source.shape[0]}, n_sensor={r_sensor.shape[0]})")
+
+    # Direction checks from J x tau symmetry.
+    assert B[1] < 0.0
+    assert abs(float(B[0])) < 1e-12
+    assert abs(float(B[2])) < 1e-12
+
+    # Magnitude check versus infinite-sheet approximation in mT.
+    mu0 = 1.25663706212  # [mT * mm / A]
+    kappa = j * thickness
+    expected = mu0 * kappa / 2.0
+    measured = abs(float(B[1]))
+
+    # Finite-size slab should stay in the same order and close at center.
+    np.testing.assert_allclose(measured, expected, rtol=0.40, atol=0.0)

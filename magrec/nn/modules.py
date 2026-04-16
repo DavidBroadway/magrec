@@ -3,7 +3,11 @@ import numpy as np
 from magrec.prop.constants import twopi
 import pyvista as pv
 
-# import deepxde as dde
+try:
+    import deepxde as dde
+    has_deepxde = True
+except ImportError:
+    has_deepxde = False
 
 class FourierFeaturesTransform(torch.nn.Module):
     """
@@ -111,24 +115,25 @@ class LogarithmicFourierFeaturesTransform(torch.nn.Module):
         x = torch.einsum("...c,cj->...j", x, self.B.to(x.device))
         return torch.cat([torch.cos(x), torch.sin(x)], dim=-1) / torch.sqrt(self.m)
     
-    
-# class DivergenceFreeTransform2d(torch.nn.Module):
-#     """
-#     Obtains a 2d divergence-free vector field y(x) from a scalar function f(x):
 
-#     y(x) = (∂f/∂y, -∂f/∂x)
+# Disabled since deepxde is not used anymore! Don't use it.
+class DivergenceFreeTransform2d(torch.nn.Module):
+    """
+    Obtains a 2d divergence-free vector field y(x) from a scalar function f(x):
 
-#     The result is a vector field that is divergence-free by construction.
-#     """
+    y(x) = (∂f/∂y, -∂f/∂x)
 
-#     def __init__(self):
-#         super().__init__()
+    The result is a vector field that is divergence-free by construction.
+    """
 
-#     def forward(self, f, x):
-#         # Calculate the curl of the field (f, 0):
-#         df_dx = dde.grad.jacobian(f, x, i=0, j=0)
-#         df_dy = dde.grad.jacobian(f, x, i=0, j=1)
-#         return torch.cat([df_dy, -df_dx], dim=1)
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, f, x):
+        # Calculate the curl of the field (f, 0):
+        df_dx = dde.grad.jacobian(f, x, i=0, j=0)
+        df_dy = dde.grad.jacobian(f, x, i=0, j=1)
+        return torch.cat([df_dy, -df_dx], dim=1)
     
 
 def uniform_sample_ball_nd(n_samples, n_dim, K, device='cpu'):

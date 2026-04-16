@@ -95,22 +95,24 @@ class FourierTransform2d(object):
         that is does the transformation (…, x, y, z) → (…, k_x, k_y, z).
 
         Args:
-            grid_shape (tuple):      shape of the sampling grid in the physical domain
-            dx (float):              grid spacing in units of length in x-direction
-            dy (float):              grid spacing in units of length in y-direction
-            real_signal (bool):      whether the signal is real-valued (default True)
-                                     if True, Fourier transform is computed only on positive k_y, since
-                                     for real signals, FFT[f](k) is the conjugate of FFT[f](-k)
-            type (str):              type of the Fourier transform, either `cyclic` or `linear`. DFT is
-                                     inherently cyclic, meaning that the signal is considered to be periodic
-                                     with the period equal to the grid size. See Yazhdanian et al (2020), p. 3
-                                     for the discussion. If the transform is `linear`, the grid is doubled in size
-                                     before computing the DFT by padding with zeros. 
-                                     
-                                     `cyclic` is good for periodic current features and when in principle the 
-                                     given current distribution extends indefinitely.
-                                     `linear` should be used when the entire current source is contained within
-                                     the grid, so that the boundary periodicity artifcats are avoided.
+            grid_shape (tuple):  shape of the sampling grid in the physical domain
+            dx (float):            grid spacing in units of length in x-direction
+            dy (float):            grid spacing in units of length in y-direction
+            real_signal (bool):  whether the signal is real-valued (default True)
+                                    if True, Fourier transform is computed only on positive k_y, since
+                                    for real signals, FFT[f](k) is the conjugate of FFT[f](-k)
+            type (str):            type of the Fourier transform, either `cyclic` or `linear`, default is `cyclic`.
+            
+                                    DFT is inherently cyclic, meaning that the signal is considered to be periodic
+                                    with the period equal to the grid size. See Yazhdanian et al (2020), p. 3
+                                    for the discussion. If the transform is `linear`, the grid is doubled in size
+                                    before computing the DFT by padding with zeros. 
+                                    
+                                    - `cyclic` is good for periodic current features and when in principle the 
+                                        given current distribution extends indefinitely.
+                                        
+                                    - `linear` should be used when the entire current source is contained within
+                                        the grid, so that the boundary periodicity artifcats are avoided.
 
         """
 

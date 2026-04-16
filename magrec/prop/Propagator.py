@@ -173,7 +173,7 @@ class CurrentFourierPropagator3d(Propagator):
         # .
         # .             } D
         # .
-        # --------> height
+        # --------> height (i.e. height of the source layer)
         # ||||||||||  
         # |material|-> dz 
         # ||||||||||
