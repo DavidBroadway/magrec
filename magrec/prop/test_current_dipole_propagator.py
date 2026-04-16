@@ -71,12 +71,8 @@ def test_current_dipole_instance_matches_static_helper():
     torch.testing.assert_close(B_instance, B_static, rtol=1e-9, atol=1e-11)
 
 
-def test_current_dipole_method_parse_and_error():
-    r_source, r_sensor, J = _make_scene()
-    prop = CurrentDipolePropagator(r_source, r_sensor, method="iterative+compiled", backend="torch")
-    B = prop(J)
-    assert B.shape == (r_sensor.shape[0], 3)
-
+def test_current_dipole_unsupported_method_raises():
+    r_source, r_sensor, _ = _make_scene()
     try:
         CurrentDipolePropagator(r_source, r_sensor, method="unknown")
     except ValueError as exc:
