@@ -2719,31 +2719,32 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
                                          method=method, **kwargs)
         
         # Check if block_name is a step (e.g., 'fit.loss')
-        if block_name in self._steps:
-            step = self._steps[block_name]
-            if scalar_name == 'loss' and 'loss' in step:
-                if ax is None:
-                    fig, ax = plt.subplots()
-                losses = step['loss']
-                ax.semilogy(losses)
-                ax.set_xlabel('iteration')
-                ax.set_ylabel('loss')
-                ax.set_title(f'{block_name} loss')
-                ax.grid(True, alpha=0.3)
-                if name:
-                    self._plots[name] = {'sc': None, 'ax': ax, 'clim': None, 'scalar': scalar, 'cbar': None}
-                return ax
-            elif scalar_name == 'm' and 'm' in step:
-                # Plot trainable parameters as spatial data on source block
-                source_name = step['source']
-                m = step['m'].detach().cpu().numpy()
-                self[f'{source_name}._plot_m'] = m
-                result = self.plot(f'{source_name}._plot_m', ax=ax, name=name, clim=clim,
-                                   sync=sync, colorbar=colorbar, method=method, labels=labels, **kwargs)
-                del self[source_name].point_data['_plot_m']
-                return result
-            else:
-                raise KeyError(f"Step '{block_name}' has no plottable attribute '{scalar_name}'")
+        if hasattr(self, '_steps'):
+            if block_name in self._steps:
+                step = self._steps[block_name]
+                if scalar_name == 'loss' and 'loss' in step:
+                    if ax is None:
+                        fig, ax = plt.subplots()
+                    losses = step['loss']
+                    ax.semilogy(losses)
+                    ax.set_xlabel('iteration')
+                    ax.set_ylabel('loss')
+                    ax.set_title(f'{block_name} loss')
+                    ax.grid(True, alpha=0.3)
+                    if name:
+                        self._plots[name] = {'sc': None, 'ax': ax, 'clim': None, 'scalar': scalar, 'cbar': None}
+                    return ax
+                elif scalar_name == 'm' and 'm' in step:
+                    # Plot trainable parameters as spatial data on source block
+                    source_name = step['source']
+                    m = step['m'].detach().cpu().numpy()
+                    self[f'{source_name}._plot_m'] = m
+                    result = self.plot(f'{source_name}._plot_m', ax=ax, name=name, clim=clim,
+                                    sync=sync, colorbar=colorbar, method=method, labels=labels, **kwargs)
+                    del self[source_name].point_data['_plot_m']
+                    return result
+                else:
+                    raise KeyError(f"Step '{block_name}' has no plottable attribute '{scalar_name}'")
         
         block = self[block_name]
         pts = np.asarray(block.points)
@@ -2804,13 +2805,16 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         if ax is None:
             fig, ax = plt.subplots()
         
-        # Handle color limits
-        if sync and sync in self._plots:
-            clim = self._plots[sync]['clim']
-        if clim is None:
-            vmin, vmax = float(values.min()), float(values.max())
+        if hasattr(self, '_plots'):
+            # Handle color limits
+            if sync and sync in self._plots:
+                clim = self._plots[sync]['clim']
+            if clim is None:
+                vmin, vmax = float(values.min()), float(values.max())
+            else:
+                vmin, vmax = clim
         else:
-            vmin, vmax = clim
+            vmin, vmax = float(values.min()), float(values.max())
         
         if symmetric:
             bound = max(abs(vmin), abs(vmax))
@@ -2866,8 +2870,13 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             cbar = ax.figure.colorbar(mappable, cax=cax)
         
         # Store plot if named
-        if name:
-            self._plots[name] = {'sc': mappable, 'ax': ax, 'clim': (vmin, vmax), 'scalar': scalar, 'cbar': cbar}
+        if hasattr(self, '_plots'):
+            if name:
+                self._plots[name] = {'sc': mappable, 'ax': ax, 'clim': (vmin, vmax), 'scalar': scalar, 'cbar': cbar}
+        else:
+            if not name:
+                name = scalar
+            self._plots = {name: {'sc': mappable, 'ax': ax, 'clim': (vmin, vmax), 'scalar': scalar, 'cbar': cbar}}
         
         return mappable
     
