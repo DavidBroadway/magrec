@@ -1,5 +1,6 @@
 # Classes and functions for handling spatial magnetic field data.
 
+import fnmatch
 import functools
 import html
 import re
@@ -260,7 +261,6 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
     Methods for any data:
     - from_dict(), from_unstructured()
     - pts_as_list()
-    - add_dipole_locations()
     
     Examples
     --------
@@ -301,97 +301,60 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
     
     def __init__(self, *args, **kwargs):
         pv.MultiBlock.__init__(self)
+        
+        self._plots = {}
+        self._steps = {}
+        self._assigned = set()
+        
         if len(args) == 1 and isinstance(args[0], list):
             for name, block in args[0]:
                 self.add(name=name, dataset=block)
             return
-            
-        self._plots = {}
-        self._steps = {}
-        self._assigned = set()
+        elif len(args) == 1 and isinstance(args[0], pv.MultiBlock):
+            for block_name in args[0].keys():
+                block = args[0][block_name]
+                self.add(name=block_name, dataset=block)
+            return
+        elif len(args) == 1 and isinstance(args[0], dict):
+            for name, block in args[0].items():
+                self.add(name=name, dataset=block)
+            return
+        elif len(args) == 1 and isinstance(args[0], (pv.PolyData, pv.ImageData, pv.UnstructuredGrid, pv.StructuredGrid)):
+            # Handle single PolyData object
+            self.add(name='Block-00', dataset=args[0])
+            return
+        elif len(args) // 2 == 0 and all(isinstance(arg, (pv.PolyData, pv.UnstructuredGrid, pv.ImageData)) for arg in args[::2]):
+            # Allow parsing (name1, block1, name2, block2, ...) definitions
+            for name, block in zip(args[::2], args[1::2]):
+                self.add(name=name, dataset=block)
+            return
+        else:
+            raise ValueError(f"Unsupported arguments: {args}")
+        
+    def add(self, name, dataset):
+        """Add another block (pipe or pyvista block) to the Pipeset under the given name."""
+        # Use the built-in MultiBlock.append() method
+        if isinstance(dataset, pv.MultiBlock):
+            if len(dataset) == 1:
+                self.append(dataset=dataset[0], name=name)
+                return self
+            else:
+                pipe = Pipeset()  # prepare a Pipeset to replace the MultiBlock with it
+                for block_name in dataset.keys():
+                    pipe.add(name=block_name, dataset=dataset[block_name])
+                
+                self.append(dataset=pipe, name=name)
+                return self
+        
+        self.append(dataset=dataset, name=name)
+        return self
     
-    def __repr__(self):
-        if len(self) == 0:
-            return "Pipeset (empty)"
-        if len(self) == 1:
-            return self[0].__repr__()
-        lines = [f"Pipeset ({len(self)} blocks):"]
-        for name in self.keys():
-            blk = super().__getitem__(name)
-            npts = getattr(blk, "n_points", "?")
-            btype = type(blk).__name__
-            scalars = list(blk.point_data.keys()) if hasattr(blk, "point_data") else []
-            lines.append(f"  '{name}': {btype}, {npts} pts, scalars={scalars}")
-        return "\n".join(lines)
-
-    def _repr_html_(self):
-        """Rich HTML representation for Jupyter notebooks.
-        
-        Single-block: custom table with header + data arrays where field string
-        values (e.g. *_units) are shown directly in the arrays section.
-        Multi-block: enhanced block table showing
-        each block's type, point count, arrays, and units at a glance.
-        """
-        units = self.units
-
-        if len(self) == 1:
-            blk = super().__getitem__(0)
-            return self._dataset_repr_with_field_values(blk)
-
-        # Multi-block: two-column layout (info | blocks with details)
-        fmt = "<table style='width: 100%;'>"
-        fmt += '<tr><th>Pipeset</th><th>Blocks</th></tr>'
-
-        # Left column: summary attributes
-        fmt += '<tr><td><table>\n'
-        fmt += f'<tr><td>N Blocks</td><td>{len(self)}</td></tr>\n'
-        bds = self.get_bounds()
-        ff = '{:.3e}'
-        fmt += f'<tr><td>X Bounds</td><td>{ff.format(bds[0])}, {ff.format(bds[1])}</td></tr>\n'
-        fmt += f'<tr><td>Y Bounds</td><td>{ff.format(bds[2])}, {ff.format(bds[3])}</td></tr>\n'
-        fmt += f'<tr><td>Z Bounds</td><td>{ff.format(bds[4])}, {ff.format(bds[5])}</td></tr>\n'
-        if units:
-            fmt += '<tr><td colspan="2"><b>Units</b></td></tr>\n'
-            for name, unit in units.items():
-                fmt += f'<tr><td style="padding-left:10px">{name}</td><td>{unit}</td></tr>\n'
-        fmt += '</table></td>\n'
-
-        # Right column: block details
-        fmt += '<td><table>\n'
-        fmt += '<tr><th>#</th><th>Name</th><th>Type</th><th>N Points</th><th>Arrays</th></tr>\n'
-        for i in range(len(self)):
-            blk = super().__getitem__(i)
-            bname = self.get_block_name(i) or ''
-            btype = type(blk).__name__
-            npts = blk.n_points if hasattr(blk, 'n_points') else '—'
-
-            # Collect array names with units annotation
-            arr_parts = []
-            if hasattr(blk, 'point_data'):
-                for aname in blk.point_data.keys():
-                    u_key = f'{aname}_units'
-                    if hasattr(blk, 'field_data') and u_key in blk.field_data:
-                        u = str(blk.field_data[u_key][0])
-                        arr_parts.append(f'{aname} <i>[{u}]</i>')
-                    else:
-                        arr_parts.append(aname)
-            arrays_str = ', '.join(arr_parts) if arr_parts else '—'
-            fmt += f'<tr><td>{i}</td><td>{bname}</td><td>{btype}</td><td>{npts}</td><td>{arrays_str}</td></tr>\n'
-        fmt += '</table></td></tr></table>'
-        return fmt
-
-    def get_bounds(self):
-        """Get the union of each block's bounds; nested elemetns recurse via .bounds."""
-        xs, ys, zs = [], [], []
-        
-        for block in self:
-            b = block.bounds
-            xs.extend((b[0], b[1]))
-            ys.extend((b[2], b[3]))
-            zs.extend((b[4], b[5]))
-        
-        return (min(xs), max(xs), min(ys), max(ys), min(zs), max(zs))
-
+    @classmethod
+    def load(cls, filename):
+        """Load a Pipeset from a file."""
+        pipe = pv.read(filename)
+        return cls(pipe)
+    
     @staticmethod
     def _field_value_to_string(value):
         """Convert a field_data value to a readable string."""
@@ -499,6 +462,109 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         return blk
     
     @property
+    def all_data(self):
+        """Get the available data from `.point_data`, `.cell_data`, `.field_data`, and 
+        names of children block, if any, as a dictionary of merged keys."""
+        d = {}
+        if len(self) == 1:
+            if hasattr(self[0], 'point_data'):
+                d.update(self[0].point_data)
+            if hasattr(self[0], 'cell_data'):
+                d.update(self[0].cell_data)
+            if hasattr(self[0], 'field_data'):
+                d.extend([k for k in self[0].field_data.keys() if not k.endswith('_units')])
+            # Can be also a single named multiblock inside, so return its name if it has one
+            if hasattr(self, 'keys') and len(self.keys()) > 0 and len(d.keys()) == 0:
+                d.extend(self.keys())
+            return d
+        else:
+            # Else it is a multi-block, so return selt (a dictionary with names as keys and blocks as values)
+            return self
+    
+    def get_names(self, pattern: str | None = None) -> list[str]:
+        """Get available data names on this object: either block names or array/field keys.
+
+        If this Pipeset has more than one top-level block, names are those block keys. 
+        Otherwise, names come from ``point_data``, ``cell_data``, and ``field_data`` 
+        (excluding keys ending in ``_units``) of a first block with data. 
+
+        Args:
+            pattern (str, optional): Glob pattern (fnmatch). 
+                Default ``None`` matches all names (same as ``'*'``).
+        """
+        if pattern is None:
+            pattern = "*"
+        elif not isinstance(pattern, str):
+            raise TypeError(f"pattern must be str or None, got {type(pattern).__name__}")
+        
+        if len(self) == 1:
+            names = []
+            if hasattr(self[0], 'point_data'):
+                names.extend(self[0].point_data.keys())
+            if hasattr(self[0], 'cell_data'):
+                names.extend(self[0].cell_data.keys())
+            if hasattr(self[0], 'field_data'):
+                names.extend([k for k in self[0].field_data.keys() if not k.endswith('_units')])
+            # Can be also a single named multiblock inside, so return its name if it has one
+            if hasattr(self, 'keys') and len(self.keys()) > 0 and len(names) == 0:
+                names.extend(self.keys())
+                
+            uniq = sorted(set(names))
+            return uniq if pattern == "*" else [n for n in uniq if fnmatch.fnmatch(n, pattern)]
+        else:
+            # Else it is a multi-block, so return the block names
+            keys = sorted(self.keys())
+            return keys if pattern == "*" else [n for n in keys if fnmatch.fnmatch(n, pattern)]
+        
+    def __getitem__(self, key):
+        """Allows indexing into the Pipeset by name, glob, or index.
+        
+        Examples:
+            pipe['sensor.B_NV']
+            pipe['sensor.*']
+            pipe[0]
+            pipe['*']
+        
+        Returns:
+            The block or array/field data. Raises a KeyError if nothing found to return.
+        """
+        # Keep PyVista native indexing behavior for integer positional 
+        # or exotic (not integer or string) access.
+        if isinstance(key, int):
+            return super().__getitem__(key)
+        elif not isinstance(key, str):
+            return super().__getitem__(key)
+
+        if "." not in key:
+            # Then the requested key is either a block name or a data name
+            matches = self.get_names(key)  # returns a list of names at the shallow level that match the key
+            if not matches:
+                raise KeyError(f"Name '{key}' not found. Available names: {self.get_names()}")
+
+            values = []
+            for name in matches:
+                # That's certain that name will be either: point_data, cell_data, field_data, or a block name
+                if hasattr(self[name], "point_data") and name in self.point_data.keys():
+                    values.append(torch.as_tensor(self[name].point_data[name]))
+                elif hasattr(self[name], "cell_data") and name in self.cell_data.keys():
+                    values.append(torch.as_tensor(self[name].cell_data[name]))
+                elif hasattr(self[name], "field_data") and name in self.field_data.keys():
+                    values.append(torch.as_tensor(self[name].field_data[name]))
+            if not values:
+                raise KeyError(f"Name '{key}' resolved, but no data array found.")
+            
+            return values[0] if len(values) == 1 else values
+        
+        *parts, name = key.split(".", 1)
+        while len(parts) > 1:
+            block = self[parts[0]]
+            if not isinstance(block, pv.MultiBlock):
+                raise KeyError(f"Block '{parts[0]}' is not a MultiBlock.")
+            parts, name = parts[1:], name
+        
+        return values[0] if len(values) == 1 else values
+    
+    @property
     def points(self):
         """Return the points as a tensor."""
         if len(self) == 0:
@@ -534,6 +600,27 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         if as_array:
             return np.array(points)
         return as_type(points)
+
+    @property
+    def n_points(self):
+        """Number of points for single-block pipes.
+
+        For multi-block pipes this is ambiguous, so an explicit error is raised
+        with the available block names.
+        """
+        if len(self) == 1:
+            block = super().__getitem__(0)
+            return int(getattr(block, "n_points", 0))
+        
+        block_names = []
+        for i in range(len(self)):
+            name = self.get_block_name(i)
+            block_names.append(name if name else str(i))
+        
+        raise AttributeError(
+            "n_points is ambiguous for Pipeset with multiple blocks; "
+            f"it has multiple sets of points in blocks: {block_names}"
+        )
 
     @property
     def dimensions(self):
@@ -587,6 +674,18 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
     @property
     def bounds(self):
         return self.__getattr__("bounds")
+        
+    def get_bounds(self):
+        """Get the union of each block's bounds; nested elemetns recurse via .bounds."""
+        xs, ys, zs = [], [], []
+        
+        for block in self:
+            b = block.bounds
+            xs.extend((b[0], b[1]))
+            ys.extend((b[2], b[3]))
+            zs.extend((b[4], b[5]))
+        
+        return (min(xs), max(xs), min(ys), max(ys), min(zs), max(zs))
 
     @bounds.setter
     def bounds(self, value):
@@ -626,25 +725,6 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             blk.spacing = (sx, sy, sz)
         self._assigned.add("bounds")
 
-    @property
-    def n_points(self):
-        """Number of points for single-block pipes.
-
-        For multi-block pipes this is ambiguous, so an explicit error is raised
-        with the available block names.
-        """
-        if len(self) == 1:
-            blk = super().__getitem__(0)
-            return int(getattr(blk, "n_points", 0))
-        block_names = []
-        for i in range(len(self)):
-            name = self.get_block_name(i)
-            block_names.append(name if name else str(i))
-        raise AttributeError(
-            "n_points is ambiguous for Pipeset with multiple blocks; "
-            f"it has multiple sets of points in blocks: {block_names}"
-        )
-    
     # ── Units & Scaling ─────────────────────────────────────────────────
     #
     # Units are stored as field_data on each block following the convention:
@@ -657,31 +737,98 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
     # pipe.scale('B_NV', to_units='uT')            → auto-compute factor from current units
     # pipe.scale(coordinates=True, to_units='um')   → rescale geometry + spacing/origin
 
-    def set_units(self, block=None, **units):
-        """Store unit strings as field_data['<name>_units'] on a block.
+    def set_units(self, block=None, **units_spec):
+        """Set units for data or coordinates as field_data['<name>_units'] on a block.
         
-        For single-block Pipesets, block can be omitted. For multi-block, pass the
-        block name or index. The special key 'coordinates' sets geometry units.
-        Only accepts names that correspond to existing point_data arrays or
-        the reserved key 'coordinates'.
-        
-            pipe.set_units(B_NV='T', coordinates='m')
-            pipe.set_units(block='sensor', B_NV='T')
+        Args:
+            block (str, optional): Specifies the name of the block on which to define units. The same
+                specification can be achieved with `units_spec` by passing either a glob or a block name
+                as <block_name>.<array-name>, see `units_spec`. 
+            units_spec (dict): Specification of what to set the units for. Should be either a full address
+                of the array, e.g. <block-name>.<array-name> present on that block, or a glob
+                to specify multiple such arrays, e.g. <block-name>.J* to set units for all arrays
+                that start with J on <block-name>.  
+                
+                Must be a dictionary key-value pair that defines units as strings or pint units.
+                The special key 'coordinates' sets geometry units.
+                
+            pipe.set_units(B_NV='T', coordinates='m')  # matches all B_NV arrays in the pipe
+            pipe.set_units(block='sensor', B_NV='T')    # matches B_NV array on block `sensor`
         """
-        target = self.resolve_name(block)
-        if not hasattr(target, "point_data"):
-            raise TypeError(f"set_units() expected a leaf block; got {type(target).__name__}")
-        valid_names = set(target.point_data.keys()) if hasattr(target, 'point_data') else set()
-        valid_names.add('coordinates')
-        for name in units:
-            if name not in valid_names:
-                raise KeyError(
-                    f"'{name}' is not a point_data array on this block. "
-                    f"Available: {sorted(valid_names)}")
-        for name, unit in units.items():
-            target.field_data[f'{name}_units'] = [str(unit)]
-        return self
+        # Cases to parse:
+        #  a) block is not None, either a name or a glob (can return multiple blocks)
+        #  b) block is None, and units_spec is (a) key-value pair(s) that specifies units, including
+        #     on multiple blocks.
+        
+        if not units_spec:
+            raise ValueError("set_units() requires at least one unit specification.")
 
+        leaf_blocks = []
+        stack = [(self, "")]
+        while stack:
+            container, parent_path = stack.pop()
+            if not isinstance(container, pv.MultiBlock):
+                continue
+            for idx in range(len(container)):
+                child = container[idx]
+                local_name = container.get_block_name(idx) or str(idx)
+                path = f"{parent_path}.{local_name}" if parent_path else local_name
+                if isinstance(child, pv.MultiBlock):
+                    stack.append((child, path))
+                else:
+                    leaf_blocks.append((path, child))
+
+        if block is not None:
+            selected = [(path, blk) for path, blk in leaf_blocks if fnmatch.fnmatch(path, block)]
+            if len(selected) == 0:
+                raise ValueError(
+                    f"Block selector '{block}' did not match any block paths. "
+                    f"Available: {[p for p, _ in leaf_blocks]}"
+                )
+
+            for _, blk in selected:
+                wrapped = Pipeset()
+                wrapped.append(blk)
+                wrapped.set_units(**units_spec)
+            return self
+        
+        # Block is None, so units_spec is a key-value pair(s) that specifies units, including
+        # on multiple blocks. Even though nasty, it can be that unit_spec still specifies a glob,
+        # and a unit_spec on multiple block to iterate through
+        for name, unit in units_spec.items():
+            if '.' in name:
+                block_pattern, array_pattern = name.rsplit('.', 1)
+                selected = [(path, blk) for path, blk in leaf_blocks if fnmatch.fnmatch(path, block_pattern)]
+                if len(selected) == 0:
+                    raise ValueError(
+                        f"Block selector '{block_pattern}' did not match any block paths. "
+                        f"Available: {[p for p, _ in leaf_blocks]}"
+                    )
+                for _, blk in selected:
+                    wrapped = Pipeset()
+                    wrapped.append(blk)
+                    names = wrapped.get_names(array_pattern)
+                    if len(names) == 0:
+                        raise ValueError(
+                            f"No arrays matched '{array_pattern}' on block selector '{block_pattern}'."
+                        )
+                    for n in names:
+                        wrapped.set_units(**{n: unit})
+            else:
+                target = self.resolve_name(None) if len(self) == 1 else self
+                if name == "coordinates":
+                    if not hasattr(target, "field_data"):
+                        raise ValueError("coordinates units require a dataset block with field_data.")
+                    target.field_data["coordinates_units"] = [str(unit)]
+                    continue
+                if not name in self.get_names():
+                    raise ValueError(f"Name {name} is not valid for setting units. Available names: {self.get_names()}")
+                if not hasattr(target, "field_data"):
+                    raise ValueError(f"Cannot set units for '{name}' on target of type {type(target).__name__}")
+                target.field_data[f'{name}_units'] = [str(unit)]
+        
+        return self
+    
     @property
     def units(self):
         """Collect all '<name>_units' field_data across blocks into a dict.
@@ -2078,11 +2225,6 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             return torch.as_tensor(data.reshape(*shape)).permute(1, 0, 2)
         else:
             raise ValueError("Invalid dimensions for the grid.")
-        
-    def add(self, name, dataset):
-        """Add another block (pipe or pyvista block) to the Pipeset under the given name."""
-        self.append(dataset=dataset, name=name)
-        return self
     
     def clone(self):
         """Clone the Pipeset."""
@@ -2404,91 +2546,6 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
             block.point_data[attr_name] = flat
         else:
             raise ValueError(f"Unsupported ndim={value.ndim}, expected 1, 2, or 3")
-           
-    def __getitem__(self, key):
-        # PyVista uses integer indices internally
-        if isinstance(key, int):
-            return super().__getitem__(key)
-        
-        # Full key as literal block name (e.g., 'sensor.roi' is a block)
-        if key in self.keys():
-            blk = super().__getitem__(key)
-            # Expose leaf datasets through a one-block Pipeset wrapper so callers
-            # get dotted/scalar helpers and methods like .scale(), .get_as_grid().
-            if isinstance(blk, (pv.ImageData, pv.PolyData, pv.UnstructuredGrid, pv.StructuredGrid)):
-                wrapped = Pipeset()
-                wrapped.append(blk)
-                return wrapped
-            return blk
-        
-        if '.' not in key:
-            # Plain key fallback:
-            # 1) try direct block lookup first (PyVista behavior)
-            # 2) if not found, resolve as a unique leaf array name across nested blocks
-            try:
-                return super().__getitem__(key)
-            except KeyError:
-                pass
-
-            def iter_leaf_blocks(container, prefix=""):
-                """Yield (full_block_name, leaf_dataset) recursively."""
-                for child_name in container.keys():
-                    child = super(Pipeset, container).__getitem__(child_name)
-                    full_name = f"{prefix}.{child_name}" if prefix else child_name
-                    if isinstance(child, pv.MultiBlock):
-                        yield from iter_leaf_blocks(child, full_name)
-                    elif isinstance(child, (pv.ImageData, pv.PolyData, pv.UnstructuredGrid, pv.StructuredGrid)):
-                        yield full_name, child
-
-            matches = []
-            for block_name, block in iter_leaf_blocks(self):
-                if key in block.point_data:
-                    matches.append((block_name, block))
-
-            if len(matches) == 1:
-                _, block = matches[0]
-                return torch.as_tensor(block.point_data[key])
-            if len(matches) > 1:
-                match_blocks = ", ".join(name for name, _ in matches)
-                raise KeyError(
-                    f"Array name '{key}' is ambiguous. Found in blocks: {match_blocks}. "
-                    f"Use a full key like 'block.{key}'."
-                )
-            raise KeyError(f"Block name ({key}) not found, and no leaf array named '{key}' was found.")
-        
-        # For 'sensor.roi.B_NV': could be block='sensor.roi' with scalar='B_NV' (flat),
-        # or block='sensor' containing 'roi.B_NV' (nested). Prefer flat naming.
-        parts = key.split('.')
-        flat_block_name = '.'.join(parts[:-1])
-        scalar_name = parts[-1]
-        flat_exists = flat_block_name in self.keys()
-        
-        # Check nested: is parts[0] a MultiBlock?
-        nested_exists = False
-        if parts[0] in self.keys():
-            first_block = super().__getitem__(parts[0])
-            if isinstance(first_block, pv.MultiBlock):
-                nested_exists = True
-        
-        if flat_exists and nested_exists:
-            import warnings
-            warnings.warn(
-                f"Ambiguous key '{key}': '{flat_block_name}' exists as block and "
-                f"'{parts[0]}' is a MultiBlock. Using flat naming."
-            )
-        
-        if flat_exists:
-            block = self[flat_block_name]
-            if scalar_name in block.point_data:
-                return torch.as_tensor(block.point_data[scalar_name])
-            else:
-                raise KeyError(f"'{scalar_name}' not found in block '{flat_block_name}'")
-        elif nested_exists:
-            # Recurse into the MultiBlock
-            first_block = super().__getitem__(parts[0])
-            return first_block['.'.join(parts[1:])]
-        else:
-            raise KeyError(f"No block '{flat_block_name}' or MultiBlock '{parts[0]}' found for key '{key}'")
 
     def select(self, *, axis=None, value=None, tol=None, x=None, y=None, z=None):
         """
@@ -3083,6 +3140,94 @@ class Pipeset(pv.MultiBlock, MagneticFieldDataMixin):
         else:
             super().__setitem__(block_name, img)
         return self
+    
+    
+    def __repr__(self):
+        """Representation for print of the Pipeset. Includes the id of the objects 
+        and their names. Nested pipesets and objects are explicitly listed out 
+        with indentation."""
+        
+        cls_name = type(self).__name__
+        
+        if len(self) == 0:
+            return f"{cls_name} @ {hex(id(self))} (empty)"
+        
+        lines = [f"{cls_name} @ {hex(id(self))} ({len(self)} block(s)):"]
+        
+        pad = "\t"
+        # Iterate over nested blocks, if any
+        for i in range(len(self)):
+            block = super().__getitem__(i)
+            bname = self.get_block_name(i) or str(i)
+            body = repr(block)
+            if body == "":
+                lines.append(f"{pad}- [{bname!r}] ")
+                continue
+            first = True
+            for line in body.splitlines():
+                if first:
+                    lines.append(f"{pad}- [{bname!r}] {line}")
+                    first = False
+                else:
+                    lines.append(f"{pad}\t{line}")
+        return "\n".join(lines)
+
+    def _repr_html_(self):
+        """Rich HTML representation for Jupyter notebooks.
+        
+        Single-block: custom table with header + data arrays where field string
+        values (e.g. *_units) are shown directly in the arrays section.
+        Multi-block: enhanced block table showing
+        each block's type, point count, arrays, and units at a glance.
+        """
+        units = self.units
+
+        if len(self) == 1:
+            blk = super().__getitem__(0)
+            return self._dataset_repr_with_field_values(blk)
+
+        # Multi-block: two-column layout (info | blocks with details)
+        fmt = "<table style='width: 100%;'>"
+        fmt += '<tr><th>Pipeset</th><th>Blocks</th></tr>'
+
+        # Left column: summary attributes
+        fmt += '<tr><td><table>\n'
+        fmt += f'<tr><td>N Blocks</td><td>{len(self)}</td></tr>\n'
+        bds = self.get_bounds()
+        ff = '{:.3e}'
+        fmt += f'<tr><td>X Bounds</td><td>{ff.format(bds[0])}, {ff.format(bds[1])}</td></tr>\n'
+        fmt += f'<tr><td>Y Bounds</td><td>{ff.format(bds[2])}, {ff.format(bds[3])}</td></tr>\n'
+        fmt += f'<tr><td>Z Bounds</td><td>{ff.format(bds[4])}, {ff.format(bds[5])}</td></tr>\n'
+        if units:
+            fmt += '<tr><td colspan="2"><b>Units</b></td></tr>\n'
+            for name, unit in units.items():
+                fmt += f'<tr><td style="padding-left:10px">{name}</td><td>{unit}</td></tr>\n'
+        fmt += '</table></td>\n'
+
+        # Right column: block details
+        fmt += '<td><table>\n'
+        fmt += '<tr><th>#</th><th>Name</th><th>Type</th><th>N Points</th><th>Arrays</th></tr>\n'
+        for i in range(len(self)):
+            blk = super().__getitem__(i)
+            bname = self.get_block_name(i) or ''
+            btype = type(blk).__name__
+            npts = blk.n_points if hasattr(blk, 'n_points') else '—'
+
+            # Collect array names with units annotation
+            arr_parts = []
+            if hasattr(blk, 'point_data'):
+                for aname in blk.point_data.keys():
+                    u_key = f'{aname}_units'
+                    if hasattr(blk, 'field_data') and u_key in blk.field_data:
+                        u = str(blk.field_data[u_key][0])
+                        arr_parts.append(f'{aname} <i>[{u}]</i>')
+                    else:
+                        arr_parts.append(aname)
+            arrays_str = ', '.join(arr_parts) if arr_parts else '—'
+            fmt += f'<tr><td>{i}</td><td>{bname}</td><td>{btype}</td><td>{npts}</td><td>{arrays_str}</td></tr>\n'
+        fmt += '</table></td></tr></table>'
+        return fmt
+
 
 
 # Backwards compatibility aliases
