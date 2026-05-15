@@ -1,0 +1,39 @@
+magrec/misc/odmr.py
+  s_b290dfa519faea::t_14caa68e5679cf 138-148,327-330,350-421,923-1399,1422-1423,1433,1513-1522,1905,2453-2463,2483-2513,2552,2557-2558
+pyproject.toml
+  s_168af0157f0997::t_a1b8f99d450c70 1-4,8-10,12-34,37-39,41-43
+README.md
+  s_168af0157f0997::t_05712418a56a93 110,115-116
+  s_168af0157f0997::t_af07d1ef082112 3-10
+requirements.txt
+  s_168af0157f0997::t_bb78a8d9c9268e 1-2,5,7-8,10,12-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "a581a2b80ded477269503ed888b6b6c8d9300198",
+  "prompts": {},
+  "humans": {
+    "h_1911dffda4172c": {
+      "author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_168af0157f0997": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "60547ec1-1354-4251-9063-a07c3d6976df",
+        "model": "default"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    },
+    "s_b290dfa519faea": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "6e90bb21-b8d8-4363-8bf6-3c5396642f2d",
+        "model": "default"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  }
+}
