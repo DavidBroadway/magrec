@@ -1,0 +1,25 @@
+magrec/misc/odmr.py
+  s_168af0157f0997::t_20b13a9fe24f88 209,211-217
+  s_168af0157f0997::t_8edc30d364e125 249
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.9",
+  "base_commit_sha": "5129ac7eae38eb08d0885d6adb79dbe8b6678239",
+  "prompts": {},
+  "humans": {
+    "h_1911dffda4172c": {
+      "author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_168af0157f0997": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "60547ec1-1354-4251-9063-a07c3d6976df",
+        "model": "default"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  }
+}
