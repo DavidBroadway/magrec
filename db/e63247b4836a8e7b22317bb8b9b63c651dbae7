@@ -1,0 +1,63 @@
+magrec/misc/test_pipeset.py
+  h_1911dffda4172c 1-26
+magrec/misc/data.py
+  s_c6dddba0e466a5::t_c8af29161be912 805
+  s_f611cf8fc4216f::t_587d1efd9c956e 604
+  s_c6dddba0e466a5::t_bcd8e1159ccc71 292-294
+  s_c6dddba0e466a5::t_0dfebfcd8c4de9 357
+  s_c6dddba0e466a5::t_2d47df14641013 206-233
+  s_f611cf8fc4216f::t_f009b998ecfe3a 2313,2315
+  s_c6dddba0e466a5::t_cdf6029c8ee318 359-363
+  s_c6dddba0e466a5::t_3deaee8b38bf06 817,826,828
+  s_c6dddba0e466a5::t_e46ac34488e950 348-356,358,364-373
+  s_f611cf8fc4216f::t_b9dc5c96ba87ca 602-603,605-609,613
+  s_c6dddba0e466a5::t_ab33ae8588c263 3211,3213-3240,3242-3244
+  s_c6dddba0e466a5::t_bde30ef779140f 789
+  s_c6dddba0e466a5::t_06ad9b87791003 1000,1048,1060,1091,1102,1116,1991,2007,2015,2030,2073,2090,2182,2655
+  h_1911dffda4172c 15,342-347,516,548-551,639,689,740-749,793-795,799-800,803,807,818,824,2293,2297,2302-2306,2322
+  s_f611cf8fc4216f::t_7106f89b7771b0 2258,2266,2269-2290,2295-2296,2308-2311,2324-2325
+  s_f611cf8fc4216f::t_5193b6d9879b14 2257,2259-2262,2264-2265,2292,2294,2298-2301,2307,2312,2314,2316-2321
+  s_c6dddba0e466a5::t_4696ef5e85d2ab 792,796,816,819-820
+requirements.txt
+  s_168af0157f0997::t_fa3ecf687a8435 18
+pyproject.toml
+  s_168af0157f0997::t_5eb8bdf5e973ef 34
+  s_168af0157f0997::t_1ed0ce9b727270 41-47
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "dbe63247b4836a8e7b22317bb8b9b63c651dbae7",
+  "prompts": {},
+  "humans": {
+    "h_1911dffda4172c": {
+      "author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_168af0157f0997": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "60547ec1-1354-4251-9063-a07c3d6976df",
+        "model": "default"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    },
+    "s_c6dddba0e466a5": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0fc50ecc-d197-474d-adf2-7a28c1988ac1",
+        "model": "default"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    },
+    "s_f611cf8fc4216f": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "08620045-58a3-44a0-88be-5431ec5b964c",
+        "model": "default"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  }
+}
