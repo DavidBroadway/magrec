@@ -1,0 +1,24 @@
+magrec/misc/test_pipeset_at.py
+  s_300a13b805fe23::t_d619a11e3f1318 1-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "5b70dbb459b417849954488be37d9c69dd0cc2be",
+  "prompts": {},
+  "humans": {
+    "h_1911dffda4172c": {
+      "author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_300a13b805fe23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc9bb191-cf2b-4d27-92d7-38b7b197eeff",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  }
+}
