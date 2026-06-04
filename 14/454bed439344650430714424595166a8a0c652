@@ -1,0 +1,30 @@
+magrec/misc/data.py
+  s_300a13b805fe23::t_dcbeef38690f3f 1056-1057,1061,1063-1064
+  s_300a13b805fe23::t_d4e30e51491b89 3270,3280
+  s_300a13b805fe23::t_c822d804a48800 346-348
+  s_300a13b805fe23::t_ac89008090bb53 352,355,359-360,363,365-366,369,371
+  s_300a13b805fe23::t_0c57c116ae0517 519-549,553,556-578,584,590-626
+magrec/misc/test_pipeset.py
+  s_300a13b805fe23::t_4b21752dae8fb6 9,12,15-16,18-24,26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "14454bed439344650430714424595166a8a0c652",
+  "prompts": {},
+  "humans": {
+    "h_1911dffda4172c": {
+      "author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_300a13b805fe23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc9bb191-cf2b-4d27-92d7-38b7b197eeff",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  }
+}
