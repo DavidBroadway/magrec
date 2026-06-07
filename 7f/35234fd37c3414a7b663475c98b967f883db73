@@ -1,0 +1,19 @@
+conftest.py
+  s_dc7e2fea25e793::t_6d9b46fb78ebde 1-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "7f35234fd37c3414a7b663475c98b967f883db73",
+  "prompts": {},
+  "sessions": {
+    "s_dc7e2fea25e793": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "6b1cec8b-92d8-4290-85d7-82606d9bcd33",
+        "model": "default"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  }
+}
