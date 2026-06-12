@@ -1,0 +1,29 @@
+magrec/plot/plot.py
+  s_c4cfd55acf0d41::t_3dfe0ae02b2b20 338-340,400-416,628-641,716,736-738,740-764
+magrec/prop/field_lines.py
+  s_48d23895edaa0e::t_5924320840eb63 1-437
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "edd31feb07db13479d5eb6cc54554d9b29541f0e",
+  "prompts": {},
+  "sessions": {
+    "s_48d23895edaa0e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5962122a-f487-491c-9043-0019aa544ac3",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    },
+    "s_c4cfd55acf0d41": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "19bd9ebb-aad3-4352-98e0-bc9c52266cef",
+        "model": "default"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  }
+}
