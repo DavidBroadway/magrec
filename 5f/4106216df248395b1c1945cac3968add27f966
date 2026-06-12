@@ -1,0 +1,19 @@
+magrec/misc/data.py
+  s_c4cfd55acf0d41::t_6ddeec3d9e22f7 26-84,267-275,357-359,413-418,535-544,549,678,726,730,738-740,750-758,760-762,1148,1152,1154-1155,1183,1220,1222-1223,1225,1233,1293,2155-2163,2552-2741,2796-2799,2802-2805,2808-2817,2819-2825,2827,2834,2837-2838,2866,2873-2881,3552-3558
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "5f4106216df248395b1c1945cac3968add27f966",
+  "prompts": {},
+  "sessions": {
+    "s_c4cfd55acf0d41": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "19bd9ebb-aad3-4352-98e0-bc9c52266cef",
+        "model": "default"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  }
+}
