@@ -1,0 +1,14 @@
+magrec/misc/data.py
+  h_1911dffda4172c 1518-1568
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "12c4d72238e33815fc33dc4233496df05b051695",
+  "prompts": {},
+  "humans": {
+    "h_1911dffda4172c": {
+      "author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  }
+}
