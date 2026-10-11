@@ -1,0 +1,22 @@
+magrec/plot/plot.py
+  s_1dc54f0c9a6a18::t_a703ab88c1f6a8 641-648
+  s_1dc54f0c9a6a18::t_929c828b065015 426-429
+  s_1dc54f0c9a6a18::t_7d59e8538bbe45 726-740
+  s_1dc54f0c9a6a18::t_fd3cc1ef5ffbcc 755-757
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "09a7a2fa82524d30d766ec0fa724a4d31df630d1",
+  "prompts": {},
+  "sessions": {
+    "s_1dc54f0c9a6a18": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "c6b6648d-179b-4d2d-b43d-a30be9bdc588",
+        "model": "grok-4.7"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  }
+}
