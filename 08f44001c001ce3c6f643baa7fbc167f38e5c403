@@ -1,0 +1,26 @@
+documentation/epicycles/merge-plan.md
+  s_d5f0e5e18f0b1c::t_3e065ba53c3710 1-62
+  s_d5f0e5e18f0b1c::t_ee0b8e4f0b7b42 63-66
+magrec/prop/Epicycles.py
+  s_d5f0e5e18f0b1c::t_6fdf07862168cd 1-541
+magrec/prop/test_epicycles.py
+  s_d5f0e5e18f0b1c::t_758c37d547bc28 1-111
+pyproject.toml
+  s_d5f0e5e18f0b1c::t_df5bf6ebd66875 40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "08f44001c001ce3c6f643baa7fbc167f38e5c403",
+  "prompts": {},
+  "sessions": {
+    "s_d5f0e5e18f0b1c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aa8f2769-420e-4069-b91a-cfc7c90e809c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  }
+}
