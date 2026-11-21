@@ -1,0 +1,37 @@
+magrec/prop/test_newell.py
+  s_b513bca77668b3::t_9ee55f156774c7 23-45
+  s_b513bca77668b3::t_685b067670d409 1-22,46-165
+  s_b513bca77668b3::t_647eaf7a6546e0 166-246
+magrec/prop/Propagator.py
+  s_b513bca77668b3::t_220ef5adb8b56b 567-568
+  s_b513bca77668b3::t_f512e3d43b82c6 27-28,505-566,569-574
+magrec/prop/Kernel.py
+  s_b513bca77668b3::t_cfac1a64b1348f 466,479,496,508-572,578,583,585
+  s_b513bca77668b3::t_e4f9807107a7a8 450-464
+  s_b513bca77668b3::t_fb96998421b655 447-449
+  s_b513bca77668b3::t_1aaf9df8990378 465
+  s_b513bca77668b3::t_8fb393c10d73ec 467-469,476-478
+  s_b513bca77668b3::t_bb1b1ca8f1cfa7 480-482,493-495
+  s_b513bca77668b3::t_bdd9cf1107218f 497-499,505-507
+  s_b513bca77668b3::t_3922230d590f4c 573-577
+  s_b513bca77668b3::t_2b57ab138091c9 579-582
+  s_b513bca77668b3::t_47b051b196f2fb 584
+  s_b513bca77668b3::t_ca6e0dd01dfb55 586-588
+  s_b513bca77668b3::t_d0a04fc944b1c3 1,436-446,470-475,483-492,500-504,589-602
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "968c1cfddd9ea5adca85c13ddd29c3627c505537",
+  "prompts": {},
+  "sessions": {
+    "s_b513bca77668b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "295a6e60-777c-4033-8af7-fe79054e8184",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  }
+}
