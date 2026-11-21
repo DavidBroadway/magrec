@@ -1,0 +1,23 @@
+magrec/gui/test_gui_import.py
+  s_b513bca77668b3::t_916a70cf22f0c5 1-21
+magrec/misc/test_load.py
+  s_b513bca77668b3::t_b8c2a265416a2e 1-33
+magrec/misc/load.py
+  s_b513bca77668b3::t_0e563c1af48ddf 67-99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a31cbdd1081d8b7d7392edba901a4f8efc8985ca",
+  "prompts": {},
+  "sessions": {
+    "s_b513bca77668b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "295a6e60-777c-4033-8af7-fe79054e8184",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  }
+}
