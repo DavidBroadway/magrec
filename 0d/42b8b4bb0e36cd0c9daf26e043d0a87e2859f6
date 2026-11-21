@@ -1,0 +1,26 @@
+magrec/misc/_utils.py
+  s_b513bca77668b3::t_4702bbb5536379 1-57
+magrec/misc/test_utils.py
+  s_b513bca77668b3::t_7b68bfa25dc58d 59
+  s_b513bca77668b3::t_33b5116f399e6a 1-58,60-93
+pyproject.toml
+  s_b513bca77668b3::t_fbd890f2b0d17f 41
+magrec/gui/__init__.py
+  s_b513bca77668b3::t_dc2ad943b5001d 1-10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0d42b8b4bb0e36cd0c9daf26e043d0a87e2859f6",
+  "prompts": {},
+  "sessions": {
+    "s_b513bca77668b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "295a6e60-777c-4033-8af7-fe79054e8184",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  }
+}
