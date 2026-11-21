@@ -1,0 +1,20 @@
+magrec/prop/test_newell.py
+  s_b513bca77668b3::t_8cd68470c3c1ba 127-195
+  s_b513bca77668b3::t_16adcb5cfd80f8 196
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5f9c040f9091f25603652e8d3549709a68e7adb7",
+  "prompts": {},
+  "sessions": {
+    "s_b513bca77668b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "295a6e60-777c-4033-8af7-fe79054e8184",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Michael Flaks <misha.flaks@gmail.com>"
+    }
+  }
+}
